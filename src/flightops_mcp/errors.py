@@ -117,6 +117,22 @@ def budget_exhausted(spent: int, budget: int) -> ToolFailure:
     )
 
 
+def upstream_circuit_open(upstream: str, retry_after_s: float) -> ToolFailure:
+    """The breaker is open: fail fast, and say how long the window has left."""
+    return ToolFailure(
+        code="upstream_circuit_open",
+        message=(
+            f"{upstream} has failed repeatedly, so calls to it are being refused "
+            f"without an attempt."
+        ),
+        hint="Report the outage instead of retrying: the retry budget is already spent. "
+        "Try again after the indicated delay, or use a tool that does not depend on "
+        "this upstream.",
+        retry_after_s=retry_after_s,
+        details={"upstream": upstream},
+    )
+
+
 def upstream_unavailable(upstream: str, detail: str) -> ToolFailure:
     return ToolFailure(
         code="upstream_unavailable",

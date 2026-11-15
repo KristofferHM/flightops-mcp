@@ -131,3 +131,22 @@ def _empty_opensky(request: httpx.Request) -> httpx.Response:
 
 def _token_handler(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"access_token": "token-abc", "expires_in": 1800})
+
+
+@pytest.fixture(autouse=True)
+def _reset_process_state() -> Iterator[None]:
+    """Each test starts with closed breakers and an empty span sink.
+
+    The breaker registry and the tracer provider are process-global by design (one
+    breaker per upstream, one provider per process), so the suite must reset their
+    *state* rather than their objects — OTel refuses to replace a provider.
+    """
+    from flightops_mcp import otel
+    from flightops_mcp.resilience import configure_breakers, reset_breakers
+
+    configure_breakers(failure_threshold=5, recovery_timeout_s=30.0)
+    reset_breakers()
+    otel.configure_tracing(exporter="memory")
+    otel.reset_spans()
+    yield
+    otel.reset_spans()

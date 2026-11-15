@@ -12,6 +12,12 @@ services:
     ports:
       - "127.0.0.1:9100:9100"
 
+  server:
+    environment:
+      # No collector in the matrix run: the observability profile is off, so an
+      # OTLP exporter would spend the whole job retrying into a closed port.
+      FLIGHTOPS_OTEL_EXPORTER: none
+
   idp-other:
     build:
       context: .

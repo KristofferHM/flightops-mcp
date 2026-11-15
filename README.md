@@ -12,7 +12,7 @@ credential or a passenger identifier.
 
 - **Protocol:** MCP revision `2026-07-28` (stateless: no `initialize` handshake, no session id,
   per-request capability negotiation), via the Python SDK's `MCPServer`.
-- **Verified:** `73 passed, 0 skipped` · `ruff` clean · `mypy --strict` clean · a live end-to-end
+- **Verified:** `300 passed, 0 skipped` · `ruff` clean · `mypy --strict` clean · a live end-to-end
   stdio run against AviationWeather.gov returning real METARs.
 - **Cost:** zero. Every upstream is free; the authenticated one is optional.
 
@@ -32,6 +32,10 @@ credential or a passenger identifier.
 | Ground-truth reference data | `airports.py` + `scripts/build_airports_db.py` | distance validated two independent ways |
 | Failures the model can act on | `errors.py` | every failure carries `code`, `message`, `hint`, `retry_after_s` |
 | Containerisation | `Dockerfile`, `docker-compose.yml` | CI builds the image, asserts non-root, asserts the reference DB is baked in |
+| Trace propagation across the boundary | `otel.py`, `guarded`, `http.py` | the client's `traceparent` becomes the parent span; upstream headers carry the context on |
+| Liveness vs readiness | `/healthz`, `/readyz` (`install_observability_routes`) | readiness fails on an empty database and does **not** fail on an upstream outage |
+| Fail fast when a provider dies | `resilience.py` | `test_the_circuit_fails_fast_rather_than_sleeping` |
+| Operations documentation | `docs/runbook.md` | alerts, playbooks, rotation, and what the stack does not do |
 | Version control hygiene | `.gitignore`, `.gitattributes`, `uv.lock` | no secrets, no multi-megabyte data blobs, LF-normalised |
 
 ---
@@ -206,6 +210,44 @@ exchange tokens that were issued to it. It is a test fixture, not an identity pr
 7. **Provenance travels with the data.** Every payload names the upstream and its licence, so an
    operator can see that "traffic" means ADS-B estimates and "weather" means a government observation.
 
+## Observability
+
+Three endpoints on the HTTP transport, registered with the SDK's `custom_route`, so they need no token —
+a load balancer has none and Prometheus has no user identity:
+
+| Endpoint | Answers | Deliberately does not |
+|---|---|---|
+| `/healthz` | liveness: this process is serving | touch an upstream, ever |
+| `/readyz` | readiness: the reference data opens and holds rows | fail because a provider is down — it reports breaker state instead, so one third party's outage cannot empty your load balancer |
+| `/metrics` | tool calls by outcome, upstream latency and status, credits spent, token refreshes, circuit state | expose a secret or a passenger field |
+
+Traces are opt-in: `FLIGHTOPS_OTEL_EXPORTER` = `none` (default) · `console` · `otlp` · `memory`.
+One triage call is one trace, and the client's `traceparent` from the request `_meta` is the parent:
+
+```
+tools/call disruption_triage        SERVER    parent = client traceparent (from _meta)
+└── tool.disruption_triage          INTERNAL
+    ├── tool.airport_weather        INTERNAL
+    │   ├── HTTP GET  CLIENT  upstream.name=aviationweather  http.response.status_code=200
+    │   └── HTTP GET  CLIENT
+    ├── tool.airport_movements      INTERNAL
+    └── tool.airport_live_traffic   INTERNAL
+```
+
+`MCPServer` already installs the SDK's `OpenTelemetryMiddleware` as its outermost built-in. Registering a
+second request-span middleware produces **two server spans per request** — found by counting spans for one
+call, removed, and pinned by `test_exactly_one_server_span_per_request`.
+
+Full local stack, including Jaeger, Prometheus and a provisioned Grafana dashboard:
+
+```bash
+docker compose --profile observability up -d
+# Jaeger http://127.0.0.1:16686  ·  Prometheus :9090  ·  Grafana :3000
+```
+
+What to do when it breaks — alerts, playbooks per failure code, secret rotation — is in
+[`docs/runbook.md`](docs/runbook.md).
+
 ## What running it actually found
 
 Two defects that reviewing the code would not have caught, both now pinned by tests:
@@ -232,8 +274,18 @@ tests/test_airports.py       9   build, resolve, nearest, cross-checked distance
 tests/test_weather.py        8   no-data semantics, field mapping, flag thresholds
 tests/test_server_tools.py  11   end-to-end through a real MCP client, in memory
 tests/test_redaction.py      5   keyed secrets, nested structures, bearer scrubbing, canary
-                            --
-                            73
+tests/test_idp.py           42   the local IdP: client credentials, exchange, revocation
+tests/test_obo.py           43   on-behalf-of: narrowing, escalation refusals, single flight
+tests/test_scopes.py        34   per-tool scopes and the WWW-Authenticate challenge
+tests/test_auth_verifier.py 26   JWKS, RS256, audience, issuer, expiry, key rotation
+tests/test_no_passthrough.py 33  the confused-deputy cases, both directions
+tests/test_http_transport.py 16  Streamable HTTP behaviour on the real app
+tests/test_matrix_log_source.py 6  a log source that is empty must stop the run
+tests/test_otel.py          10   traceparent parenting, nesting, upstream propagation
+tests/test_resilience.py    11   breaker open/half-open/close, 429 and 4xx neutrality
+tests/test_health.py         6   liveness vs readiness vs metrics
+                          ----
+                           300
 ```
 
 No network, no sleeps, no real clock: transports, sleep and clock are injected. The suite runs on a

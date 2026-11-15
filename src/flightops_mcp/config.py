@@ -76,4 +76,18 @@ class Settings(BaseSettings):
     # This is a *local* ceiling so one runaway agent loop cannot drain the day.
     credit_budget_per_hour: int = 400
 
+    # --- Resilience ----------------------------------------------------------
+    # Consecutive upstream failures before the breaker opens. The retry policy
+    # counts attempts, so three attempts per call means a dead provider opens the
+    # circuit within two calls rather than after a minute of sleeping.
+    breaker_failure_threshold: int = 5
+    breaker_recovery_timeout_s: float = 30.0
+
+    # --- Observability -------------------------------------------------------
+    otel_exporter: str = "none"  # none | console | otlp | memory (tests)
+    otel_endpoint: str = "http://127.0.0.1:4318/v1/traces"
+    otel_service_name: str = "flightops-mcp"
+    otel_environment: str = "local"
+    otel_sample_ratio: float = 1.0
+
     log_level: str = "INFO"

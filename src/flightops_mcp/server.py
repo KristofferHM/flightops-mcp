@@ -25,6 +25,10 @@ from typing import Any, Final, TypedDict
 
 import httpx
 from mcp.server import MCPServer
+from opentelemetry.trace import SpanKind, Status, StatusCode
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from . import __version__
 from .auth import (
@@ -46,7 +50,10 @@ from .errors import (
 )
 from .opensky import MAX_HISTORY_S, TIME_RESOLUTION_S, BBox
 from .ops import TIGHT_CONNECTION_MINUTES, DownstreamTokenRejected, normalise_flight, summarise
+from .otel import configure_tracing, tracer, tracing_kind
+from .resilience import breakers, configure_breakers
 from .runtime import Runtime, get_runtime
+from .telemetry import REGISTRY as METRICS_REGISTRY
 from .telemetry import TOOL_CALLS, configure_logging, get_logger
 from .weather import fleet_impact_flags
 
@@ -90,22 +97,43 @@ def guarded(fn: Any) -> Any:
 
     @functools.wraps(fn)
     async def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        try:
-            result: dict[str, Any] = await fn(*args, **kwargs)
-        except ToolFailure as exc:
-            TOOL_CALLS.labels(tool=fn.__name__, outcome=exc.code).inc()
-            _log.info("tool_failure", tool=fn.__name__, code=exc.code)
-            return exc.to_payload()
-        except Exception as exc:  # noqa: BLE001 - a tool must never crash the session
-            TOOL_CALLS.labels(tool=fn.__name__, outcome="internal_error").inc()
-            _log.exception("tool_internal_error", tool=fn.__name__, error_class=type(exc).__name__)
-            return ToolFailure(
-                code="internal_error",
-                message="The tool hit an unexpected internal error and did not complete.",
-                hint="Report this rather than retrying blindly; the server log holds the detail.",
-            ).to_payload()
-        TOOL_CALLS.labels(tool=fn.__name__, outcome="ok").inc()
-        return result
+        # One span per tool body, parented to whatever the transport made current:
+        # the request middleware span on an inbound call, or the composite tool's
+        # span when one tool calls another. That is what makes a triage show its
+        # three nested lookups instead of one opaque block.
+        with tracer().start_as_current_span(
+            f"tool.{fn.__name__}",
+            kind=SpanKind.INTERNAL,
+            attributes={"mcp.tool.name": fn.__name__},
+        ) as span:
+            try:
+                result: dict[str, Any] = await fn(*args, **kwargs)
+            except ToolFailure as exc:
+                TOOL_CALLS.labels(tool=fn.__name__, outcome=exc.code).inc()
+                _log.info("tool_failure", tool=fn.__name__, code=exc.code)
+                span.set_attribute("mcp.tool.outcome", exc.code)
+                span.set_attribute("mcp.tool.ok", False)
+                span.set_status(Status(StatusCode.ERROR, exc.code))
+                return exc.to_payload()
+            except Exception as exc:  # noqa: BLE001 - a tool must never crash the session
+                TOOL_CALLS.labels(tool=fn.__name__, outcome="internal_error").inc()
+                _log.exception(
+                    "tool_internal_error", tool=fn.__name__, error_class=type(exc).__name__
+                )
+                span.record_exception(exc)
+                span.set_attribute("mcp.tool.outcome", "internal_error")
+                span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
+                return ToolFailure(
+                    code="internal_error",
+                    message="The tool hit an unexpected internal error and did not complete.",
+                    hint=(
+                        "Report this rather than retrying blindly; the server log holds the detail."
+                    ),
+                ).to_payload()
+            TOOL_CALLS.labels(tool=fn.__name__, outcome="ok").inc()
+            span.set_attribute("mcp.tool.outcome", "ok")
+            span.set_attribute("mcp.tool.ok", bool(result.get("ok", True)))
+            return result
 
     return wrapper
 
@@ -500,8 +528,11 @@ async def upstream_status() -> dict[str, Any]:
         },
         "reference_data": {
             "airports_db_present": runtime.airports.exists,
+            "airports_db_ready": runtime.airports.healthy(),
             "path": str(runtime.airports.path),
         },
+        "circuits": breakers().snapshots(),
+        "tracing": tracing_kind() or "none",
     }
 
 
@@ -619,8 +650,17 @@ def create_server(
 
     With auth, every tool is wrapped in its scope check and the HTTP app answers
     a missing scope with a `WWW-Authenticate` challenge.
+
+    The tracing middleware is registered on both servers: on stdio an operator
+    gets spans for local debugging, and on HTTP the client's `traceparent` from
+    `_meta` becomes the parent span.
     """
     authenticated = auth is not None
+    # No tracing middleware is registered here on purpose: `MCPServer` already
+    # installs its own `OpenTelemetryMiddleware` as the outermost built-in
+    # (`mcp/server/mcpserver/server.py`: "User middleware runs inside the SDK's
+    # built-ins (OpenTelemetry, then the request-state boundary)"). Adding a second
+    # one produced two spans per request — verified, then removed.
     server: MCPServer = (ScopeChallengingServer if authenticated else MCPServer)(
         name="flightops-mcp",
         version=__version__,
@@ -631,6 +671,73 @@ def create_server(
     for fn in _TOOLS:
         server.add_tool(scoped(fn) if authenticated else fn)
     return server
+
+
+def readiness_checks(runtime: Runtime | None = None) -> dict[str, dict[str, Any]]:
+    """Local ability to serve. Deliberately excludes upstream health.
+
+    An open circuit or a NOAA outage must not take every replica out of rotation:
+    the traffic tools degrade and the weather tool keeps working. Readiness answers
+    "can this instance answer at all", and the upstream states are reported next to
+    it for the operator to read, not to gate on.
+    """
+    current = runtime or get_runtime()
+    airports_ok = current.airports.healthy()
+    return {
+        "reference_data": {
+            "ok": airports_ok,
+            "detail": str(current.airports.path),
+        },
+        "upstreams": {
+            "ok": True,
+            "detail": breakers().snapshots(),
+        },
+        "tracing": {
+            "ok": True,
+            "detail": tracing_kind() or "none",
+        },
+    }
+
+
+def install_observability_routes(
+    server: MCPServer, *, clock: Callable[[], float] = time.time
+) -> None:
+    """`/healthz`, `/readyz` and `/metrics` on the HTTP transport.
+
+    The SDK documents `custom_route` for exactly this: endpoints outside the
+    protocol, reachable without the authorization the MCP path requires, because a
+    load balancer has no token and a Prometheus scrape has no user.
+    """
+    started_at = clock()
+
+    @server.custom_route("/healthz", methods=["GET"], name="healthz")  # type: ignore[untyped-decorator]
+    async def healthz(_request: Request) -> Response:
+        """Liveness: the process is up and serving. Never touches an upstream."""
+        return JSONResponse(
+            {
+                "status": "ok",
+                "version": __version__,
+                "uptime_s": round(clock() - started_at, 1),
+            }
+        )
+
+    @server.custom_route("/readyz", methods=["GET"], name="readyz")  # type: ignore[untyped-decorator]
+    async def readyz(_request: Request) -> Response:
+        """Readiness: this instance can answer requests, checked locally."""
+        checks = readiness_checks()
+        ready = all(bool(check["ok"]) for check in checks.values())
+        return JSONResponse({"ready": ready, "checks": checks}, status_code=200 if ready else 503)
+
+    @server.custom_route("/metrics", methods=["GET"], name="metrics")  # type: ignore[untyped-decorator]
+    async def metrics(_request: Request) -> Response:
+        """Prometheus scrape endpoint for the registry the tools already write to.
+
+        Uses the module's own registry, not `prometheus_client.REGISTRY`: the
+        metrics in `telemetry.py` are registered on a private collector registry so
+        a host process cannot collide with them, and scraping the default registry
+        would export only the Python runtime collectors.
+        """
+        return Response(generate_latest(METRICS_REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
 def create_http_server(
@@ -647,7 +754,9 @@ def create_http_server(
     resource_server = build_resource_server_auth(
         settings, jwks_transport=jwks_transport, clock=clock
     )
-    return create_server(auth=resource_server.settings, token_verifier=resource_server.verifier)
+    server = create_server(auth=resource_server.settings, token_verifier=resource_server.verifier)
+    install_observability_routes(server)
+    return server
 
 
 class HttpOptions(TypedDict):
@@ -682,6 +791,17 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     settings = Settings()
     configure_logging(settings.log_level)
+    configure_breakers(
+        failure_threshold=settings.breaker_failure_threshold,
+        recovery_timeout_s=settings.breaker_recovery_timeout_s,
+    )
+    configure_tracing(settings)
+    _log.info(
+        "observability_configured",
+        tracing=tracing_kind() or "none",
+        breaker_failure_threshold=settings.breaker_failure_threshold,
+        breaker_recovery_s=settings.breaker_recovery_timeout_s,
+    )
 
     if args.transport == "stdio":
         _log.info("server_starting", transport="stdio", version=__version__)
