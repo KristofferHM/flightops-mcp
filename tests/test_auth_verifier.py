@@ -15,6 +15,7 @@ from flightops_mcp.auth import JwksCache, JwtVerifier
 from .authkit import (
     ISSUER,
     JWKS_URL,
+    RESOURCE,
     JwksEndpoint,
     forge,
     hs256_with_public_key,
@@ -37,7 +38,10 @@ def build(
         ttl_s=ttl_s,
         min_refresh_interval_s=30.0,
     )
-    return JwtVerifier(issuer=ISSUER, jwks=jwks, clock=clock, clock_skew_s=30.0), jwks
+    verifier = JwtVerifier(
+        issuer=ISSUER, audience=RESOURCE, jwks=jwks, clock=clock, clock_skew_s=30.0
+    )
+    return verifier, jwks
 
 
 @pytest.fixture

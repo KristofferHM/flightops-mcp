@@ -23,6 +23,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 
 from ..telemetry import get_logger
+from .passthrough import refuse_inbound_token
 
 
 class JwksCache:
@@ -52,6 +53,7 @@ class JwksCache:
             timeout=timeout_s,
             headers={"User-Agent": user_agent, "Accept": "application/json"},
             transport=transport,
+            event_hooks={"request": [refuse_inbound_token]},
         )
         self.fetch_count = 0
 

@@ -12,13 +12,17 @@ import hashlib
 import hmac
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import httpx
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
 
 ISSUER = "http://idp.test"
 JWKS_URL = f"{ISSUER}/.well-known/jwks.json"
@@ -138,3 +142,22 @@ def tamper(token: str, **changes: Any) -> str:
     claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
     claims.update(changes)
     return f"{header}.{_b64(json.dumps(claims).encode())}.{signature}"
+
+
+@contextmanager
+def authenticated_as(
+    token: str,
+    *,
+    scopes: tuple[str, ...] = (),
+    subject: str = "user-1",
+    client_id: str = "agent-app",
+) -> Iterator[AccessToken]:
+    """Run a block as if the SDK had verified `token` for the current request."""
+    access = AccessToken(
+        token=token, client_id=client_id, scopes=list(scopes), subject=subject, resource=RESOURCE
+    )
+    reset = auth_context_var.set(AuthenticatedUser(access))
+    try:
+        yield access
+    finally:
+        auth_context_var.reset(reset)

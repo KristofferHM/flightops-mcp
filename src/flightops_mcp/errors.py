@@ -72,6 +72,16 @@ def missing_credentials() -> ToolFailure:
     )
 
 
+def token_passthrough_blocked(host: str) -> ToolFailure:
+    return ToolFailure(
+        code="token_passthrough_blocked",
+        message=f"The server refused to send the caller's access token to {host}.",
+        hint="This is a server defect, not something the caller can fix. Report it; do not "
+        "retry. The caller's token was not sent anywhere.",
+        details={"upstream_host": host},
+    )
+
+
 def upstream_auth_failed(status: int, upstream: str) -> ToolFailure:
     return ToolFailure(
         code="upstream_auth_failed",

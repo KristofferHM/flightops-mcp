@@ -37,7 +37,9 @@ def idp() -> LocalIdp:
 
 
 def verifier_for(idp: LocalIdp) -> JwtVerifier:
-    return JwtVerifier(issuer=ISSUER, jwks=JwksCache(JWKS_URL, transport=idp.transport))
+    return JwtVerifier(
+        issuer=ISSUER, audience=MCP_AUDIENCE, jwks=JwksCache(JWKS_URL, transport=idp.transport)
+    )
 
 
 # --- metadata ----------------------------------------------------------------

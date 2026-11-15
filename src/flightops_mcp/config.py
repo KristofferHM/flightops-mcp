@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     auth_issuer: str | None = None
     auth_jwks_url: str | None = None
     # The canonical URL clients reach this server at. It is published in the
-    # protected-resource metadata, so it must be the public URL, not a bind address.
+    # protected-resource metadata and a token must name it in `aud`, so it must
+    # be the public URL, not a bind address.
     resource_server_url: str = "http://127.0.0.1:8000/mcp"
     jwks_cache_ttl_s: float = 3600.0
     # Floor between JWKS refetches triggered by an unknown key id.

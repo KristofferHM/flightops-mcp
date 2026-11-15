@@ -19,6 +19,7 @@ from pydantic import AnyHttpUrl
 from ..config import Settings
 from .challenge import ScopeChallengingServer
 from .jwks import JwksCache
+from .passthrough import refuse_inbound_token
 from .scopes import Scopes, UnknownToolError
 from .verifier import JwtVerifier, TokenRejected
 
@@ -36,6 +37,7 @@ __all__ = [
     "UnknownToolError",
     "build_resource_server_auth",
     "current_access_token",
+    "refuse_inbound_token",
 ]
 
 
@@ -88,6 +90,7 @@ def build_resource_server_auth(
     )
     verifier = JwtVerifier(
         issuer=settings.auth_issuer,
+        audience=settings.resource_server_url,
         jwks=jwks,
         clock=clock,
         clock_skew_s=settings.auth_clock_skew_s,
@@ -95,6 +98,8 @@ def build_resource_server_auth(
     auth = AuthSettings(
         issuer_url=AnyHttpUrl(settings.auth_issuer),
         resource_server_url=AnyHttpUrl(settings.resource_server_url),
-        validate_token_resource=False,
+        # The verifier already checks `aud`. This makes the SDK check it again
+        # from the verifier's report, so removing one check does not remove both.
+        validate_token_resource=True,
     )
     return ResourceServerAuth(settings=auth, verifier=verifier, jwks=jwks)
