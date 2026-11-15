@@ -5,7 +5,9 @@
 three services as local processes. It is evidence for the auth behaviour. It is not evidence that the
 containers work; see [what this does not prove](#what-this-does-not-prove).
 
-Result: **11 of 12 checks pass; line 11 fails as worded** and is reported as a finding below.
+Result: **11 of 12 checks pass; line 11 was reworded rather than adjusted** — the measurement showed the
+line asserted something the server cannot promise, and the decision is recorded in
+[ADR 0002](adr/0002-token-revocation-is-enforced-at-the-idp.md).
 
 ## Run it
 
@@ -73,7 +75,15 @@ for a token from another issuer, but the `wrong_issuer` branch is not what fired
 `tests/test_auth_verifier.py` only, because a live token with the right key and the wrong `iss` cannot be
 made without the IdP's private key, which exists only in its process memory.
 
-### Line 11 is a finding: a revoked token is not a 401
+### Line 11: a revoked token is not a 401 — reworded, see ADR 0002
+
+**Resolution 2026-11-15:** the line asserted something an offline-validating resource server cannot
+promise. The behaviour was not changed and the criterion was not quietly relaxed — it was reworded to the
+guarantee that exists, and the reasoning, the options rejected and the revisit trigger are in
+[ADR 0002](adr/0002-token-revocation-is-enforced-at-the-idp.md). In one line:
+
+> A revoked token cannot be exchanged, and a token cached by the exchange expires within its own
+> lifetime. Revocation is not noticed by tools that need no exchange until the token expires.
 
 Brief: *revoked user token → 401 and a re-exchange does not happen.* Observed:
 
@@ -97,9 +107,11 @@ The consequences:
   `401`. That matches `tests/test_obo.py::test_a_revoked_or_expired_user_token_cannot_be_exchanged`,
   which asserts the payload and not a status code.
 
-The criterion was not adjusted to fit. Making revocation a `401` needs an owner decision: token
-introspection (RFC 7662) on each request or on a short cache, much shorter access-token lifetimes, or
-accepting the bound and rewording the line. None of the five roadmap boxes depend on it.
+**Decided 2026-11-15:** accept the bound and reword the line, rather than change the behaviour or shorten
+the fixture's token lifetime to make the test pass. The full reasoning, the rejected alternatives
+(introspection per request, introspection with a 60 s cache) and the revisit trigger are in
+[ADR 0002](adr/0002-token-revocation-is-enforced-at-the-idp.md). None of the five roadmap boxes depend on
+this line.
 
 ## What this does not prove
 
