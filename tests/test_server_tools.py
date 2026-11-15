@@ -29,6 +29,7 @@ EXPECTED_TOOLS = {
     "airport_weather",
     "disruption_triage",
     "upstream_status",
+    "flight_passenger_impact",
 }
 
 EMPTY_STATES = {"time": 1_700_000_000, "states": []}

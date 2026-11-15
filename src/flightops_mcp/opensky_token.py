@@ -22,6 +22,7 @@ from typing import Any
 
 import httpx
 
+from .auth.passthrough import refuse_inbound_token
 from .config import Settings
 from .errors import ToolFailure, missing_credentials, upstream_auth_failed, upstream_unavailable
 from .telemetry import TOKEN_REFRESHES, get_logger
@@ -54,6 +55,7 @@ class OpenSkyTokenManager:
             timeout=settings.http_timeout_s,
             headers={"User-Agent": settings.user_agent},
             transport=transport,
+            event_hooks={"request": [refuse_inbound_token]},
         )
         self.refresh_count = 0
 

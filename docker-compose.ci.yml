@@ -1,0 +1,39 @@
+# CI-only override: `docker compose -f docker-compose.yml -f docker-compose.ci.yml up`.
+#
+# It adds what the acceptance matrix needs and a deployment must not have, and nothing else:
+#
+#   1. ops-api published on the host. By design the only way to it is through the server;
+#      matrix line 9 calls it directly to prove it refuses a server-audience token.
+#   2. A second, untrusted issuer for matrix line 3: its own signing key, no clients.
+#
+# docker-compose.yml is the stack as shipped and is not edited for this.
+services:
+  ops-api:
+    ports:
+      - "127.0.0.1:9100:9100"
+
+  idp-other:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+    command: ["services.idp.app:create_app", "--port", "9001"]
+    ports:
+      - "127.0.0.1:9001:9001"
+    environment:
+      # A different issuer and, because each process generates its own key, a different
+      # signing key. No IDP_CLIENTS: it can mint nothing the server should trust.
+      IDP_ISSUER: http://idp-other:9001
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:9001/.well-known/jwks.json', timeout=3)"
+      interval: 5s
+      timeout: 4s
+      retries: 10

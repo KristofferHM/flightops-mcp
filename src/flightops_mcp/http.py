@@ -16,6 +16,7 @@ from typing import cast
 
 import httpx
 
+from .auth.passthrough import refuse_inbound_token
 from .config import Settings
 from .telemetry import UPSTREAM_LATENCY, UPSTREAM_REQUESTS, get_logger
 
@@ -95,6 +96,7 @@ class UpstreamHttp:
                 "Accept": "application/json",
             },
             transport=transport,
+            event_hooks={"request": [refuse_inbound_token]},
         )
 
     async def aclose(self) -> None:

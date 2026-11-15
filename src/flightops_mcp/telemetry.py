@@ -69,6 +69,8 @@ _SECRET_KEYS = frozenset(
         "refresh_token",
         "id_token",
         "token",
+        "subject_token",
+        "assertion",
         "authorization",
         "auth",
         "client_secret",

@@ -17,16 +17,35 @@ Every tool obeys three rules:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import functools
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final, TypedDict
 
+import httpx
 from mcp.server import MCPServer
 
+from . import __version__
+from .auth import (
+    AuthConfigError,
+    AuthSettings,
+    ScopeChallengingServer,
+    Scopes,
+    TokenVerifier,
+    build_resource_server_auth,
+    current_access_token,
+)
 from .config import Settings
-from .errors import ToolFailure, not_found, reference_data_missing
+from .errors import (
+    ToolFailure,
+    authentication_required,
+    insufficient_scope,
+    not_found,
+    reference_data_missing,
+)
 from .opensky import MAX_HISTORY_S, TIME_RESOLUTION_S, BBox
+from .ops import TIGHT_CONNECTION_MINUTES, DownstreamTokenRejected, normalise_flight, summarise
 from .runtime import Runtime, get_runtime
 from .telemetry import TOOL_CALLS, configure_logging, get_logger
 from .weather import fleet_impact_flags
@@ -47,15 +66,18 @@ ones.
 non-empty, say so instead of concluding that operations are normal.
 5. This server is advisory. It reports observations and flags; it never \
 authorises an operational decision.
+6. `flight_passenger_impact` reads the internal operations API as the signed-in \
+user and returns counts only. Never ask it for, or infer, an individual passenger.
 """
 
-mcp: MCPServer = MCPServer(
-    name="flightops-mcp",
-    version="0.1.0",
-    instructions=INSTRUCTIONS,
-)
-
 _log = get_logger(__name__)
+
+ToolFn = Callable[..., Awaitable[dict[str, Any]]]
+
+# Tools register here rather than on a server object, because there are two
+# servers: the unauthenticated stdio one and the authenticated HTTP one. The SDK
+# takes auth settings at construction, so one module-level instance cannot be both.
+_TOOLS: list[ToolFn] = []
 
 
 def guarded(fn: Any) -> Any:
@@ -88,6 +110,45 @@ def guarded(fn: Any) -> Any:
     return wrapper
 
 
+def tool(fn: Any) -> Any:
+    """Guard a tool function and add it to the registry every server is built from.
+
+    Registration fails for a tool with no entry in the scope table, so a new tool
+    cannot ship unprotected by omission.
+    """
+    Scopes.for_tool(fn.__name__)
+    wrapped: ToolFn = guarded(fn)
+    _TOOLS.append(wrapped)
+    return wrapped
+
+
+def scoped(fn: ToolFn) -> ToolFn:
+    """Require the tool's scopes on the caller's token. Only the HTTP server uses this.
+
+    The HTTP middleware has normally refused the request already; this is the
+    second check, next to the tool, for any request shape that got past it. It
+    fails closed: no verified token in context is a refusal, not a pass, so a
+    wiring mistake cannot quietly turn authorization off.
+    """
+    name: str = fn.__name__
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        token = current_access_token()
+        if token is None:
+            failure = authentication_required(name)
+        else:
+            missing = Scopes.missing(name, token.scopes)
+            if not missing:
+                return await fn(*args, **kwargs)
+            failure = insufficient_scope(name, Scopes.for_tool(name), missing)
+        TOOL_CALLS.labels(tool=name, outcome=failure.code).inc()
+        _log.warning("tool_refused", tool=name, code=failure.code, details=failure.details)
+        return failure.to_payload()
+
+    return wrapper
+
+
 def _iso_now(clock: Any) -> str:
     return datetime.fromtimestamp(clock(), tz=UTC).isoformat()
 
@@ -102,8 +163,7 @@ def _require_airport(runtime: Runtime, ident: str) -> dict[str, Any]:
 
 
 # --- Tools -------------------------------------------------------------------
-@mcp.tool()
-@guarded
+@tool
 async def resolve_airport(query: str, limit: int = 5) -> dict[str, Any]:
     """Resolve an airport from an ICAO/IATA code or a name fragment.
 
@@ -145,8 +205,7 @@ async def resolve_airport(query: str, limit: int = 5) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
-@guarded
+@tool
 async def airport_live_traffic(
     airport: str,
     radius_nm: float = 40.0,
@@ -212,8 +271,7 @@ async def airport_live_traffic(
     }
 
 
-@mcp.tool()
-@guarded
+@tool
 async def airport_movements(
     airport: str,
     direction: str = "both",
@@ -289,8 +347,7 @@ async def airport_movements(
     }
 
 
-@mcp.tool()
-@guarded
+@tool
 async def airport_weather(airport: str) -> dict[str, Any]:
     """Return the latest METAR and TAF for an airport, plus impact flags.
 
@@ -330,8 +387,7 @@ async def airport_weather(airport: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
-@guarded
+@tool
 async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, Any]:
     """Assess whether an airport is currently disrupted: weather, traffic, movements.
 
@@ -417,8 +473,7 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
     }
 
 
-@mcp.tool()
-@guarded
+@tool
 async def upstream_status() -> dict[str, Any]:
     """Report upstream health, credit spend and credential state.
 
@@ -446,6 +501,79 @@ async def upstream_status() -> dict[str, Any]:
         "reference_data": {
             "airports_db_present": runtime.airports.exists,
             "path": str(runtime.airports.path),
+        },
+    }
+
+
+@tool
+async def flight_passenger_impact(flight: str) -> dict[str, Any]:
+    """Count who a disrupted flight affects: booked, connecting, needing assistance.
+
+    Reads the internal operations API on behalf of the signed-in user, so it
+    needs a user's token carrying `flightops.passengers.read`; a service
+    principal cannot use it and it is unavailable over stdio. Spends no OpenSky
+    credits. Returns counts only: no names, contact details or booking
+    references leave the server, so do not ask it about an individual.
+
+    Args:
+        flight: Flight designator, e.g. SK1429.
+    """
+    runtime = get_runtime()
+    designator = normalise_flight(flight)
+    inbound = current_access_token()
+    if inbound is None:
+        raise ToolFailure(
+            code="user_token_required",
+            message="Passenger data is only read on behalf of a signed-in user.",
+            hint="Call this tool through the authenticated HTTP server with a user's token. "
+            "It is not available over stdio.",
+        )
+
+    audience = runtime.settings.ops_api_audience
+    scopes = [Scopes.PASSENGERS_READ]
+    token = await runtime.obo.token_for(inbound, audience=audience, scopes=scopes)
+    try:
+        rows = await runtime.ops.manifest(designator, token)
+    except DownstreamTokenRejected:
+        # A cached token the API no longer accepts: exchange again, once. A second
+        # refusal is a real failure, not something to loop on.
+        runtime.obo.invalidate(inbound, audience=audience, scopes=scopes)
+        token = await runtime.obo.token_for(inbound, audience=audience, scopes=scopes)
+        try:
+            rows = await runtime.ops.manifest(designator, token)
+        except DownstreamTokenRejected:
+            raise ToolFailure(
+                code="downstream_auth_failed",
+                message="The internal operations API rejected a freshly exchanged token.",
+                hint="Not retryable by the caller; an operator must check the API's audience "
+                "and issuer configuration.",
+            ) from None
+
+    return {
+        "ok": True,
+        "as_of": _iso_now(runtime.clock),
+        "flight": designator,
+        "passengers": summarise(rows),
+        "definitions": {
+            "tight_connections": f"connecting with under {TIGHT_CONNECTION_MINUTES} minutes",
+        },
+        "unknowns": []
+        if rows
+        else [
+            "No passengers on file for this flight. That can mean a positioning or cargo "
+            "flight, or a manifest that is not loaded yet; it is not evidence that nobody "
+            "is affected."
+        ],
+        "delegation": {
+            "flow": "on-behalf-of (RFC 8693 token exchange)",
+            "acting_for": "the signed-in user",
+            "downstream_audience": audience,
+            "downstream_scope": scopes,
+        },
+        "source": {
+            "name": "Internal operations API",
+            "data_minimisation": "Counts only. Passenger-identifying fields are dropped "
+            "before this payload is built and are never logged.",
         },
     }
 
@@ -482,7 +610,61 @@ def _severity(reasons: list[str], degraded: list[str], has_movements: bool) -> s
     return "low"
 
 
-def main() -> None:
+def create_server(
+    *,
+    auth: AuthSettings | None = None,
+    token_verifier: TokenVerifier | None = None,
+) -> MCPServer:
+    """Build a server with every registered tool, optionally behind bearer auth.
+
+    With auth, every tool is wrapped in its scope check and the HTTP app answers
+    a missing scope with a `WWW-Authenticate` challenge.
+    """
+    authenticated = auth is not None
+    server: MCPServer = (ScopeChallengingServer if authenticated else MCPServer)(
+        name="flightops-mcp",
+        version=__version__,
+        instructions=INSTRUCTIONS,
+        auth=auth,
+        token_verifier=token_verifier,
+    )
+    for fn in _TOOLS:
+        server.add_tool(scoped(fn) if authenticated else fn)
+    return server
+
+
+def create_http_server(
+    settings: Settings,
+    *,
+    jwks_transport: httpx.AsyncBaseTransport | None = None,
+    clock: Callable[[], float] = time.time,
+) -> MCPServer:
+    """The remote server: same tools, every request authenticated.
+
+    Raises `AuthConfigError` when the issuer is not configured. There is no flag
+    to serve HTTP without authentication.
+    """
+    resource_server = build_resource_server_auth(
+        settings, jwks_transport=jwks_transport, clock=clock
+    )
+    return create_server(auth=resource_server.settings, token_verifier=resource_server.verifier)
+
+
+class HttpOptions(TypedDict):
+    stateless_http: bool
+    json_response: bool
+
+
+# Stateless: the 2026-07-28 revision carries no session, so any replica can
+# serve any request and there is no session table to protect or expire.
+HTTP_OPTIONS: Final[HttpOptions] = {"stateless_http": True, "json_response": True}
+
+# The stdio server. Local hosts launch it as a subprocess of the user's own
+# session, so the operating system is the trust boundary and there is no token.
+mcp: MCPServer = create_server()
+
+
+def main(argv: Sequence[str] | None = None) -> None:
     """Console entry point: `flightops-mcp [--transport stdio|streamable-http]`."""
     parser = argparse.ArgumentParser(prog="flightops-mcp")
     parser.add_argument(
@@ -490,21 +672,34 @@ def main() -> None:
         default="stdio",
         choices=("stdio", "streamable-http"),
         help=(
-            "stdio for local hosts (Claude Desktop, Inspector); streamable-http to serve remotely."
+            "stdio for local hosts (Claude Desktop, Inspector); streamable-http to serve "
+            "remotely, which requires FLIGHTOPS_AUTH_ISSUER and FLIGHTOPS_AUTH_JWKS_URL."
         ),
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     settings = Settings()
     configure_logging(settings.log_level)
-    _log.info("server_starting", transport=args.transport, version="0.1.0")
 
     if args.transport == "stdio":
+        _log.info("server_starting", transport="stdio", version=__version__)
         mcp.run(transport="stdio")
-    else:  # pragma: no cover - exercised manually, not in CI
-        asyncio.run(mcp.run_streamable_http_async(host=args.host, port=args.port))
+        return
+
+    try:
+        server = create_http_server(settings)
+    except AuthConfigError as exc:
+        parser.error(str(exc))
+    _log.info(
+        "server_starting",
+        transport="streamable-http",
+        version=__version__,
+        issuer=settings.auth_issuer,
+        resource=settings.resource_server_url,
+    )
+    server.run(transport="streamable-http", host=args.host, port=args.port, **HTTP_OPTIONS)
 
 
 if __name__ == "__main__":  # pragma: no cover

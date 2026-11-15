@@ -92,6 +92,85 @@ Then in `claude_desktop_config.json`:
 }
 ```
 
+## Serving it remotely
+
+```bash
+export FLIGHTOPS_AUTH_ISSUER=https://idp.example.com
+export FLIGHTOPS_AUTH_JWKS_URL=https://idp.example.com/.well-known/jwks.json
+export FLIGHTOPS_RESOURCE_SERVER_URL=https://flightops.example.com/mcp   # the public URL
+uv run flightops-mcp --transport streamable-http --host 0.0.0.0 --port 8000
+```
+
+Over HTTP the server is an OAuth 2.1 **resource server**: every request needs a bearer token, an
+RS256 JWT signed by the configured issuer and checked against its JWKS. There is no unauthenticated
+remote mode; without an issuer the process exits instead of serving. Requests are stateless (protocol
+revision 2026-07-28), so there is no session to pin a replica to.
+
+| Request | Answer |
+|---|---|
+| No token, expired token, bad signature, wrong issuer, **wrong audience** | `401` + `WWW-Authenticate: Bearer ... resource_metadata="..."` |
+| Valid token that lacks the tool's scope | `403` + `WWW-Authenticate: Bearer error="insufficient_scope", scope="..."`, and an error naming the scope |
+| `GET /.well-known/oauth-protected-resource/mcp` | RFC 9728 metadata naming the issuer |
+
+The signing algorithm is pinned before any key is fetched, so `alg: none` and HS256-with-the-public-key
+are refused outright. JWKS fetches are single-flight, and refetches triggered by an unknown key id are
+rate-limited so forged ids cannot turn the server into a request amplifier against the issuer.
+
+### No token passthrough
+
+A token is accepted only if its `aud` is this server's own URL. A token for another API behind the
+same issuer is valid in every other respect, which is exactly why it is refused: accepting it would
+make this server a place to replay tokens it was never issued. The verifier checks `aud`, and the SDK
+is configured to check it again from the verifier's report, so removing one check does not remove both.
+
+Outbound, the caller's token never goes upstream. Upstream calls use the server's own credentials.
+Every outbound HTTP client carries a request hook that aborts a request containing the caller's token
+in any header, the URL or the body, before it leaves the process; the tool returns
+`token_passthrough_blocked` and the log records where the token was found, never the token. A test
+walks the source and fails if an HTTP client is ever constructed without the hook.
+
+### Scopes
+
+The policy is one table in code, `Scopes.for_tool(name)` in `auth/scopes.py`. Delegated scopes (`scp`)
+and application roles (`roles`) are checked the same way.
+
+| Scope | Tools |
+|---|---|
+| `flightops.reference.read` | `resolve_airport` |
+| `flightops.weather.read` | `airport_weather`, `disruption_triage` |
+| `flightops.traffic.read` | `airport_live_traffic`, `airport_movements`, `disruption_triage` |
+| `flightops.status.read` | `upstream_status` |
+
+A tool with no entry in the table cannot be registered, so a new tool cannot ship unprotected by
+omission. The check runs twice: an HTTP middleware answers a missing scope with the `403` challenge
+before the tool runs, and a wrapper next to each tool refuses again for any request shape that got past
+the middleware. That wrapper fails closed: no verified token in context is a refusal. The stdio server
+has neither, because a local subprocess has no bearer token to check.
+
+### A local IdP, so none of this needs a cloud tenant
+
+`services/idp/` is a small authorization server for the test matrix. It signs RS256 tokens with a key
+generated at start-up, publishes it as a JWKS, and its claims follow the Entra shape (`aud`, `scp`,
+`roles`, `tid`).
+
+```bash
+uv run uvicorn --factory services.idp.app:create_app --port 9000
+```
+
+| Endpoint | What it is for |
+|---|---|
+| `POST /token`, `grant_type=client_credentials` | a service principal's token; permissions in `roles` |
+| `POST /token`, `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` | RFC 8693 on-behalf-of: a user's token in, a narrower token for one downstream API out |
+| `POST /revoke` | RFC 7009; a revoked token can no longer be exchanged |
+| `POST /dev/user-token` | mints a delegated user token without a browser; `expires_in: -60` gives an already-expired one |
+| `POST /dev/expire` | treats a token as expired from now on |
+| `GET /.well-known/jwks.json`, `/.well-known/openid-configuration` | keys and discovery |
+
+Exchange can narrow a token and cannot widen it: a scope is issued only if the user's token carries it
+and the target API accepts it, the exchanged token never outlives its subject, and a client can only
+exchange tokens that were issued to it. It is a test fixture, not an identity provider, and
+[ADR 0001](docs/adr/0001-local-idp-modelled-on-entra.md) lists every place it differs from Entra.
+
 ## The tools
 
 | Tool | Upstream | Credentials | Cost |

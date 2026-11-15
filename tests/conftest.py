@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import io
+import json
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -12,6 +15,7 @@ import pytest
 from flightops_mcp.airports import build_from_csv
 from flightops_mcp.config import Settings
 from flightops_mcp.runtime import Runtime, set_runtime
+from flightops_mcp.telemetry import configure_logging
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -37,6 +41,42 @@ class SleepRecorder:
 
     async def __call__(self, seconds: float) -> None:
         self.calls.append(seconds)
+
+
+class LogCapture:
+    """What actually shipped to the log stream, after the redaction processor ran."""
+
+    def __init__(self, stream: io.StringIO) -> None:
+        self._stream = stream
+
+    @property
+    def text(self) -> str:
+        return self._stream.getvalue()
+
+    def events(self, name: str | None = None) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for line in self.text.splitlines():
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue  # a line from another library's logger, not ours
+            if isinstance(record, dict) and (name is None or record.get("event") == name):
+                records.append(record)
+        return records
+
+
+@pytest.fixture
+def logs() -> Iterator[LogCapture]:
+    """Capture emitted log lines through a real handler, as a log shipper would."""
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    configure_logging("INFO")
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        yield LogCapture(stream)
+    finally:
+        root.removeHandler(handler)
 
 
 @pytest.fixture

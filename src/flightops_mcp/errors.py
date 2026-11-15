@@ -8,6 +8,7 @@ can self-correct), every tool returns a payload instead of raising.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,6 +41,26 @@ class ToolFailure(Exception):
 
 
 # --- Concrete failures -------------------------------------------------------
+def authentication_required(tool: str) -> ToolFailure:
+    return ToolFailure(
+        code="authentication_required",
+        message=f"{tool} was called on the authenticated server without a verified access token.",
+        hint="Send a bearer token issued for this server. This is not retryable as is.",
+        details={"tool": tool},
+    )
+
+
+def insufficient_scope(tool: str, required: Iterable[str], missing: Iterable[str]) -> ToolFailure:
+    lacking = sorted(missing)
+    return ToolFailure(
+        code="insufficient_scope",
+        message=f"The access token lacks the scope {tool} requires: {' '.join(lacking)}.",
+        hint="Obtain a token that includes the missing scope, then retry. Retrying with the "
+        "same token fails the same way; tell the user which permission is missing.",
+        details={"tool": tool, "required_scopes": sorted(required), "missing_scopes": lacking},
+    )
+
+
 def missing_credentials() -> ToolFailure:
     return ToolFailure(
         code="credentials_missing",
@@ -48,6 +69,16 @@ def missing_credentials() -> ToolFailure:
         hint="Set FLIGHTOPS_OPENSKY_CLIENT_ID and FLIGHTOPS_OPENSKY_CLIENT_SECRET "
         "(free account: https://opensky-network.org). Tools backed by "
         "AviationWeather.gov and the local airport database keep working without them.",
+    )
+
+
+def token_passthrough_blocked(host: str) -> ToolFailure:
+    return ToolFailure(
+        code="token_passthrough_blocked",
+        message=f"The server refused to send the caller's access token to {host}.",
+        hint="This is a server defect, not something the caller can fix. Report it; do not "
+        "retry. The caller's token was not sent anywhere.",
+        details={"upstream_host": host},
     )
 
 

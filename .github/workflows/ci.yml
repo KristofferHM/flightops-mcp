@@ -26,7 +26,7 @@ jobs:
       - name: Ruff (format)
         run: uv run ruff format --check .
       - name: Mypy (strict)
-        run: uv run mypy src
+        run: uv run mypy src services
 
   tests:
     name: tests (py${{ matrix.python }})
@@ -118,3 +118,80 @@ jobs:
           user=$(docker run --rm --entrypoint id flightops-mcp:ci -un)
           echo "user: $user"
           test "$user" = "flightops"
+
+  # A separate job rather than more steps in `container`: that job needs no Python and answers in
+  # about a minute ("does the image build and run as non-root"). This one builds three images,
+  # starts a network and runs a 12-line matrix, so a failure here should name itself.
+  compose-matrix:
+    name: compose matrix (phase 1 acceptance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The shipped stack plus the two things only the matrix needs, see the override's header.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Generate the client secrets into .env
+        # The clients themselves (flightops-agent, flightops-mcp, resource
+        # http://localhost:8000/mcp) are defined in docker-compose.yml; only the secrets are not.
+        run: |
+          umask 077
+          for name in DEV_AGENT_CLIENT_SECRET DEV_MCP_CLIENT_SECRET; do
+            value="$(openssl rand -hex 24)"
+            echo "::add-mask::$value"
+            echo "$name=$value" >> .env
+          done
+
+      - name: Check the shipped stack still does not publish the ops API
+        # The override publishes it for the matrix. This keeps that from hiding a regression
+        # in the file people actually run. Prints only the verdict, never the config.
+        run: |
+          set -euo pipefail
+          COMPOSE_FILE=docker-compose.yml docker compose config --format json \
+            | jq -e '(.services["ops-api"].ports // []) | length == 0' > /dev/null
+          echo "ops-api publishes no port in docker-compose.yml"
+
+      - name: Validate the merged compose config
+        run: docker compose config --quiet
+
+      - name: Bring the stack up and wait for the healthchecks
+        run: docker compose up --build --wait --wait-timeout 240
+
+      - name: Run the matrix against the stack
+        # MATRIX_SERVER has no /mcp: the script appends it. It is `localhost` because tokens carry
+        # the audience http://localhost:8000/mcp and the script mints for what it is pointed at.
+        # The IdP and server logs are read from `docker compose logs`, i.e. from the services
+        # themselves, which is what lines 8, 10 and 11 count.
+        run: |
+          set -euo pipefail
+          set -a; . ./.env; set +a
+          export MATRIX_SERVER=http://localhost:8000
+          export MATRIX_IDP=http://127.0.0.1:9000
+          export MATRIX_OTHER_IDP=http://127.0.0.1:9001
+          export MATRIX_OPS=http://127.0.0.1:9100
+          export MATRIX_IDP_LOG_CMD="docker compose logs --no-color --no-log-prefix idp"
+          export MATRIX_SERVER_LOG_CMD="docker compose logs --no-color --no-log-prefix server"
+          uv run python scripts/local_matrix.py | tee matrix.out
+          {
+            echo '### Phase 1 matrix against docker compose'
+            echo '```'
+            cat matrix.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Service logs
+        if: failure()
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color --timestamps
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans
