@@ -8,6 +8,7 @@ can self-correct), every tool returns a payload instead of raising.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,6 +41,26 @@ class ToolFailure(Exception):
 
 
 # --- Concrete failures -------------------------------------------------------
+def authentication_required(tool: str) -> ToolFailure:
+    return ToolFailure(
+        code="authentication_required",
+        message=f"{tool} was called on the authenticated server without a verified access token.",
+        hint="Send a bearer token issued for this server. This is not retryable as is.",
+        details={"tool": tool},
+    )
+
+
+def insufficient_scope(tool: str, required: Iterable[str], missing: Iterable[str]) -> ToolFailure:
+    lacking = sorted(missing)
+    return ToolFailure(
+        code="insufficient_scope",
+        message=f"The access token lacks the scope {tool} requires: {' '.join(lacking)}.",
+        hint="Obtain a token that includes the missing scope, then retry. Retrying with the "
+        "same token fails the same way; tell the user which permission is missing.",
+        details={"tool": tool, "required_scopes": sorted(required), "missing_scopes": lacking},
+    )
+
+
 def missing_credentials() -> ToolFailure:
     return ToolFailure(
         code="credentials_missing",

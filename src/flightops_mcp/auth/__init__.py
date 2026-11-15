@@ -11,23 +11,31 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
-from mcp.server.auth.provider import TokenVerifier
+from mcp.server.auth.middleware.auth_context import get_access_token as current_access_token
+from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from pydantic import AnyHttpUrl
 
 from ..config import Settings
+from .challenge import ScopeChallengingServer
 from .jwks import JwksCache
+from .scopes import Scopes, UnknownToolError
 from .verifier import JwtVerifier, TokenRejected
 
 __all__ = [
+    "AccessToken",
     "AuthConfigError",
     "AuthSettings",
     "JwksCache",
     "JwtVerifier",
     "ResourceServerAuth",
+    "ScopeChallengingServer",
+    "Scopes",
     "TokenRejected",
     "TokenVerifier",
+    "UnknownToolError",
     "build_resource_server_auth",
+    "current_access_token",
 ]
 
 

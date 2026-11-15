@@ -17,6 +17,7 @@ import httpx
 import httpx2
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.server import MCPServer
 from starlette.applications import Starlette
 
 from flightops_mcp import server as srv
@@ -40,6 +41,7 @@ def remote_settings(settings: Settings) -> Settings:
 
 @dataclass(slots=True)
 class RemoteServer:
+    server: MCPServer
     app: Starlette
     raw: httpx.AsyncClient
 
@@ -82,16 +84,26 @@ class RemoteServer:
 
 @asynccontextmanager
 async def serve(
-    settings: Settings, jwks_transport: httpx.AsyncBaseTransport
+    settings: Settings,
+    jwks_transport: httpx.AsyncBaseTransport,
+    *,
+    http_challenge: bool = True,
 ) -> AsyncIterator[RemoteServer]:
-    """Run the remote server for the duration of a test."""
+    """Run the remote server for the duration of a test.
+
+    `http_challenge=False` builds the SDK's app without the scope-challenge
+    middleware, to prove the check next to the tool holds on its own.
+    """
     server = srv.create_http_server(settings, jwks_transport=jwks_transport)
-    app = server.streamable_http_app(**srv.HTTP_OPTIONS)
+    if http_challenge:
+        app = server.streamable_http_app(**srv.HTTP_OPTIONS)
+    else:
+        app = MCPServer.streamable_http_app(server, **srv.HTTP_OPTIONS)
     async with (
         _lifespan(app),
         httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=BASE_URL) as raw,
     ):
-        yield RemoteServer(app=app, raw=raw)
+        yield RemoteServer(server=server, app=app, raw=raw)
 
 
 @asynccontextmanager

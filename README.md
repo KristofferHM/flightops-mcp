@@ -109,11 +109,30 @@ revision 2026-07-28), so there is no session to pin a replica to.
 | Request | Answer |
 |---|---|
 | No token, expired token, bad signature, wrong issuer | `401` + `WWW-Authenticate: Bearer ... resource_metadata="..."` |
+| Valid token that lacks the tool's scope | `403` + `WWW-Authenticate: Bearer error="insufficient_scope", scope="..."`, and an error naming the scope |
 | `GET /.well-known/oauth-protected-resource/mcp` | RFC 9728 metadata naming the issuer |
 
 The signing algorithm is pinned before any key is fetched, so `alg: none` and HS256-with-the-public-key
 are refused outright. JWKS fetches are single-flight, and refetches triggered by an unknown key id are
 rate-limited so forged ids cannot turn the server into a request amplifier against the issuer.
+
+### Scopes
+
+The policy is one table in code, `Scopes.for_tool(name)` in `auth/scopes.py`. Delegated scopes (`scp`)
+and application roles (`roles`) are checked the same way.
+
+| Scope | Tools |
+|---|---|
+| `flightops.reference.read` | `resolve_airport` |
+| `flightops.weather.read` | `airport_weather`, `disruption_triage` |
+| `flightops.traffic.read` | `airport_live_traffic`, `airport_movements`, `disruption_triage` |
+| `flightops.status.read` | `upstream_status` |
+
+A tool with no entry in the table cannot be registered, so a new tool cannot ship unprotected by
+omission. The check runs twice: an HTTP middleware answers a missing scope with the `403` challenge
+before the tool runs, and a wrapper next to each tool refuses again for any request shape that got past
+the middleware. That wrapper fails closed: no verified token in context is a refusal. The stdio server
+has neither, because a local subprocess has no bearer token to check.
 
 ### A local IdP, so none of this needs a cloud tenant
 

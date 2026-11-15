@@ -27,9 +27,23 @@ import httpx
 from mcp.server import MCPServer
 
 from . import __version__
-from .auth import AuthConfigError, AuthSettings, TokenVerifier, build_resource_server_auth
+from .auth import (
+    AuthConfigError,
+    AuthSettings,
+    ScopeChallengingServer,
+    Scopes,
+    TokenVerifier,
+    build_resource_server_auth,
+    current_access_token,
+)
 from .config import Settings
-from .errors import ToolFailure, not_found, reference_data_missing
+from .errors import (
+    ToolFailure,
+    authentication_required,
+    insufficient_scope,
+    not_found,
+    reference_data_missing,
+)
 from .opensky import MAX_HISTORY_S, TIME_RESOLUTION_S, BBox
 from .runtime import Runtime, get_runtime
 from .telemetry import TOOL_CALLS, configure_logging, get_logger
@@ -94,10 +108,42 @@ def guarded(fn: Any) -> Any:
 
 
 def tool(fn: Any) -> Any:
-    """Guard a tool function and add it to the registry every server is built from."""
+    """Guard a tool function and add it to the registry every server is built from.
+
+    Registration fails for a tool with no entry in the scope table, so a new tool
+    cannot ship unprotected by omission.
+    """
+    Scopes.for_tool(fn.__name__)
     wrapped: ToolFn = guarded(fn)
     _TOOLS.append(wrapped)
     return wrapped
+
+
+def scoped(fn: ToolFn) -> ToolFn:
+    """Require the tool's scopes on the caller's token. Only the HTTP server uses this.
+
+    The HTTP middleware has normally refused the request already; this is the
+    second check, next to the tool, for any request shape that got past it. It
+    fails closed: no verified token in context is a refusal, not a pass, so a
+    wiring mistake cannot quietly turn authorization off.
+    """
+    name: str = fn.__name__
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        token = current_access_token()
+        if token is None:
+            failure = authentication_required(name)
+        else:
+            missing = Scopes.missing(name, token.scopes)
+            if not missing:
+                return await fn(*args, **kwargs)
+            failure = insufficient_scope(name, Scopes.for_tool(name), missing)
+        TOOL_CALLS.labels(tool=name, outcome=failure.code).inc()
+        _log.warning("tool_refused", tool=name, code=failure.code, details=failure.details)
+        return failure.to_payload()
+
+    return wrapper
 
 
 def _iso_now(clock: Any) -> str:
@@ -493,8 +539,13 @@ def create_server(
     auth: AuthSettings | None = None,
     token_verifier: TokenVerifier | None = None,
 ) -> MCPServer:
-    """Build a server with every registered tool, optionally behind bearer auth."""
-    server: MCPServer = MCPServer(
+    """Build a server with every registered tool, optionally behind bearer auth.
+
+    With auth, every tool is wrapped in its scope check and the HTTP app answers
+    a missing scope with a `WWW-Authenticate` challenge.
+    """
+    authenticated = auth is not None
+    server: MCPServer = (ScopeChallengingServer if authenticated else MCPServer)(
         name="flightops-mcp",
         version=__version__,
         instructions=INSTRUCTIONS,
@@ -502,7 +553,7 @@ def create_server(
         token_verifier=token_verifier,
     )
     for fn in _TOOLS:
-        server.add_tool(fn)
+        server.add_tool(scoped(fn) if authenticated else fn)
     return server
 
 

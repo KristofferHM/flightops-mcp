@@ -15,7 +15,7 @@ import pytest
 from mcp.server import MCPServer
 
 from flightops_mcp import server as srv
-from flightops_mcp.auth import AuthConfigError
+from flightops_mcp.auth import AuthConfigError, Scopes
 from flightops_mcp.config import Settings
 
 from .authkit import ISSUER, RESOURCE, JwksEndpoint, signing_key
@@ -96,7 +96,7 @@ async def test_an_authenticated_client_sees_every_tool(remote: RemoteServer) -> 
 
 
 async def test_an_authenticated_client_can_call_a_tool(remote: RemoteServer) -> None:
-    async with remote.client(KEY.mint()) as client:
+    async with remote.client(KEY.mint(scp=Scopes.REFERENCE_READ)) as client:
         payload = await call(client, "resolve_airport", {"query": "ESGG"})
 
     assert payload["ok"] is True
@@ -105,7 +105,9 @@ async def test_an_authenticated_client_can_call_a_tool(remote: RemoteServer) -> 
 
 async def test_a_bare_http_post_with_a_token_is_served_statelessly(remote: RemoteServer) -> None:
     """No initialize handshake and no session id: one POST in, one JSON response out."""
-    response = await remote.call_tool("resolve_airport", {"query": "GOT"}, token=KEY.mint())
+    response = await remote.call_tool(
+        "resolve_airport", {"query": "GOT"}, token=KEY.mint(scp=Scopes.REFERENCE_READ)
+    )
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
