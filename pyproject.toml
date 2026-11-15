@@ -1,0 +1,65 @@
+[project]
+name = "flightops-mcp"
+version = "0.1.0"
+description = "A governed Model Context Protocol server for airline operations: OAuth2 M2M, credit-aware rate limiting, and PII-safe observability."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Kristoffer Harr" }]
+requires-python = ">=3.12"
+keywords = ["mcp", "model-context-protocol", "agentic-ai", "aviation", "oauth2"]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp[cli]>=2.3.0",
+    "prometheus-client>=0.26.0",
+    "pydantic-settings>=2.16.3",
+    "structlog>=26.1.0",
+]
+
+[project.scripts]
+flightops-mcp = "flightops_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "respx>=0.23.1",
+    "ruff>=0.17.5",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "S", "C4", "RET", "ARG", "PL"]
+ignore = [
+    "S101",    # asserts are the test suite's whole point
+    "PLR0913", # explicit dependency injection beats a god-object
+    "PLR2004", # magic values are readable in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106", "ARG001", "ARG005", "PLC0415"]
+"scripts/*" = ["PLC0415", "E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+ignore_missing_imports = true

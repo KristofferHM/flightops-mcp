@@ -1,0 +1,31 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local secrets and data
+.env
+.env.*
+!.env.example
+
+# Downloaded / generated reference data (rebuild with scripts/build_airports_db.py)
+data/airports.csv
+data/*.sqlite3
+data/*.sqlite3-journal
+
+# Test and tooling artefacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+probe_*.py
+
+# Local Claude Code overrides (the committed .claude/settings.json is the shared one)
+.claude/settings.local.json

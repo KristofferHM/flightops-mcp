@@ -1,0 +1,120 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  UV_VERSION: "0.11.19"
+
+jobs:
+  quality:
+    name: lint and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: Ruff (lint)
+        run: uv run ruff check --output-format=github .
+      - name: Ruff (format)
+        run: uv run ruff format --check .
+      - name: Mypy (strict)
+        run: uv run mypy src
+
+  tests:
+    name: tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+        env:
+          UV_PYTHON: ${{ matrix.python }}
+      - name: Run the suite
+        run: uv run pytest -q
+        env:
+          UV_PYTHON: ${{ matrix.python }}
+      - name: Fail on skipped tests
+        # A skipped test is an untested path. Nothing here may skip silently.
+        run: |
+          uv run pytest -q -rs | tee pytest.out
+          if grep -q "skipped" pytest.out; then
+            echo "::error::tests were skipped; account for them or remove them"
+            exit 1
+          fi
+        env:
+          UV_PYTHON: ${{ matrix.python }}
+
+  contract:
+    name: live upstream contract (advisory)
+    # The no-credential upstream only. OpenSky is rate-limited and may block
+    # cloud IP ranges, so the paid/auth path is exercised locally, not here.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: Ask AviationWeather.gov for a real METAR
+        run: |
+          uv run python - <<'PY'
+          import asyncio, json, httpx
+          async def main() -> None:
+              async with httpx.AsyncClient(
+                  timeout=30,
+                  headers={"User-Agent": "flightops-mcp/ci (+https://github.com/KristofferHM/flightops-mcp)"},
+              ) as client:
+                  response = await client.get(
+                      "https://aviationweather.gov/api/data/metar",
+                      params={"ids": "ESGG", "format": "json"},
+                  )
+                  response.raise_for_status()
+                  payload = response.json()
+                  print(json.dumps(payload[0]["icaoId"]) if payload else "no data")
+          asyncio.run(main())
+          PY
+
+  container:
+    name: container build and smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build --tag flightops-mcp:ci .
+      - name: Smoke test the image
+        run: |
+          docker run --rm --entrypoint python flightops-mcp:ci -c "
+          import os, sqlite3, flightops_mcp.server as s
+          assert s.mcp.name == 'flightops-mcp', s.mcp.name
+          db = os.environ['FLIGHTOPS_AIRPORTS_DB']
+          assert os.path.isfile(db), db
+          count = sqlite3.connect(db).execute('select count(*) from airports').fetchone()[0]
+          assert count > 0, 'airport reference database is empty'
+          print(f'container ok: {count} airports baked in')
+          "
+      - name: CLI answers --help
+        run: docker run --rm --entrypoint flightops-mcp flightops-mcp:ci --help
+      - name: Container runs as non-root
+        run: |
+          user=$(docker run --rm --entrypoint id flightops-mcp:ci -un)
+          echo "user: $user"
+          test "$user" = "flightops"

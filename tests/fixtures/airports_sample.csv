@@ -1,0 +1,9 @@
+id,ident,type,name,latitude_deg,longitude_deg,elevation_ft,continent,iso_country,iso_region,municipality,scheduled_service,icao_code,iata_code,gps_code,local_code,home_link,wikipedia_link,keywords
+2349,EFTU,large_airport,Turku Airport,60.514099,22.2628,161,EU,FI,FI-19,Turku,yes,EFTU,TKU,EFTU,,https://www.finavia.fi/en/turku/,https://en.wikipedia.org/wiki/Turku_Airport,
+2434,EGLL,large_airport,London Heathrow Airport,51.470748,-0.459909,83,EU,GB,GB-ENG,London,yes,EGLL,LHR,EGLL,,http://www.heathrow.com/,https://en.wikipedia.org/wiki/Heathrow_Airport,"LON, Londres"
+2513,EHAM,large_airport,Amsterdam Airport Schiphol,52.308601,4.76389,-11,EU,NL,NL-NH,Amsterdam,yes,EHAM,AMS,EHAM,,https://www.schiphol.nl/,https://en.wikipedia.org/wiki/Amsterdam_Airport_Schiphol,
+2542,EKCH,large_airport,Copenhagen Kastrup Airport,55.617900848389,12.656000137329,17,EU,DK,DK-84,Copenhagen,yes,EKCH,CPH,EKCH,,http://www.cph.dk/en/,https://en.wikipedia.org/wiki/Copenhagen_Airport,"København, Malmö"
+2578,ENGM,large_airport,Oslo-Gardermoen International Airport,60.193901,11.1004,681,EU,NO,NO-32,Oslo (Gardermoen),yes,ENGM,OSL,ENGM,,https://avinor.no/en/airport/oslo-airport,"https://en.wikipedia.org/wiki/Oslo_Airport,_Gardermoen",
+2648,ESGG,large_airport,Göteborg Landvetter Airport,57.6628,12.2798,506,EU,SE,SE-Q,Göteborg,yes,ESGG,GOT,ESGG,,https://www.swedavia.com/landvetter/,https://en.wikipedia.org/wiki/G%C3%B6teborg_Landvetter_Airport,"Göteborg-Landvetter, Gothenburg"
+2652,ESGP,medium_airport,Säve Airport,57.7747,11.8704,59,EU,SE,SE-Q,Göteborg,no,ESGP,GSE,ESGP,,https://www.saveflygplats.com/,https://en.wikipedia.org/wiki/S%C3%A4ve_Airport,"Göteborg City Airport, Gothenburg City Airport"
+2701,ESSA,large_airport,Stockholm-Arlanda Airport,59.64849,17.928829,137,EU,SE,SE-AB,Stockholm,yes,ESSA,ARN,ESSA,,http://www.swedavia.se/arlanda/,https://en.wikipedia.org/wiki/Stockholm-Arlanda_Airport,

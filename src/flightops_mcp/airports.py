@@ -1,0 +1,197 @@
+"""Local airport reference data, built from the public-domain OurAirports CSV.
+
+Why a local SQLite file rather than an API: airport identities are stable, so
+resolving "ESGG" should not cost a network round trip, an API credit, or a
+dependency on an upstream being up. It also makes the test suite hermetic.
+
+Build it with:
+
+    uv run python scripts/build_airports_db.py            # downloads the CSV
+    uv run python scripts/build_airports_db.py --csv X    # or use a local copy
+"""
+
+from __future__ import annotations
+
+import csv
+import math
+import sqlite3
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS airports (
+    ident TEXT PRIMARY KEY,
+    iata TEXT,
+    name TEXT NOT NULL,
+    type TEXT,
+    latitude REAL,
+    longitude REAL,
+    elevation_ft INTEGER,
+    iso_country TEXT,
+    iso_region TEXT,
+    municipality TEXT,
+    scheduled_service TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_airports_iata ON airports(iata);
+CREATE INDEX IF NOT EXISTS idx_airports_name ON airports(name);
+"""
+
+_COLUMNS = (
+    "ident",
+    "iata",
+    "name",
+    "type",
+    "latitude",
+    "longitude",
+    "elevation_ft",
+    "iso_country",
+    "iso_region",
+    "municipality",
+    "scheduled_service",
+)
+
+# Only airports a crew-scheduling system would actually know about.
+_USEFUL_TYPES = frozenset({"large_airport", "medium_airport", "small_airport", "seaplane_base"})
+
+
+def build_from_csv(csv_path: Path, db_path: Path, *, limit: int | None = None) -> int:
+    """Load OurAirports' airports.csv into SQLite. Returns the row count."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if db_path.exists():
+        db_path.unlink()
+
+    rows = 0
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(_SCHEMA)
+        with csv_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            batch: list[tuple[Any, ...]] = []
+            for record in reader:
+                if record.get("type") not in _USEFUL_TYPES:
+                    continue
+                lat = _to_float(record.get("latitude_deg"))
+                lon = _to_float(record.get("longitude_deg"))
+                batch.append(
+                    (
+                        (record.get("ident") or "").upper(),
+                        (record.get("iata_code") or "").upper() or None,
+                        record.get("name") or "",
+                        record.get("type"),
+                        lat,
+                        lon,
+                        _to_int(record.get("elevation_ft")),
+                        record.get("iso_country"),
+                        record.get("iso_region"),
+                        record.get("municipality"),
+                        record.get("scheduled_service"),
+                    )
+                )
+                if len(batch) >= 5000:
+                    _insert(connection, batch)
+                    rows += len(batch)
+                    batch.clear()
+                    if limit is not None and rows >= limit:
+                        break
+            if batch:
+                _insert(connection, batch)
+                rows += len(batch)
+        connection.commit()
+    return rows
+
+
+def _insert(connection: sqlite3.Connection, batch: Iterable[tuple[Any, ...]]) -> None:
+    placeholders = ", ".join("?" for _ in _COLUMNS)
+    # The column list is the frozen module constant `_COLUMNS`; the only values
+    # interpolated into SQL are "?" placeholders. Nothing here is caller-supplied.
+    connection.executemany(
+        f"INSERT OR REPLACE INTO airports ({', '.join(_COLUMNS)}) VALUES ({placeholders})",  # noqa: S608
+        batch,
+    )
+
+
+def _to_float(value: str | None) -> float | None:
+    try:
+        return float(value) if value not in (None, "") else None
+    except ValueError:
+        return None
+
+
+def _to_int(value: str | None) -> int | None:
+    try:
+        return int(float(value)) if value not in (None, "") else None
+    except ValueError:
+        return None
+
+
+class AirportDB:
+    """Read-only lookups over the reference database."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    @property
+    def exists(self) -> bool:
+        return self.path.is_file()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(f"file:{self.path.as_posix()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def get(self, ident: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM airports WHERE ident = ?", (ident.upper(),)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def lookup(self, query: str, *, limit: int = 5) -> list[dict[str, Any]]:
+        """Resolve an ICAO/IATA code or a name fragment.
+
+        Exact identifier matches are returned before fuzzy name matches, because
+        "ESGG" should never compete with "Siggjo" for the model's attention.
+        """
+        needle = query.strip()
+        if not needle:
+            return []
+        upper = needle.upper()
+        with self._connect() as connection:
+            exact = connection.execute(
+                "SELECT * FROM airports WHERE ident = ? OR iata = ? ORDER BY ident LIMIT ?",
+                (upper, upper, limit),
+            ).fetchall()
+            if exact:
+                return [dict(row) for row in exact]
+            fuzzy = connection.execute(
+                "SELECT * FROM airports WHERE name LIKE ? ORDER BY type, name LIMIT ?",
+                (f"%{needle}%", limit),
+            ).fetchall()
+        return [dict(row) for row in fuzzy]
+
+    def nearest(
+        self, lat: float, lon: float, *, limit: int = 5, max_nm: float = 200.0
+    ) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM airports WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+            ).fetchall()
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for row in rows:
+            record = dict(row)
+            distance = haversine_nm(lat, lon, record["latitude"], record["longitude"])
+            if distance <= max_nm:
+                record["distance_nm"] = round(distance, 1)
+                scored.append((distance, record))
+        scored.sort(key=lambda pair: pair[0])
+        return [record for _, record in scored[:limit]]
+
+
+def haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in nautical miles."""
+    earth_radius_nm = 3440.065
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = phi2 - phi1
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * earth_radius_nm * math.asin(min(1.0, math.sqrt(a)))

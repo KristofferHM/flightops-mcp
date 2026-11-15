@@ -1,0 +1,26 @@
+name: flightops-mcp
+
+# Local stack: the server in Streamable HTTP mode.
+# Container verification runs in CI; this file is what you would run on a host
+# that has Docker installed.
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    environment:
+      FLIGHTOPS_LOG_LEVEL: INFO
+      FLIGHTOPS_OPENSKY_CLIENT_ID: ${FLIGHTOPS_OPENSKY_CLIENT_ID:-}
+      FLIGHTOPS_OPENSKY_CLIENT_SECRET: ${FLIGHTOPS_OPENSKY_CLIENT_SECRET:-}
+      FLIGHTOPS_CREDIT_BUDGET_PER_HOUR: ${FLIGHTOPS_CREDIT_BUDGET_PER_HOUR:-400}
+    # Secrets are passed by reference from the host environment or a .env file
+    # that is never committed; nothing is baked into the image.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
