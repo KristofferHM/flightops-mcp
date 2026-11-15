@@ -1,6 +1,6 @@
 [project]
 name = "flightops-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "A governed Model Context Protocol server for airline operations: OAuth2 M2M, credit-aware rate limiting, and PII-safe observability."
 readme = "README.md"
 license = { text = "MIT" }
