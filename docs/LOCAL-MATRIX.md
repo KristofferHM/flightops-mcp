@@ -34,6 +34,12 @@ bash scripts/local_matrix.sh
 stops all four on exit. The commands and environment are the ones in `docker-compose.yml` with the host
 name changed from `idp`/`ops-api`/`localhost` to `127.0.0.1`:
 
+> **git-bash note (fixed 2026-11-15):** the script's temp log directory is created with `mktemp -d`,
+> which yields an MSYS path (`/tmp/tmp.XXXX`). Native Windows Python resolves that as
+> `\tmp\tmp.XXXX` and the run dies at the first log assertion with `FileNotFoundError`. The script now
+> translates the path with `cygpath -w` for the arguments it hands to Python, while bash keeps using
+> the MSYS path for redirection. Found by running the documented quickstart on Windows, not in review.
+
 | Process | Command | Port | Environment |
 |---|---|---|---|
 | idp | `uv run uvicorn --factory services.idp.app:create_app --host 127.0.0.1 --port 9000` | 9000 | `IDP_ISSUER=http://127.0.0.1:9000`, `IDP_CLIENTS` (JSON: `flightops-agent` with app roles on the server URL, `flightops-mcp` with `resource` = server URL and `exchange_targets` for `api://flightops-ops`; secrets from the two variables above) |

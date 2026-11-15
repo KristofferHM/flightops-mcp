@@ -27,6 +27,17 @@ RESOURCE="http://127.0.0.1:${SERVER_PORT}/mcp"
 LOG_DIR="${MATRIX_LOG_DIR:-$(mktemp -d)}"
 mkdir -p "$LOG_DIR"
 
+# Native Python cannot open an MSYS path: it reads `/tmp/tmp.XXXX` as
+# `\tmp\tmp.XXXX`, a path that does not exist, and the run dies at the first
+# log assertion with FileNotFoundError. Bash handles `/tmp` fine, so translate
+# once, for the arguments handed to Python only. Verified by execution on
+# git-bash; see docs/LOCAL-MATRIX.md.
+if command -v cygpath >/dev/null 2>&1; then
+  LOG_DIR_NATIVE="$(cygpath -w "$LOG_DIR")"
+else
+  LOG_DIR_NATIVE="$LOG_DIR"
+fi
+
 PIDS=()
 
 stop_all() {
@@ -79,8 +90,8 @@ FLIGHTOPS_OPS_API_AUDIENCE="api://flightops-ops" \
   start "$LOG_DIR/server.log" uv run flightops-mcp --transport streamable-http --host 127.0.0.1 --port "$SERVER_PORT"
 
 MATRIX_SERVER="http://127.0.0.1:${SERVER_PORT}" \
-MATRIX_IDP_LOG="$LOG_DIR/idp.log" \
-MATRIX_SERVER_LOG="$LOG_DIR/server.log" \
+MATRIX_IDP_LOG="$LOG_DIR_NATIVE/idp.log" \
+MATRIX_SERVER_LOG="$LOG_DIR_NATIVE/server.log" \
   uv run python scripts/local_matrix.py
 status=$?
 
