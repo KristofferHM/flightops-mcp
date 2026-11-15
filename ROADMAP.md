@@ -93,6 +93,8 @@ is being a correct OAuth 2.1 **resource server** while calling a downstream API 
 - [ ] The whole matrix runs in `docker compose up` with no external account
       **unverified on this host (no Docker)**: `docker: command not found`, so no image was built and
       compose was never run. The same three services were proven as local processes instead.
+      The CI job that will run it exists (`compose-matrix` in `.github/workflows/ci.yml`) and **has not
+      run yet**. Tick this box when that job is green on a pushed commit, and cite the run.
 
 ### Risks
 

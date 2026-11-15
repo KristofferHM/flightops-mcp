@@ -1,6 +1,7 @@
 """Phase 1 acceptance matrix against live local processes, with no Docker.
 
-Run it through `scripts/local_matrix.sh`, which starts the services this talks to.
+Run it through `scripts/local_matrix.sh`, which starts the services this talks to, or against
+`docker compose` in CI (`.github/workflows/ci.yml`, job `compose-matrix`).
 Every line printed is an observed result: a real HTTP request to a real socket, and
 for the counting lines, a count taken from the IdP's own access log rather than from
 this client. Tokens are never printed; the last line checks that none of them
@@ -14,6 +15,8 @@ import base64
 import json
 import os
 import re
+import shlex
+import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
@@ -29,8 +32,6 @@ SERVER = os.environ.get("MATRIX_SERVER", "http://127.0.0.1:8001")
 RESOURCE = f"{SERVER}/mcp"
 DOWNSTREAM = "api://flightops-ops"
 
-IDP_LOG = Path(os.environ["MATRIX_IDP_LOG"])
-SERVER_LOG = Path(os.environ["MATRIX_SERVER_LOG"])
 AGENT_SECRET = os.environ["DEV_AGENT_CLIENT_SECRET"]
 MCP_SECRET = os.environ["DEV_MCP_CLIENT_SECRET"]
 
@@ -52,8 +53,56 @@ class Line:
 
 
 # --- reading the services' own records ----------------------------------------------
-def read_log(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace")
+@dataclass(frozen=True)
+class LogSource:
+    """Where a service's own log comes from: a file, or a command that prints it.
+
+    Counting exchanges from the service's log, not from this client, is what makes lines 8, 10
+    and 11 evidence. Under compose the log is not a file, so a command stands in for it.
+    """
+
+    path: Path | None = None
+    command: tuple[str, ...] | None = None
+
+    def read(self) -> str:
+        if self.path is not None:
+            return self.path.read_text(encoding="utf-8", errors="replace")
+        assert self.command is not None
+        # An unreadable log must stop the run. Read as empty it would make every
+        # "the token is not in the log" check pass for the wrong reason.
+        done = subprocess.run(  # noqa: S603 - argv from the operator's own environment, no shell
+            self.command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+        if done.returncode != 0:
+            raise SystemExit(
+                f"log command failed ({done.returncode}): {shlex.join(self.command)}\n{done.stderr}"
+            )
+        # `docker compose logs` writes a service's stdout and stderr to our stdout.
+        return done.stdout
+
+
+def log_source(file_var: str, command_var: str) -> LogSource:
+    """One of `<file_var>` (a path) or `<command_var>` (argv, split like a shell would)."""
+    file, command = os.environ.get(file_var), os.environ.get(command_var)
+    if bool(file) == bool(command):
+        raise SystemExit(f"set exactly one of {file_var} (a log file) or {command_var} (a command)")
+    if file:
+        return LogSource(path=Path(file))
+    return LogSource(command=tuple(shlex.split(command or "")))
+
+
+IDP_LOG = log_source("MATRIX_IDP_LOG", "MATRIX_IDP_LOG_CMD")
+SERVER_LOG = log_source("MATRIX_SERVER_LOG", "MATRIX_SERVER_LOG_CMD")
+
+
+def read_log(source: LogSource) -> str:
+    return source.read()
 
 
 def idp_token_posts() -> Counter[str]:
@@ -484,12 +533,21 @@ async def line_11(c: httpx.AsyncClient) -> Line:
     cc = await call_tool(c, "resolve_airport", {"query": "ESGG"}, plain)
     c_requests = sum(idp_token_posts().values()) - before_c
 
-    ok = a.status_code == 401 and a_issued == 0
+    # ADR 0002 rewords this line to the guarantee that exists: a revoked token cannot be
+    # exchanged. (b) and (c) are the accepted bound (revocation waits for `exp`), shown
+    # below as evidence and deliberately not asserted, so nobody mistakes them for goals.
+    ok = (
+        a_payload.get("ok") is False
+        and (a_payload.get("error") or {}).get("code") == "obo_exchange_rejected"
+        and a_issued == 0
+        and a_refused >= 1
+        and len(rejected) >= 1
+    )
     return Line(
         11,
-        "revoked user token -> 401 and a re-exchange does not happen",
+        "revoked token cannot be exchanged, and nothing is re-issued for it (ADR 0002)",
         ok,
-        f"HTTP {a.status_code}; no token issued: {a_issued == 0}",
+        f"HTTP {a.status_code}; tokens issued: {a_issued}, refused by the IdP: {a_refused}",
         [
             f"(a) revoked before first use: HTTP {a.status_code}, tool ok={a_payload.get('ok')}, "
             f"error code={(a_payload.get('error') or {}).get('code')}",
@@ -541,6 +599,11 @@ async def main() -> int:
     limits = httpx.Limits(max_connections=100)
     async with httpx.AsyncClient(timeout=30.0, limits=limits) as client:
         await wait_until_ready(client)
+        # Readiness probes hit both services, so each has logged by now. An empty log
+        # here means the wrong source, and every count taken from it would be vacuous.
+        for name, source in (("idp", IDP_LOG), ("server", SERVER_LOG)):
+            if not source.read().strip():
+                raise SystemExit(f"the {name} log is empty after readiness; check its log source")
         lines = [
             await line_1(client),
             await line_2(client),

@@ -5,9 +5,14 @@
 three services as local processes. It is evidence for the auth behaviour. It is not evidence that the
 containers work; see [what this does not prove](#what-this-does-not-prove).
 
-Result: **11 of 12 checks pass; line 11 was reworded rather than adjusted** — the measurement showed the
+Result: **12 of 12 checks pass; line 11 was reworded rather than adjusted** — the measurement showed the
 line asserted something the server cannot promise, and the decision is recorded in
-[ADR 0002](adr/0002-token-revocation-is-enforced-at-the-idp.md).
+[ADR 0002](adr/0002-token-revocation-is-enforced-at-the-idp.md). The first run (below) failed the original
+wording; the script was then changed to assert the reworded guarantee and re-run: 12 of 12, local
+processes, 2026-11-15.
+
+The same matrix is wired to run against `docker compose` in CI; see
+[the compose path](#the-compose-path-ci-job-compose-matrix). That job has not been executed yet.
 
 ## Run it
 
@@ -66,7 +71,7 @@ logs, not the client's view. Tokens and secrets are not shown here, and line 12 
 | 8 | exchange escalation | **PASS** `400` ×3 | asking for `weather.read` the target does not allow: `invalid_scope`; asking for `passengers.read` with a token that lacks it: `invalid_scope`; an audience the client may not target: `invalid_target`. IdP access log across the three: 0 issued, 3 refused |
 | 9 | passthrough attempt | **PASS** `401` ×3 | a token for the ops API presented to the server, and the exchanged token replayed at the server: both `401`, both logged `wrong_audience`. A server-audience token carried straight to the ops API: `401`. Control: the exchanged token at the ops API: `200` |
 | 10 | 50 concurrent calls, one identity | **PASS** | 50 of 50 answered `200`. **IdP access log: 1 `POST /token` in the burst, 1 issued**, still 1 after a 51st call. Server log agrees (1 `obo_exchanged`) |
-| 11 | revoked user token | **FAIL** | see below |
+| 11 | revoked token cannot be exchanged (reworded, ADR 0002) | **PASS** | first run against the original wording: **FAIL**, see below. Re-run against the reworded line: `obo_exchange_rejected`, 0 issued, 1 refused by the IdP |
 | 12 | extra: tokens in logs | **PASS** | 16 tokens checked, 0 found in either log |
 
 Line 3 note: the second IdP signs with a different key, so the server rejects the token at the
@@ -141,4 +146,38 @@ This is the residual risk for the sixth criterion. None of it was exercised.
 - **Outside the host.** Everything ran on one machine over loopback, with TLS off.
 
 The criterion stays unticked in `ROADMAP.md` until `docker compose up` has been run somewhere that has
-Docker, with this matrix pointed at it. CI is the natural place.
+Docker, with this matrix pointed at it. CI is the natural place, and the next section is that job.
+
+## The compose path: CI job `compose-matrix`
+
+**Status: written, not executed.** The job is `compose-matrix` ("compose matrix (phase 1 acceptance)") in
+`.github/workflows/ci.yml`. It has **not been run on the development host** (no Docker here), and no CI run
+of it has been seen. Nothing on this page claims it is green. Neither the job's YAML nor
+`docker-compose.ci.yml` could be validated with `docker compose config` here; the first run is that
+validation.
+
+What it does, in order: generates the two client secrets into `.env` (masked in the log, never printed),
+checks that `docker-compose.yml` alone still publishes no port for `ops-api`, validates the merged config,
+runs `docker compose up --build --wait`, runs this matrix, prints every service's logs if anything failed,
+and always runs `docker compose down -v`. A failing line fails the job; the 12 lines go to the job summary.
+
+How it closes the gaps between this page's local run and compose:
+
+| Gap | How the job handles it |
+|---|---|
+| `ops-api` is not published, but line 9 calls it directly | `docker-compose.ci.yml` publishes it on `127.0.0.1:9100`. Only the override does; `docker-compose.yml` is untouched |
+| No second issuer for line 3 | `idp-other` in the override: `http://idp-other:9001`, its own per-process signing key, no clients |
+| The matrix counted exchanges from a log file | `MATRIX_IDP_LOG_CMD` / `MATRIX_SERVER_LOG_CMD` run `docker compose logs --no-color --no-log-prefix <service>`. The count is still read from the service, not the client. A failing or empty log command stops the run instead of reading as empty, which would make lines 4, 9 and 12 pass vacuously |
+| The audience is `http://localhost:8000/mcp` | `MATRIX_SERVER=http://localhost:8000` (no `/mcp`, which the script adds, and `localhost`, not `127.0.0.1`, so minted tokens carry the audience compose configures) |
+
+Things the job does not and cannot prove, even when green:
+
+- **Line 3 still hits `unknown_key_id`**, not the `wrong_issuer` branch, for the reason in the note above.
+- **The outbound passthrough guard is still not seen firing**; `tests/test_no_passthrough.py` covers it.
+- **Compose log timing.** The counting lines sleep 0.3-0.5 s and then read `docker compose logs`. Whether
+  the json-file log driver keeps up under 50 concurrent calls is untested; a flaky line 10 would mean that.
+- **Healthchecks gate `idp`, `idp-other` and `ops-api` only.** `server` has none in `docker-compose.yml`, so
+  `--wait` accepts it as soon as it is running and the matrix's own readiness poll covers the rest.
+- **Hardening is exercised, not asserted.** `read_only` and `no-new-privileges` are on, so a service that
+  writes outside `/tmp` would fail to start; the job has no step that checks the settings themselves.
+- It is still one runner over loopback, with TLS off, against the repo's test IdP and not Entra.
