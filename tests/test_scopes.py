@@ -34,6 +34,7 @@ ARGUMENTS: dict[str, dict[str, Any]] = {
     "airport_movements": {"airport": "ESGG"},
     "disruption_triage": {"airport": "ESGG"},
     "upstream_status": {},
+    "flight_passenger_impact": {"flight": "SK1429"},
 }
 
 
@@ -137,7 +138,8 @@ async def test_every_tool_refuses_a_token_with_no_scopes(tool: str, remote: Remo
     assert challenge_of(response)["scope"].split() == sorted(Scopes.for_tool(tool))
 
 
-@pytest.mark.parametrize("tool", sorted(EXPECTED_TOOLS))
+# The on-behalf-of tool also needs an IdP and a downstream; its success path is in test_obo.py.
+@pytest.mark.parametrize("tool", sorted(EXPECTED_TOOLS - {"flight_passenger_impact"}))
 async def test_every_tool_runs_with_exactly_its_own_scopes(tool: str, remote: RemoteServer) -> None:
     token = KEY.mint(scp=" ".join(Scopes.for_tool(tool)))
 

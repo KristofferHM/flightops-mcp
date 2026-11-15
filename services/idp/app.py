@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -44,10 +45,13 @@ class ExpireRequest(BaseModel):
 
 
 def create_app(
-    config: IdpConfig | None = None, *, clock: Callable[[], float] = time.time
+    config: IdpConfig | None = None,
+    *,
+    clock: Callable[[], float] = time.time,
+    private_key: rsa.RSAPrivateKey | None = None,
 ) -> FastAPI:
     resolved = config or IdpConfig()
-    idp = IdentityProvider(resolved, clock=clock)
+    idp = IdentityProvider(resolved, clock=clock, private_key=private_key)
     app = FastAPI(title="flightops local IdP", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.idp = idp
     issuer = resolved.issuer.rstrip("/")

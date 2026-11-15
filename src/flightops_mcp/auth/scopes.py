@@ -22,6 +22,8 @@ class Scopes:
     WEATHER_READ: Final = "flightops.weather.read"
     TRAFFIC_READ: Final = "flightops.traffic.read"
     STATUS_READ: Final = "flightops.status.read"
+    # Also the scope requested downstream when exchanging the user's token.
+    PASSENGERS_READ: Final = "flightops.passengers.read"
 
     # One scope per data domain, not per tool: OpenSky traffic and movements are
     # the same upstream, the same credits and the same sensitivity.
@@ -34,6 +36,7 @@ class Scopes:
         # this entry is the only check that stands between a caller and both.
         "disruption_triage": frozenset({WEATHER_READ, TRAFFIC_READ}),
         "upstream_status": frozenset({STATUS_READ}),
+        "flight_passenger_impact": frozenset({PASSENGERS_READ}),
     }
 
     @classmethod

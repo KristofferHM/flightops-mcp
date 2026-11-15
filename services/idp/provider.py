@@ -54,10 +54,20 @@ class IdentityProvider:
     reason no signing key exists anywhere in the repository.
     """
 
-    def __init__(self, config: IdpConfig, *, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        config: IdpConfig,
+        *,
+        clock: Callable[[], float] = time.time,
+        private_key: rsa.RSAPrivateKey | None = None,
+    ) -> None:
         self.config = config
         self._clock = clock
-        self._private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        # A key is only ever passed in by the test suite, to avoid generating one
+        # per test. The service entry point never supplies one.
+        self._private_key = private_key or rsa.generate_private_key(
+            public_exponent=65537, key_size=2048
+        )
         public_jwk: dict[str, Any] = json.loads(
             jwt.algorithms.RSAAlgorithm.to_jwk(self._private_key.public_key())
         )

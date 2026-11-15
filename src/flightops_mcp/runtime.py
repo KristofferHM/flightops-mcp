@@ -16,8 +16,10 @@ from typing import Any
 import httpx
 
 from .airports import AirportDB
+from .auth.obo import OboExchanger
 from .config import Settings
 from .opensky import OpenSkyClient
+from .ops import OpsApiClient
 from .weather import WeatherClient
 
 
@@ -27,6 +29,8 @@ class Runtime:
     opensky: OpenSkyClient
     weather: WeatherClient
     airports: AirportDB
+    obo: OboExchanger
+    ops: OpsApiClient
     clock: Callable[[], float]
 
     @classmethod
@@ -37,6 +41,8 @@ class Runtime:
         opensky_transport: httpx.AsyncBaseTransport | None = None,
         token_transport: httpx.AsyncBaseTransport | None = None,
         weather_transport: httpx.AsyncBaseTransport | None = None,
+        idp_transport: httpx.AsyncBaseTransport | None = None,
+        ops_transport: httpx.AsyncBaseTransport | None = None,
         sleep: Any = None,
         clock: Callable[[], float] = time.time,
     ) -> Runtime:
@@ -56,12 +62,16 @@ class Runtime:
             ),
             weather=WeatherClient(resolved, transport=weather_transport),
             airports=AirportDB(resolved.airports_db),
+            obo=OboExchanger(resolved, transport=idp_transport, clock=clock),
+            ops=OpsApiClient(resolved, transport=ops_transport, sleep=sleep),
             clock=clock,
         )
 
     async def aclose(self) -> None:
         await self.opensky.aclose()
         await self.weather.aclose()
+        await self.obo.aclose()
+        await self.ops.aclose()
 
 
 class _RuntimeHolder:

@@ -1,12 +1,14 @@
 name: flightops-mcp
 
-# Local stack: the server in Streamable HTTP mode, plus the identity provider
-# it trusts. No cloud tenant and no external account are involved.
+# Local stack: the server in Streamable HTTP mode, the identity provider it
+# trusts, and the internal API it calls on behalf of users. No cloud tenant and
+# no external account are involved.
 #
 # Client secrets are not in this file. Generate them once into .env, which is
 # never committed:
 #
 #   echo "DEV_AGENT_CLIENT_SECRET=$(openssl rand -hex 24)" >> .env
+#   echo "DEV_MCP_CLIENT_SECRET=$(openssl rand -hex 24)" >> .env
 #
 # Container verification runs in CI; this file is what you would run on a host
 # that has Docker installed.
@@ -29,7 +31,11 @@ services:
           "client_secret": "${DEV_AGENT_CLIENT_SECRET:?generate one into .env, see the top of this file}",
           "app_roles": {"http://localhost:8000/mcp": [
             "flightops.reference.read", "flightops.weather.read",
-            "flightops.traffic.read", "flightops.status.read"]}}]
+            "flightops.traffic.read", "flightops.status.read"]}},
+         {"client_id": "flightops-mcp",
+          "client_secret": "${DEV_MCP_CLIENT_SECRET:?generate one into .env, see the top of this file}",
+          "resource": "http://localhost:8000/mcp",
+          "exchange_targets": {"api://flightops-ops": ["flightops.passengers.read"]}}]
     read_only: true
     tmpfs:
       - /tmp
@@ -46,6 +52,37 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # The downstream of the on-behalf-of path. Holds invented, PII-shaped
+  # passenger records and accepts only tokens exchanged for it. Not published
+  # to the host: the only way in is through the server.
+  ops-api:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+    command: ["services.ops_api.app:create_app", "--port", "9100"]
+    depends_on:
+      idp:
+        condition: service_healthy
+    environment:
+      OPS_ISSUER: http://idp:9000
+      OPS_JWKS_URL: http://idp:9000/.well-known/jwks.json
+      OPS_AUDIENCE: api://flightops-ops
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:9100/healthz', timeout=3)"
+      interval: 5s
+      timeout: 4s
+      retries: 10
+    restart: unless-stopped
+
   server:
     build:
       context: .
@@ -55,6 +92,8 @@ services:
       - "8000:8000"
     depends_on:
       idp:
+        condition: service_healthy
+      ops-api:
         condition: service_healthy
     environment:
       FLIGHTOPS_LOG_LEVEL: INFO
@@ -68,6 +107,14 @@ services:
       # The URL clients use to reach the server, which is also the audience
       # tokens are issued for. Not the bind address.
       FLIGHTOPS_RESOURCE_SERVER_URL: http://localhost:8000/mcp
+      # On-behalf-of: the server's own client at the IdP, used to exchange a
+      # user's token for one the ops API accepts. The user's token is never
+      # forwarded.
+      FLIGHTOPS_AUTH_TOKEN_URL: http://idp:9000/token
+      FLIGHTOPS_AUTH_CLIENT_ID: flightops-mcp
+      FLIGHTOPS_AUTH_CLIENT_SECRET: ${DEV_MCP_CLIENT_SECRET:?generate one into .env, see the top of this file}
+      FLIGHTOPS_OPS_API_BASE_URL: http://ops-api:9100
+      FLIGHTOPS_OPS_API_AUDIENCE: api://flightops-ops
     # Secrets are passed by reference from the host environment or a .env file
     # that is never committed; nothing is baked into the image.
     read_only: true

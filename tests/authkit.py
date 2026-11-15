@@ -6,6 +6,7 @@ signing material in the repository, not even a throwaway one.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import functools
 import hashlib
@@ -100,8 +101,12 @@ class JwksEndpoint:
         self.failing = False
         self.extra_entries: list[Any] = []
 
-    def __call__(self, _request: httpx.Request) -> httpx.Response:
+    async def __call__(self, _request: httpx.Request) -> httpx.Response:
         self.calls += 1
+        # Yield like a real network call does. Without this the mock answers
+        # inside one event-loop step, concurrent callers never interleave, and a
+        # single-flight test passes even with the lock removed.
+        await asyncio.sleep(0)
         if self.failing:
             return httpx.Response(503)
         return httpx.Response(

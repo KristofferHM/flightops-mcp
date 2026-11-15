@@ -67,7 +67,8 @@ async def test_the_jwks_publishes_one_public_rsa_key_and_nothing_private(idp: Lo
 
 
 async def test_every_idp_instance_signs_with_its_own_key() -> None:
-    assert LocalIdp().provider.kid != LocalIdp().provider.kid
+    """The default, as the service runs: a fresh key per process, nothing shared or stored."""
+    assert LocalIdp(own_key=True).provider.kid != LocalIdp(own_key=True).provider.kid
 
 
 # --- client credentials ------------------------------------------------------
@@ -176,7 +177,7 @@ async def test_the_resource_server_verifier_accepts_idp_tokens(idp: LocalIdp) ->
 
 async def test_a_token_from_another_idp_instance_is_rejected(idp: LocalIdp) -> None:
     """Same issuer name, different key: only the published key counts."""
-    impostor = LocalIdp()
+    impostor = LocalIdp(own_key=True)
 
     assert await verifier_for(idp).verify_token(await impostor.service_token()) is None
 

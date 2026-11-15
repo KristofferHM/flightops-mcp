@@ -361,9 +361,12 @@ async def test_the_opensky_token_client_is_guarded_too(settings: Settings) -> No
 
 def test_every_outbound_http_client_installs_the_guard() -> None:
     """A structural check: a new upstream client cannot be added without the hook."""
+    # The exchange client presents the caller's token to the issuer that minted
+    # it, as the subject of an RFC 8693 exchange. That is its whole job.
+    exempt = {SRC / "auth" / "obo.py"}
     unguarded: list[str] = []
     clients = 0
-    for path in sorted(SRC.rglob("*.py")):
+    for path in sorted(set(SRC.rglob("*.py")) - exempt):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if not (isinstance(node, ast.Call) and ast.unparse(node.func) == "httpx.AsyncClient"):
                 continue

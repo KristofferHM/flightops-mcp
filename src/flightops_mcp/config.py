@@ -44,6 +44,17 @@ class Settings(BaseSettings):
     jwks_min_refresh_interval_s: float = 30.0
     auth_clock_skew_s: float = 30.0
 
+    # --- On-behalf-of (this server as a confidential client of its issuer) ---
+    # The server's own credentials at the issuer's token endpoint, used to
+    # exchange a user's token for a downstream one. Unset disables OBO tools only.
+    auth_token_url: str | None = None
+    auth_client_id: str | None = None
+    auth_client_secret: str | None = None
+
+    # --- Internal operations API (passenger data; reached on behalf of the user)
+    ops_api_base_url: str | None = None
+    ops_api_audience: str = "api://flightops-ops"
+
     # --- Reference data ------------------------------------------------------
     airports_db: Path = Field(default=Path("data/airports.sqlite3"))
 

@@ -45,6 +45,7 @@ from .errors import (
     reference_data_missing,
 )
 from .opensky import MAX_HISTORY_S, TIME_RESOLUTION_S, BBox
+from .ops import TIGHT_CONNECTION_MINUTES, DownstreamTokenRejected, normalise_flight, summarise
 from .runtime import Runtime, get_runtime
 from .telemetry import TOOL_CALLS, configure_logging, get_logger
 from .weather import fleet_impact_flags
@@ -65,6 +66,8 @@ ones.
 non-empty, say so instead of concluding that operations are normal.
 5. This server is advisory. It reports observations and flags; it never \
 authorises an operational decision.
+6. `flight_passenger_impact` reads the internal operations API as the signed-in \
+user and returns counts only. Never ask it for, or infer, an individual passenger.
 """
 
 _log = get_logger(__name__)
@@ -498,6 +501,79 @@ async def upstream_status() -> dict[str, Any]:
         "reference_data": {
             "airports_db_present": runtime.airports.exists,
             "path": str(runtime.airports.path),
+        },
+    }
+
+
+@tool
+async def flight_passenger_impact(flight: str) -> dict[str, Any]:
+    """Count who a disrupted flight affects: booked, connecting, needing assistance.
+
+    Reads the internal operations API on behalf of the signed-in user, so it
+    needs a user's token carrying `flightops.passengers.read`; a service
+    principal cannot use it and it is unavailable over stdio. Spends no OpenSky
+    credits. Returns counts only: no names, contact details or booking
+    references leave the server, so do not ask it about an individual.
+
+    Args:
+        flight: Flight designator, e.g. SK1429.
+    """
+    runtime = get_runtime()
+    designator = normalise_flight(flight)
+    inbound = current_access_token()
+    if inbound is None:
+        raise ToolFailure(
+            code="user_token_required",
+            message="Passenger data is only read on behalf of a signed-in user.",
+            hint="Call this tool through the authenticated HTTP server with a user's token. "
+            "It is not available over stdio.",
+        )
+
+    audience = runtime.settings.ops_api_audience
+    scopes = [Scopes.PASSENGERS_READ]
+    token = await runtime.obo.token_for(inbound, audience=audience, scopes=scopes)
+    try:
+        rows = await runtime.ops.manifest(designator, token)
+    except DownstreamTokenRejected:
+        # A cached token the API no longer accepts: exchange again, once. A second
+        # refusal is a real failure, not something to loop on.
+        runtime.obo.invalidate(inbound, audience=audience, scopes=scopes)
+        token = await runtime.obo.token_for(inbound, audience=audience, scopes=scopes)
+        try:
+            rows = await runtime.ops.manifest(designator, token)
+        except DownstreamTokenRejected:
+            raise ToolFailure(
+                code="downstream_auth_failed",
+                message="The internal operations API rejected a freshly exchanged token.",
+                hint="Not retryable by the caller; an operator must check the API's audience "
+                "and issuer configuration.",
+            ) from None
+
+    return {
+        "ok": True,
+        "as_of": _iso_now(runtime.clock),
+        "flight": designator,
+        "passengers": summarise(rows),
+        "definitions": {
+            "tight_connections": f"connecting with under {TIGHT_CONNECTION_MINUTES} minutes",
+        },
+        "unknowns": []
+        if rows
+        else [
+            "No passengers on file for this flight. That can mean a positioning or cargo "
+            "flight, or a manifest that is not loaded yet; it is not evidence that nobody "
+            "is affected."
+        ],
+        "delegation": {
+            "flow": "on-behalf-of (RFC 8693 token exchange)",
+            "acting_for": "the signed-in user",
+            "downstream_audience": audience,
+            "downstream_scope": scopes,
+        },
+        "source": {
+            "name": "Internal operations API",
+            "data_minimisation": "Counts only. Passenger-identifying fields are dropped "
+            "before this payload is built and are never logged.",
         },
     }
 
