@@ -14,9 +14,9 @@ tools themselves.
 ```bash
 uv sync                                                              # install
 uv run python scripts/build_airports_db.py --csv data/airports_seed.csv   # reference data
-uv run pytest                                                        # suite (115 tests, must stay 0 skipped)
+uv run pytest                                                        # suite (157 tests, must stay 0 skipped)
 uv run ruff check . && uv run ruff format --check .                   # lint
-uv run mypy src                                                      # strict types
+uv run mypy src services                                             # strict types
 uv run flightops-mcp                                                 # stdio server
 ```
 
@@ -46,6 +46,7 @@ uv run flightops-mcp                                                 # stdio ser
 | `src/flightops_mcp/opensky.py` | credit ledger, `429` policy, response decoding |
 | `src/flightops_mcp/http.py` | retry/backoff/`Retry-After` plumbing |
 | `src/flightops_mcp/telemetry.py` | redaction pipeline, Prometheus metrics |
+| `services/idp/` | local IdP for tests and compose; a fixture, never deployed. Differences from Entra: `docs/adr/0001` |
 | `ROADMAP.md` | phased plan to `v1.0`; check the current phase before starting work |
 
 ## Style

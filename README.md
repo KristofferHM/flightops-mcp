@@ -115,6 +115,30 @@ The signing algorithm is pinned before any key is fetched, so `alg: none` and HS
 are refused outright. JWKS fetches are single-flight, and refetches triggered by an unknown key id are
 rate-limited so forged ids cannot turn the server into a request amplifier against the issuer.
 
+### A local IdP, so none of this needs a cloud tenant
+
+`services/idp/` is a small authorization server for the test matrix. It signs RS256 tokens with a key
+generated at start-up, publishes it as a JWKS, and its claims follow the Entra shape (`aud`, `scp`,
+`roles`, `tid`).
+
+```bash
+uv run uvicorn --factory services.idp.app:create_app --port 9000
+```
+
+| Endpoint | What it is for |
+|---|---|
+| `POST /token`, `grant_type=client_credentials` | a service principal's token; permissions in `roles` |
+| `POST /token`, `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` | RFC 8693 on-behalf-of: a user's token in, a narrower token for one downstream API out |
+| `POST /revoke` | RFC 7009; a revoked token can no longer be exchanged |
+| `POST /dev/user-token` | mints a delegated user token without a browser; `expires_in: -60` gives an already-expired one |
+| `POST /dev/expire` | treats a token as expired from now on |
+| `GET /.well-known/jwks.json`, `/.well-known/openid-configuration` | keys and discovery |
+
+Exchange can narrow a token and cannot widen it: a scope is issued only if the user's token carries it
+and the target API accepts it, the exchanged token never outlives its subject, and a client can only
+exchange tokens that were issued to it. It is a test fixture, not an identity provider, and
+[ADR 0001](docs/adr/0001-local-idp-modelled-on-entra.md) lists every place it differs from Entra.
+
 ## The tools
 
 | Tool | Upstream | Credentials | Cost |

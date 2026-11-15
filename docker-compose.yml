@@ -1,9 +1,51 @@
 name: flightops-mcp
 
-# Local stack: the server in Streamable HTTP mode.
+# Local stack: the server in Streamable HTTP mode, plus the identity provider
+# it trusts. No cloud tenant and no external account are involved.
+#
+# Client secrets are not in this file. Generate them once into .env, which is
+# never committed:
+#
+#   echo "DEV_AGENT_CLIENT_SECRET=$(openssl rand -hex 24)" >> .env
+#
 # Container verification runs in CI; this file is what you would run on a host
 # that has Docker installed.
 services:
+  # A test fixture, not an identity provider: /dev/user-token mints a token for
+  # any user without a sign-in. Published on localhost only.
+  idp:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+    command: ["services.idp.app:create_app", "--port", "9000"]
+    ports:
+      - "127.0.0.1:9000:9000"
+    environment:
+      # The name the server resolves inside the compose network. Tokens carry
+      # it as `iss`, so it must match FLIGHTOPS_AUTH_ISSUER below exactly.
+      IDP_ISSUER: http://idp:9000
+      IDP_CLIENTS: >-
+        [{"client_id": "flightops-agent",
+          "client_secret": "${DEV_AGENT_CLIENT_SECRET:?generate one into .env, see the top of this file}",
+          "app_roles": {"http://localhost:8000/mcp": [
+            "flightops.reference.read", "flightops.weather.read",
+            "flightops.traffic.read", "flightops.status.read"]}}]
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:9000/.well-known/jwks.json', timeout=3)"
+      interval: 5s
+      timeout: 4s
+      retries: 10
+    restart: unless-stopped
+
   server:
     build:
       context: .
@@ -11,16 +53,21 @@ services:
     command: ["--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
+    depends_on:
+      idp:
+        condition: service_healthy
     environment:
       FLIGHTOPS_LOG_LEVEL: INFO
       FLIGHTOPS_OPENSKY_CLIENT_ID: ${FLIGHTOPS_OPENSKY_CLIENT_ID:-}
       FLIGHTOPS_OPENSKY_CLIENT_SECRET: ${FLIGHTOPS_OPENSKY_CLIENT_SECRET:-}
       FLIGHTOPS_CREDIT_BUDGET_PER_HOUR: ${FLIGHTOPS_CREDIT_BUDGET_PER_HOUR:-400}
       # The HTTP transport refuses to start without an issuer: there is no
-      # unauthenticated remote mode.
-      FLIGHTOPS_AUTH_ISSUER: ${FLIGHTOPS_AUTH_ISSUER:?set the token issuer URL}
-      FLIGHTOPS_AUTH_JWKS_URL: ${FLIGHTOPS_AUTH_JWKS_URL:?set the issuer JWKS URL}
-      FLIGHTOPS_RESOURCE_SERVER_URL: ${FLIGHTOPS_RESOURCE_SERVER_URL:-http://localhost:8000/mcp}
+      # unauthenticated remote mode. This stack trusts the local IdP above.
+      FLIGHTOPS_AUTH_ISSUER: http://idp:9000
+      FLIGHTOPS_AUTH_JWKS_URL: http://idp:9000/.well-known/jwks.json
+      # The URL clients use to reach the server, which is also the audience
+      # tokens are issued for. Not the bind address.
+      FLIGHTOPS_RESOURCE_SERVER_URL: http://localhost:8000/mcp
     # Secrets are passed by reference from the host environment or a .env file
     # that is never committed; nothing is baked into the image.
     read_only: true
