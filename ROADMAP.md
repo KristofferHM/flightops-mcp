@@ -79,11 +79,20 @@ is being a correct OAuth 2.1 **resource server** while calling a downstream API 
 
 ### Acceptance criteria (all automated)
 
-- [ ] `401` for absent/expired/wrong-`aud` tokens; `403` + scope challenge for insufficient scope
-- [ ] Token exchange narrows scope and cannot widen it (test asserts escalation fails)
-- [ ] Passthrough attempt is rejected, with the reason logged
-- [ ] 50 concurrent authenticated calls produce exactly one exchange per identity
+- [x] `401` for absent/expired/wrong-`aud` tokens; `403` + scope challenge for insufficient scope
+      (live, local processes: 401 ×4 incl. other issuer, 403 with `scope="flightops.weather.read"`;
+      `docs/LOCAL-MATRIX.md` lines 1-6)
+- [x] Token exchange narrows scope and cannot widen it (test asserts escalation fails)
+      (live: `scp` narrowed to `flightops.passengers.read`; three escalation attempts all `400`, none issued;
+      lines 7-8)
+- [x] Passthrough attempt is rejected, with the reason logged
+      (live: wrong-audience and replayed exchanged tokens `401` with `wrong_audience` logged; the outbound
+      guard itself is pytest-only, see "What this does not prove"; line 9)
+- [x] 50 concurrent authenticated calls produce exactly one exchange per identity
+      (live: counted in the IdP's access log, 1 `POST /token` for 50 answered calls; line 10)
 - [ ] The whole matrix runs in `docker compose up` with no external account
+      **unverified on this host (no Docker)**: `docker: command not found`, so no image was built and
+      compose was never run. The same three services were proven as local processes instead.
 
 ### Risks
 
