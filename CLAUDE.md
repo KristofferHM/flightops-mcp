@@ -14,7 +14,7 @@ tools themselves.
 ```bash
 uv sync                                                              # install
 uv run python scripts/build_airports_db.py --csv data/airports_seed.csv   # reference data
-uv run pytest                                                        # suite (73 tests, must stay 0 skipped)
+uv run pytest                                                        # suite (115 tests, must stay 0 skipped)
 uv run ruff check . && uv run ruff format --check .                   # lint
 uv run mypy src                                                      # strict types
 uv run flightops-mcp                                                 # stdio server
@@ -41,6 +41,7 @@ uv run flightops-mcp                                                 # stdio ser
 | Path | Purpose |
 |---|---|
 | `src/flightops_mcp/server.py` | MCP tools, the `guarded` wrapper, triage logic |
+| `src/flightops_mcp/auth/` | inbound auth: JWKS cache, RS256 verifier; the only code that touches the SDK auth API |
 | `src/flightops_mcp/opensky_token.py` | OAuth2 client credentials, single-flight refresh |
 | `src/flightops_mcp/opensky.py` | credit ledger, `429` policy, response decoding |
 | `src/flightops_mcp/http.py` | retry/backoff/`Retry-After` plumbing |

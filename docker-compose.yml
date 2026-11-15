@@ -16,6 +16,11 @@ services:
       FLIGHTOPS_OPENSKY_CLIENT_ID: ${FLIGHTOPS_OPENSKY_CLIENT_ID:-}
       FLIGHTOPS_OPENSKY_CLIENT_SECRET: ${FLIGHTOPS_OPENSKY_CLIENT_SECRET:-}
       FLIGHTOPS_CREDIT_BUDGET_PER_HOUR: ${FLIGHTOPS_CREDIT_BUDGET_PER_HOUR:-400}
+      # The HTTP transport refuses to start without an issuer: there is no
+      # unauthenticated remote mode.
+      FLIGHTOPS_AUTH_ISSUER: ${FLIGHTOPS_AUTH_ISSUER:?set the token issuer URL}
+      FLIGHTOPS_AUTH_JWKS_URL: ${FLIGHTOPS_AUTH_JWKS_URL:?set the issuer JWKS URL}
+      FLIGHTOPS_RESOURCE_SERVER_URL: ${FLIGHTOPS_RESOURCE_SERVER_URL:-http://localhost:8000/mcp}
     # Secrets are passed by reference from the host environment or a .env file
     # that is never committed; nothing is baked into the image.
     read_only: true

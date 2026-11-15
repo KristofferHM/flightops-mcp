@@ -92,6 +92,29 @@ Then in `claude_desktop_config.json`:
 }
 ```
 
+## Serving it remotely
+
+```bash
+export FLIGHTOPS_AUTH_ISSUER=https://idp.example.com
+export FLIGHTOPS_AUTH_JWKS_URL=https://idp.example.com/.well-known/jwks.json
+export FLIGHTOPS_RESOURCE_SERVER_URL=https://flightops.example.com/mcp   # the public URL
+uv run flightops-mcp --transport streamable-http --host 0.0.0.0 --port 8000
+```
+
+Over HTTP the server is an OAuth 2.1 **resource server**: every request needs a bearer token, an
+RS256 JWT signed by the configured issuer and checked against its JWKS. There is no unauthenticated
+remote mode; without an issuer the process exits instead of serving. Requests are stateless (protocol
+revision 2026-07-28), so there is no session to pin a replica to.
+
+| Request | Answer |
+|---|---|
+| No token, expired token, bad signature, wrong issuer | `401` + `WWW-Authenticate: Bearer ... resource_metadata="..."` |
+| `GET /.well-known/oauth-protected-resource/mcp` | RFC 9728 metadata naming the issuer |
+
+The signing algorithm is pinned before any key is fetched, so `alg: none` and HS256-with-the-public-key
+are refused outright. JWKS fetches are single-flight, and refetches triggered by an unknown key id are
+rate-limited so forged ids cannot turn the server into a request amplifier against the issuer.
+
 ## The tools
 
 | Tool | Upstream | Credentials | Cost |

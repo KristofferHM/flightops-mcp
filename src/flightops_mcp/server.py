@@ -17,13 +17,17 @@ Every tool obeys three rules:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import functools
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final, TypedDict
 
+import httpx
 from mcp.server import MCPServer
 
+from . import __version__
+from .auth import AuthConfigError, AuthSettings, TokenVerifier, build_resource_server_auth
 from .config import Settings
 from .errors import ToolFailure, not_found, reference_data_missing
 from .opensky import MAX_HISTORY_S, TIME_RESOLUTION_S, BBox
@@ -49,13 +53,14 @@ non-empty, say so instead of concluding that operations are normal.
 authorises an operational decision.
 """
 
-mcp: MCPServer = MCPServer(
-    name="flightops-mcp",
-    version="0.1.0",
-    instructions=INSTRUCTIONS,
-)
-
 _log = get_logger(__name__)
+
+ToolFn = Callable[..., Awaitable[dict[str, Any]]]
+
+# Tools register here rather than on a server object, because there are two
+# servers: the unauthenticated stdio one and the authenticated HTTP one. The SDK
+# takes auth settings at construction, so one module-level instance cannot be both.
+_TOOLS: list[ToolFn] = []
 
 
 def guarded(fn: Any) -> Any:
@@ -88,6 +93,13 @@ def guarded(fn: Any) -> Any:
     return wrapper
 
 
+def tool(fn: Any) -> Any:
+    """Guard a tool function and add it to the registry every server is built from."""
+    wrapped: ToolFn = guarded(fn)
+    _TOOLS.append(wrapped)
+    return wrapped
+
+
 def _iso_now(clock: Any) -> str:
     return datetime.fromtimestamp(clock(), tz=UTC).isoformat()
 
@@ -102,8 +114,7 @@ def _require_airport(runtime: Runtime, ident: str) -> dict[str, Any]:
 
 
 # --- Tools -------------------------------------------------------------------
-@mcp.tool()
-@guarded
+@tool
 async def resolve_airport(query: str, limit: int = 5) -> dict[str, Any]:
     """Resolve an airport from an ICAO/IATA code or a name fragment.
 
@@ -145,8 +156,7 @@ async def resolve_airport(query: str, limit: int = 5) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
-@guarded
+@tool
 async def airport_live_traffic(
     airport: str,
     radius_nm: float = 40.0,
@@ -212,8 +222,7 @@ async def airport_live_traffic(
     }
 
 
-@mcp.tool()
-@guarded
+@tool
 async def airport_movements(
     airport: str,
     direction: str = "both",
@@ -289,8 +298,7 @@ async def airport_movements(
     }
 
 
-@mcp.tool()
-@guarded
+@tool
 async def airport_weather(airport: str) -> dict[str, Any]:
     """Return the latest METAR and TAF for an airport, plus impact flags.
 
@@ -330,8 +338,7 @@ async def airport_weather(airport: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
-@guarded
+@tool
 async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, Any]:
     """Assess whether an airport is currently disrupted: weather, traffic, movements.
 
@@ -417,8 +424,7 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
     }
 
 
-@mcp.tool()
-@guarded
+@tool
 async def upstream_status() -> dict[str, Any]:
     """Report upstream health, credit spend and credential state.
 
@@ -482,7 +488,56 @@ def _severity(reasons: list[str], degraded: list[str], has_movements: bool) -> s
     return "low"
 
 
-def main() -> None:
+def create_server(
+    *,
+    auth: AuthSettings | None = None,
+    token_verifier: TokenVerifier | None = None,
+) -> MCPServer:
+    """Build a server with every registered tool, optionally behind bearer auth."""
+    server: MCPServer = MCPServer(
+        name="flightops-mcp",
+        version=__version__,
+        instructions=INSTRUCTIONS,
+        auth=auth,
+        token_verifier=token_verifier,
+    )
+    for fn in _TOOLS:
+        server.add_tool(fn)
+    return server
+
+
+def create_http_server(
+    settings: Settings,
+    *,
+    jwks_transport: httpx.AsyncBaseTransport | None = None,
+    clock: Callable[[], float] = time.time,
+) -> MCPServer:
+    """The remote server: same tools, every request authenticated.
+
+    Raises `AuthConfigError` when the issuer is not configured. There is no flag
+    to serve HTTP without authentication.
+    """
+    resource_server = build_resource_server_auth(
+        settings, jwks_transport=jwks_transport, clock=clock
+    )
+    return create_server(auth=resource_server.settings, token_verifier=resource_server.verifier)
+
+
+class HttpOptions(TypedDict):
+    stateless_http: bool
+    json_response: bool
+
+
+# Stateless: the 2026-07-28 revision carries no session, so any replica can
+# serve any request and there is no session table to protect or expire.
+HTTP_OPTIONS: Final[HttpOptions] = {"stateless_http": True, "json_response": True}
+
+# The stdio server. Local hosts launch it as a subprocess of the user's own
+# session, so the operating system is the trust boundary and there is no token.
+mcp: MCPServer = create_server()
+
+
+def main(argv: Sequence[str] | None = None) -> None:
     """Console entry point: `flightops-mcp [--transport stdio|streamable-http]`."""
     parser = argparse.ArgumentParser(prog="flightops-mcp")
     parser.add_argument(
@@ -490,21 +545,34 @@ def main() -> None:
         default="stdio",
         choices=("stdio", "streamable-http"),
         help=(
-            "stdio for local hosts (Claude Desktop, Inspector); streamable-http to serve remotely."
+            "stdio for local hosts (Claude Desktop, Inspector); streamable-http to serve "
+            "remotely, which requires FLIGHTOPS_AUTH_ISSUER and FLIGHTOPS_AUTH_JWKS_URL."
         ),
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     settings = Settings()
     configure_logging(settings.log_level)
-    _log.info("server_starting", transport=args.transport, version="0.1.0")
 
     if args.transport == "stdio":
+        _log.info("server_starting", transport="stdio", version=__version__)
         mcp.run(transport="stdio")
-    else:  # pragma: no cover - exercised manually, not in CI
-        asyncio.run(mcp.run_streamable_http_async(host=args.host, port=args.port))
+        return
+
+    try:
+        server = create_http_server(settings)
+    except AuthConfigError as exc:
+        parser.error(str(exc))
+    _log.info(
+        "server_starting",
+        transport="streamable-http",
+        version=__version__,
+        issuer=settings.auth_issuer,
+        resource=settings.resource_server_url,
+    )
+    server.run(transport="streamable-http", host=args.host, port=args.port, **HTTP_OPTIONS)
 
 
 if __name__ == "__main__":  # pragma: no cover

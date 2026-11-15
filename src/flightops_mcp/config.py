@@ -31,6 +31,18 @@ class Settings(BaseSettings):
     # --- AviationWeather.gov (no authentication) ----------------------------
     avwx_base_url: str = "https://aviationweather.gov/api/data"
 
+    # --- Inbound authentication (this server as an OAuth 2.1 resource server) -
+    # Both must be set to serve over HTTP; stdio needs neither.
+    auth_issuer: str | None = None
+    auth_jwks_url: str | None = None
+    # The canonical URL clients reach this server at. It is published in the
+    # protected-resource metadata, so it must be the public URL, not a bind address.
+    resource_server_url: str = "http://127.0.0.1:8000/mcp"
+    jwks_cache_ttl_s: float = 3600.0
+    # Floor between JWKS refetches triggered by an unknown key id.
+    jwks_min_refresh_interval_s: float = 30.0
+    auth_clock_skew_s: float = 30.0
+
     # --- Reference data ------------------------------------------------------
     airports_db: Path = Field(default=Path("data/airports.sqlite3"))
 
