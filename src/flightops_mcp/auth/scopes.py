@@ -24,6 +24,14 @@ class Scopes:
     STATUS_READ: Final = "flightops.status.read"
     # Also the scope requested downstream when exchanging the user's token.
     PASSENGERS_READ: Final = "flightops.passengers.read"
+    # The only write. Its own scope, not an extension of a read one: a token that can
+    # count passengers must not thereby be able to move them. Like PASSENGERS_READ it
+    # is also the scope requested downstream, so the exchange can only narrow to it.
+    REBOOKING_WRITE: Final = "flightops.rebooking.write"
+    # Held by the person who approves a rebooking, never required of a caller, so
+    # it has no tool entry below. It is checked on the approval grant instead
+    # (auth/approval.py), and holding it does not let anyone call anything.
+    REBOOKING_APPROVE: Final = "flightops.rebooking.approve"
 
     # One scope per data domain, not per tool: OpenSky traffic and movements are
     # the same upstream, the same credits and the same sensitivity.
@@ -37,6 +45,9 @@ class Scopes:
         "disruption_triage": frozenset({WEATHER_READ, TRAFFIC_READ}),
         "upstream_status": frozenset({STATUS_READ}),
         "flight_passenger_impact": frozenset({PASSENGERS_READ}),
+        # Proposing needs the write scope alone. It reads no manifest itself: the
+        # caller supplies the count it saw, and the ops API refuses if that is stale.
+        "propose_rebooking": frozenset({REBOOKING_WRITE}),
     }
 
     @classmethod

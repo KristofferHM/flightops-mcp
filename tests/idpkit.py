@@ -109,6 +109,7 @@ class LocalIdp:
         audience: str = MCP_AUDIENCE,
         client_id: str = AGENT,
         expires_in: int | None = None,
+        authorization_details: list[dict[str, Any]] | None = None,
     ) -> str:
         body: dict[str, Any] = {
             "sub": sub,
@@ -118,6 +119,8 @@ class LocalIdp:
         }
         if expires_in is not None:
             body["expires_in"] = expires_in
+        if authorization_details is not None:
+            body["authorization_details"] = authorization_details
         async with self.http() as client:
             response = await client.post("/dev/user-token", json=body)
         assert response.status_code == 200, response.text

@@ -216,16 +216,31 @@ class IdentityProvider:
         scope: str,
         client_id: str,
         expires_in: int | None = None,
+        authorization_details: list[dict[str, Any]] | None = None,
     ) -> IssuedToken:
         """A delegated token, standing in for the authorization-code flow.
 
         A real IdP issues this after a user signs in through a browser. The stub
         skips the browser so the matrix can run unattended; a negative
         `expires_in` yields a correctly signed token that is already expired.
+
+        `authorization_details` (RFC 9396) narrows the token to one transaction.
+        It is how an approval grant names the proposal a person approved: the
+        consent screen a real IdP would show is the proposal, and this claim is
+        the record of what was on it.
         """
         self.issued["user_token"] += 1
+        claims: dict[str, Any] = {
+            "aud": audience,
+            "sub": sub,
+            "oid": sub,
+            "azp": client_id,
+            "scp": scope,
+        }
+        if authorization_details is not None:
+            claims["authorization_details"] = authorization_details
         return self._issue(
-            {"aud": audience, "sub": sub, "oid": sub, "azp": client_id, "scp": scope},
+            claims,
             ttl_s=self.config.access_token_ttl_s if expires_in is None else expires_in,
             scope=scope,
         )
