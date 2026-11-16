@@ -195,9 +195,32 @@ portfolio piece and an engineering claim.
 5. **Security pass**: `pip-audit`, image scan in CI, dependency pinning reviewed, secrets audit of the
    git history (`git log -p | grep -i token` as a sanity check).
 
+## Phase 4b — Quality gates: mutation, coverage ratchet, properties (1 week)
+
+Runs after Phase 4, because these gates **measure the suite** — there has to be an eval harness and a test
+suite worth measuring before you ask whether they would catch a bug. Before `v1.0`, not after it.
+
+1. **Coverage ratchet.** `--cov --cov-branch --cov-fail-under=N` in CI, `N` set to today's branch coverage
+   rounded down, raised in the same commit as any new test. A floor that only goes up; never raised by adding
+   exclusions.
+2. **Property tests over the arithmetic.** `hypothesis` on `auth/scopes.py` (scope parsing, subset rules),
+   the credit ledger, `429`/`Retry-After` arithmetic, and the airport reference loader's CSV parsing.
+   `max_examples` raised in a CI profile.
+3. **Mutation testing on the money paths.** `auth/` and the credit ledger — the code where a wrong answer is a
+   security answer. A ceiling on surviving mutants, the report committed. Read the survivors: each one is
+   either a missing test or an assertion that can never fail, and the second kind is the interesting one.
+4. **Secret and dependency scanning**, which `CLAUDE.md` rule 5 already promises: `gitleaks` over the working
+   tree *and* the history, `pip-audit` in CI. The repository is public; this is overdue rather than optional.
+
+Run mutation testing in CI on Linux — it is slow and file-locking makes it flaky on a developer's Windows
+machine. Gate it to those modules; a full-repo run is an hour nobody looks at.
+
 ### `v1.0` Definition of Done
 
 - [ ] All five phases' acceptance criteria green in CI
+- [ ] Coverage ratchet enforced with `fail_under`, branch coverage, no new exclusions
+- [ ] Mutation ceiling met on `auth/` and the credit ledger, report committed
+- [ ] `gitleaks` and `pip-audit` green in CI
 - [ ] Eval table in the README with a date and a model name
 - [ ] `docker compose up` gives a working stack with no external account
 - [ ] Runbook, ADRs, changelog present
