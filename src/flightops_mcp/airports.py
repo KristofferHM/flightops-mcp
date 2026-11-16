@@ -134,6 +134,22 @@ class AirportDB:
     def exists(self) -> bool:
         return self.path.is_file()
 
+    def healthy(self) -> bool:
+        """Readiness probe: the file opens, the table queries and holds rows.
+
+        An empty database is not ready: every tool that needs coordinates would
+        fail, so reporting ready would send traffic to an instance that cannot
+        serve it.
+        """
+        if not self.path.is_file():
+            return False
+        try:
+            with self._connect() as connection:
+                row = connection.execute("SELECT count(*) FROM airports").fetchone()
+        except sqlite3.Error:
+            return False
+        return bool(row) and int(row[0]) > 0
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(f"file:{self.path.as_posix()}?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row

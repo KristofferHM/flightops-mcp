@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import email.utils
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import cast
 
 import httpx
+from opentelemetry.trace import SpanKind
 
 from .auth.passthrough import refuse_inbound_token
 from .config import Settings
+from .otel import inject_trace_headers, tracer
+from .resilience import breakers
 from .telemetry import UPSTREAM_LATENCY, UPSTREAM_REQUESTS, get_logger
 
 SleepFn = Callable[[float], Awaitable[None]]
@@ -82,11 +86,13 @@ class UpstreamHttp:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: SleepFn = asyncio.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
         self._upstream = upstream
         self._base_url = base_url.rstrip("/")
         self._sleep = sleep
+        self._breaker = breakers().get(upstream, clock=clock)
         self._log = get_logger(__name__).bind(upstream=upstream)
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
@@ -122,19 +128,37 @@ class UpstreamHttp:
         last_detail = "no attempt made"
         while attempt <= self._settings.max_retries:
             attempt += 1
+            # An open circuit refuses before the socket: a dead provider then costs
+            # microseconds instead of the whole retry budget spent in sleeps.
+            self._breaker.before_call()
+            request_headers = inject_trace_headers(dict(headers or {}))
             try:
-                with UPSTREAM_LATENCY.labels(upstream=self._upstream).time():
+                with (
+                    UPSTREAM_LATENCY.labels(upstream=self._upstream).time(),
+                    tracer().start_as_current_span(
+                        f"HTTP {method}",
+                        kind=SpanKind.CLIENT,
+                        attributes={
+                            "http.request.method": method,
+                            "url.path": path,
+                            "upstream.name": self._upstream,
+                            "http.attempt": attempt,
+                        },
+                    ) as span,
+                ):
                     response = await self._client.request(
                         method,
                         path,
                         params=params,  # type: ignore[arg-type]
-                        headers=headers,
+                        headers=request_headers,
                         data=data,
                     )
+                    span.set_attribute("http.response.status_code", response.status_code)
             except httpx.HTTPError as exc:
                 last_detail = f"{type(exc).__name__}: {exc}"
                 self._log.warning("upstream_transport_error", attempt=attempt, detail=last_detail)
                 UPSTREAM_REQUESTS.labels(upstream=self._upstream, status="transport_error").inc()
+                self._breaker.record_failure()
                 if attempt > self._settings.max_retries:
                     raise
                 await self._sleep(self._backoff(attempt))
@@ -145,6 +169,8 @@ class UpstreamHttp:
             ).inc()
 
             if response.status_code in allow_status:
+                # 204 from NOAA is a healthy answer: the upstream is alive.
+                self._breaker.record_success()
                 return HttpResponse(
                     status_code=response.status_code,
                     json_body=None,
@@ -152,6 +178,7 @@ class UpstreamHttp:
                 )
 
             if response.status_code < 400:
+                self._breaker.record_success()
                 body: object | None
                 if not response.content:
                     body = None
@@ -167,7 +194,9 @@ class UpstreamHttp:
                 )
 
             if response.status_code not in RETRYABLE_STATUS:
-                # Client errors that are not throttling are not worth retrying.
+                # Client errors that are not throttling are not worth retrying, and
+                # they prove the upstream is answering, so the circuit stays closed.
+                self._breaker.record_success()
                 return HttpResponse(
                     status_code=response.status_code,
                     json_body=_safe_json(response),
@@ -183,13 +212,15 @@ class UpstreamHttp:
                 credits_remaining=credits_remaining(response),
             )
             if response.status_code == 429:
-                # 429 is a contract, not noise: hand it back to the caller so it
-                # can decide between waiting and surfacing a tool error.
+                # 429 is a contract, not a fault: it is deliberately neutral for the
+                # breaker, because opening the circuit on throttling would hide the
+                # retry-after information the caller needs.
                 return HttpResponse(
                     status_code=response.status_code,
                     json_body=_safe_json(response),
                     headers=dict(response.headers),
                 )
+            self._breaker.record_failure()
             if attempt > self._settings.max_retries:
                 return HttpResponse(
                     status_code=response.status_code,

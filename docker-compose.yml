@@ -115,6 +115,15 @@ services:
       FLIGHTOPS_AUTH_CLIENT_SECRET: ${DEV_MCP_CLIENT_SECRET:?generate one into .env, see the top of this file}
       FLIGHTOPS_OPS_API_BASE_URL: http://ops-api:9100
       FLIGHTOPS_OPS_API_AUDIENCE: api://flightops-ops
+      # Observability. OTLP goes to the Jaeger collector below; the trace context
+      # arrives from the client's `_meta` and is re-injected on every upstream call.
+      # The exporter is overridable so a run without the observability profile does
+      # not try to reach a collector that is not there.
+      FLIGHTOPS_OTEL_EXPORTER: ${FLIGHTOPS_OTEL_EXPORTER:-otlp}
+      FLIGHTOPS_OTEL_ENDPOINT: ${FLIGHTOPS_OTEL_ENDPOINT:-http://jaeger:4318/v1/traces}
+      FLIGHTOPS_OTEL_ENVIRONMENT: compose
+      FLIGHTOPS_BREAKER_FAILURE_THRESHOLD: ${FLIGHTOPS_BREAKER_FAILURE_THRESHOLD:-5}
+      FLIGHTOPS_BREAKER_RECOVERY_TIMEOUT_S: ${FLIGHTOPS_BREAKER_RECOVERY_TIMEOUT_S:-30}
     # Secrets are passed by reference from the host environment or a .env file
     # that is never committed; nothing is baked into the image.
     read_only: true
@@ -122,4 +131,64 @@ services:
       - /tmp
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      # /healthz is liveness only: it never touches an upstream, so a NOAA outage
+      # cannot mark the container unhealthy.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+      interval: 10s
+      timeout: 4s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # --- observability ---------------------------------------------------------
+  # Behind the `observability` profile, so `docker compose up` (and the CI matrix,
+  # which uses the same file) starts only the services the acceptance criteria are
+  # about. Turn it on with:
+  #
+  #   docker compose --profile observability up -d
+  #
+  # These images are pulled, not built here. Pin the tags deliberately; override
+  # with JAEGER_TAG / PROMETHEUS_TAG / GRAFANA_TAG.
+  jaeger:
+    profiles: ["observability"]
+    image: jaegertracing/all-in-one:${JAEGER_TAG:-1.62}
+    ports:
+      - "127.0.0.1:16686:16686" # UI
+      - "127.0.0.1:4318:4318" # OTLP HTTP receiver
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:${PROMETHEUS_TAG:-v3.0.1}
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:${GRAFANA_TAG:-11.3.0}
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
     restart: unless-stopped

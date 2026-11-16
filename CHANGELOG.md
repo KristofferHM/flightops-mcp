@@ -5,11 +5,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-16
+
+Phase 2 of [ROADMAP.md](ROADMAP.md): the server becomes something an operator can run.
+
 ### Added
-- OpenTelemetry traces across the tool boundary, with the client's `traceparent` read from the request
-  `_meta` as the 2026-07-28 revision specifies, and re-injected on every upstream request.
-- `/healthz`, `/readyz` and `/metrics` on the HTTP transport, registered with `custom_route`.
-- A circuit breaker per upstream, so a dead provider fails fast instead of spending the retry budget.
+- OpenTelemetry tracing with the client's `traceparent` read from the request `_meta` (the stateless
+  2026-07-28 way) and re-injected on every upstream request. Exporters: `none`, `console`, `otlp`,
+  `memory`. One triage call is one trace with the nested lookups visible.
+- A span per tool body (`tool.<name>`) carrying `mcp.tool.outcome` and `mcp.tool.ok`, so a failure the
+  model treats as data is still visible as an error to an operator.
+- `/healthz`, `/readyz` and `/metrics` on the HTTP transport. Readiness checks local capability only and
+  reports breaker state informationally: a provider outage must not empty the load balancer.
+- A circuit breaker per upstream, with a half-open probe and `retry_after_s` on the refusal. `429` and
+  4xx are deliberately neutral for it: throttling is a contract, not evidence of a broken provider.
+- `docs/runbook.md`: alert suggestions, a playbook per failure code, secret rotation, trace reading.
+- `observability/`: Prometheus scrape config and a provisioned Grafana dashboard, wired to a compose
+  `observability` profile with Jaeger, Prometheus and Grafana.
+
+### Changed
+- `upstream_status` now reports breaker snapshots, tracing kind and whether the reference database is
+  actually ready, not merely present.
+- `docker-compose.yml` gives the server a healthcheck on `/healthz`; the CI override pins
+  `FLIGHTOPS_OTEL_EXPORTER=none` because the matrix runs without a collector.
+
+### Fixed
+- `/metrics` exported the default Prometheus registry, so only Python runtime collectors appeared. It now
+  scrapes the project's own registry.
+- Registering an OTel request-span middleware duplicated every server span: `MCPServer` already installs
+  one by default. Removed, with a regression test on the span count.
 
 ## [0.2.0] - 2026-11-15
 

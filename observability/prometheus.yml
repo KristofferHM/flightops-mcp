@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: flightops-mcp
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["server:8000"]
+        labels:
+          service: flightops-mcp
+          environment: compose

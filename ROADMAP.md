@@ -26,29 +26,32 @@ airport operations data, and refuses to answer when its evidence is thin.
 | A data warehouse of flight history | OpenSky's own Trino interface serves that better |
 | Multi-tenant SaaS billing | Out of scope until there is a user base to bill |
 
-## 2. Where it stands today (`v0.1.0`, shipped)
+## 2. Where it stands today (`v0.3.0`, shipped)
 
 | Fact | Evidence |
 |---|---|
 | 6 typed MCP tools, revision 2026-07-28 | `tests/test_server_tools.py::test_all_tools_are_published_with_schemas` |
 | OAuth2 client credentials, single-flight refresh | `test_fifty_concurrent_callers_make_exactly_one_token_request` |
-| `429` contract honoured, not absorbed | `test_short_rate_limit_wait_is_honoured_then_retried`, `test_long_rate_limit_wait_becomes_a_tool_error_not_a_blocked_call` |
+| OAuth 2.1 resource server: JWKS, scopes, no passthrough, OBO | Phase 1 matrix, **12/12**, locally and in `docker compose` |
+| `429` contract honoured, not absorbed | `test_long_rate_limit_wait_becomes_a_tool_error_not_a_blocked_call` |
 | Local credit ledger | `test_local_credit_budget_stops_a_runaway_loop` |
-| PII/secret redaction, canary-tested | `tests/test_redaction.py` (5 tests) |
-| 73 tests, 0 skipped; ruff + mypy strict clean | CI |
+| PII/secret redaction, canary-tested | `tests/test_redaction.py` |
+| One trace per request, client `traceparent` parenting | `tests/test_otel.py::test_one_triage_call_is_one_trace_with_nested_spans` |
+| Circuit breaker, fail fast | `test_the_circuit_fails_fast_rather_than_sleeping` |
+| Liveness, readiness, metrics endpoints | `tests/test_health.py` |
+| **300 tests, 0 skipped**; ruff + mypy strict clean | CI |
 
-**What it is not yet:** remotely deployable with authentication, observable beyond metrics counters, or
-proven against an evaluation set. Those are the next five phases.
+**What it is not yet:** an agent loop, an evaluation set, or a write path. Those are Phases 3–5.
 
 ## 3. Release plan
 
-| Version | Theme | The single question it answers | Est. |
-|---|---|---|---|
-| `v0.2.0` | Auth-hardened remote server | "Can this run as a service without leaking credentials?" | 2 weeks |
-| `v0.3.0` | Observability and operations | "Can an SRE run and debug it?" | 1.5 weeks |
-| `v0.4.0` | Agent loop with a human approval gate | "Can an agent use it, and stop when it should?" | 2 weeks |
-| `v0.5.0` | Evaluation harness | "Is it actually good, measurably?" | 1.5 weeks |
-| `v1.0.0` | Product hardening + docs | "Would I deploy this for a real operator?" | 1 week |
+| Version | Theme | The single question it answers | Est. | State |
+|---|---|---|---|---|
+| `v0.2.0` | Auth-hardened remote server | "Can this run as a service without leaking credentials?" | 2 weeks | **shipped** |
+| `v0.3.0` | Observability and operations | "Can an SRE run and debug it?" | 1.5 weeks | **shipped** |
+| `v0.4.0` | Agent loop with a human approval gate | "Can an agent use it, and stop when it should?" | 2 weeks | next |
+| `v0.5.0` | Evaluation harness | "Is it actually good, measurably?" | 1.5 weeks | |
+| `v1.0.0` | Product hardening + docs | "Would I deploy this for a real operator?" | 1 week | |
 
 Total to `v1.0`: **~8 weeks** at 8-10 h/week, with the `v0.5` evidence gate being the one that must not
 be skipped.
