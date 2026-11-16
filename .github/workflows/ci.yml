@@ -26,7 +26,7 @@ jobs:
       - name: Ruff (format)
         run: uv run ruff format --check .
       - name: Mypy (strict)
-        run: uv run mypy src services
+        run: uv run mypy src services agent
 
   tests:
     name: tests (py${{ matrix.python }})
@@ -59,6 +59,79 @@ jobs:
           fi
         env:
           UV_PYTHON: ${{ matrix.python }}
+
+  # Phase 3's acceptance criteria, made mechanical. The offline backend has no model and no
+  # network, but everything after the plan is real: tool dispatch over MCP, the token exchange,
+  # the approval gate and the transcript. Each run is its own process with its own signing key,
+  # so equal bytes here mean the transcript depends on the scenario and on nothing else.
+  agent-offline:
+    name: agent offline determinism (phase 3 acceptance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Run one scenario twice, then three different ones
+        run: |
+          set -euo pipefail
+          mkdir -p runs
+          run() { uv run python -m agent run --scenario "$1" --backend offline --out "runs/$2.json" > "runs/$2.summary"; }
+          run rebook-approved   approved-1
+          run rebook-approved   approved-2
+          run rebook-declined   declined
+          run rebook-unanswered unanswered
+          run rebook-replayed   replayed
+
+      - name: Same scenario, same bytes; a different scenario, a different hash
+        run: |
+          set -euo pipefail
+          first="$(uv run python -m agent hash runs/approved-1.json)"
+          second="$(uv run python -m agent hash runs/approved-2.json)"
+          other="$(uv run python -m agent hash runs/declined.json)"
+          echo "rebook-approved, run 1: $first"
+          echo "rebook-approved, run 2: $second"
+          echo "rebook-declined:        $other"
+          cmp runs/approved-1.json runs/approved-2.json
+          test "$first" = "$second"
+          # The check above cannot fail if the hash ignores the run. This one can.
+          test "$first" != "$other"
+          {
+            echo '### Offline agent runs'
+            echo '| scenario | content hash |'
+            echo '|---|---|'
+            echo "| rebook-approved (run 1) | \`$first\` |"
+            echo "| rebook-approved (run 2) | \`$second\` |"
+            echo "| rebook-declined | \`$other\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: No approval, no write; a repeat is one write
+        # Counted by the mock operations API (`ops_api` in the summary), not by the client.
+        run: |
+          set -euo pipefail
+          count() { jq -c '.ops_api' "runs/$1.summary"; }
+          echo "approved:   $(count approved-1)"
+          echo "declined:   $(count declined)"
+          echo "unanswered: $(count unanswered)"
+          echo "replayed:   $(count replayed)"
+          jq -e '.ops_api == {"rebooking_requests": 1, "rebookings_written": 1}' runs/approved-1.summary > /dev/null
+          jq -e '.ops_api == {"rebooking_requests": 0, "rebookings_written": 0}' runs/declined.summary > /dev/null
+          jq -e '.ops_api == {"rebooking_requests": 0, "rebookings_written": 0}' runs/unanswered.summary > /dev/null
+          jq -e '.tools_called[-1] == "propose_rebooking"' runs/unanswered.summary > /dev/null
+          jq -e '.ops_api == {"rebooking_requests": 2, "rebookings_written": 1}' runs/replayed.summary > /dev/null
+
+      - name: Keep the transcripts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-offline-transcripts
+          path: runs/
+          if-no-files-found: error
 
   contract:
     name: live upstream contract (advisory)

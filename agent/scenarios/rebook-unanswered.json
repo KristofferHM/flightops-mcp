@@ -1,0 +1,36 @@
+{
+  "id": "rebook-unanswered",
+  "question": "SK1429 on 2026-11-16 is running late inbound. Move the passengers with tight connections to SK1431.",
+  "user": {
+    "sub": "dispatcher-3",
+    "scopes": [
+      "flightops.reference.read",
+      "flightops.weather.read",
+      "flightops.passengers.read",
+      "flightops.rebooking.write"
+    ]
+  },
+  "approval": {
+    "action": "unanswered",
+    "approver": "duty-manager-7"
+  },
+  "clock": {
+    "start": "2026-11-16T09:00:00+00:00"
+  },
+  "budget": {
+    "turns": 6,
+    "tool_calls": 6,
+    "model_tokens": 60000,
+    "upstream_credits": 20
+  },
+  "offline": {
+    "policy": "rebook_cohort",
+    "params": {
+      "from_flight": "SK1429",
+      "flight_date": "2026-11-16",
+      "to_flight": "SK1431",
+      "cohort": "tight_connections",
+      "reason_code": "late_inbound"
+    }
+  }
+}

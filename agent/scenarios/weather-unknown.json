@@ -1,0 +1,28 @@
+{
+  "id": "weather-unknown",
+  "question": "What are conditions at Gothenburg Landvetter right now?",
+  "user": {
+    "sub": "dispatcher-3",
+    "scopes": [
+      "flightops.reference.read",
+      "flightops.weather.read",
+      "flightops.passengers.read"
+    ]
+  },
+  "approval": null,
+  "clock": {
+    "start": "2026-11-16T09:00:00+00:00"
+  },
+  "budget": {
+    "turns": 6,
+    "tool_calls": 6,
+    "model_tokens": 60000,
+    "upstream_credits": 20
+  },
+  "offline": {
+    "policy": "airport_brief",
+    "params": {
+      "airport": "ESGG"
+    }
+  }
+}
