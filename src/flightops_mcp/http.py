@@ -116,6 +116,7 @@ class UpstreamHttp:
         params: dict[str, object] | None = None,
         headers: dict[str, str] | None = None,
         data: dict[str, str] | None = None,
+        json_body: object | None = None,
         allow_status: frozenset[int] = frozenset(),
     ) -> HttpResponse:
         """Issue a request, retrying transient failures with jittered backoff.
@@ -152,6 +153,7 @@ class UpstreamHttp:
                         params=params,  # type: ignore[arg-type]
                         headers=request_headers,
                         data=data,
+                        json=json_body,
                     )
                     span.set_attribute("http.response.status_code", response.status_code)
             except httpx.HTTPError as exc:

@@ -70,6 +70,8 @@ _SECRET_KEYS = frozenset(
         "id_token",
         "token",
         "subject_token",
+        "approval_token",
+        "request_state",
         "assertion",
         "authorization",
         "auth",
@@ -119,6 +121,11 @@ def _redact_keyed(key: Any, value: Any) -> Any:
     lowered = str(key).lower()
     if lowered in _SECRET_KEYS or lowered in _PII_KEYS:
         return _REDACTED
+    return _redact_value(value)
+
+
+def redact(value: Any) -> Any:
+    """The log redaction, for anything else that is written down (agent transcripts)."""
     return _redact_value(value)
 
 

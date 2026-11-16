@@ -54,6 +54,21 @@ def test_api_secrets_are_removed_from_nested_structures() -> None:
     assert '"keep": 1' in rendered
 
 
+def test_an_approval_grant_and_request_state_are_removed_by_key() -> None:
+    """The two new things a write passes around. Neither belongs in a log line."""
+    event = {
+        "event": "rebooking_commit",
+        "approval_token": CANARY_TOKEN,
+        "request_state": CANARY_TOKEN,
+        "input_responses": {"approval": {"content": {"approval_token": CANARY_TOKEN}}},
+        "approved_by": "duty-manager-7",
+    }
+    cleaned = redaction_processor(None, "info", dict(event))
+
+    assert "CANARY" not in json.dumps(cleaned)
+    assert cleaned["approved_by"] == "duty-manager-7", "who approved is the audit record"
+
+
 def test_emitted_log_lines_are_clean() -> None:
     """Attach a handler, log a record full of secrets, and read what shipped."""
     stream = io.StringIO()

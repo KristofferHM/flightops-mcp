@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
@@ -25,6 +26,16 @@ from typing import Any, Final, TypedDict
 
 import httpx
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+from mcp.server.request_state import RequestStateSecurity
+from mcp.types import (
+    ClientCapabilities,
+    ElicitRequest,
+    ElicitRequestFormParams,
+    ElicitResult,
+    InputRequiredResult,
+)
+from mcp_types.version import is_version_at_least
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.requests import Request
@@ -32,6 +43,7 @@ from starlette.responses import JSONResponse, Response
 
 from . import __version__
 from .auth import (
+    AccessToken,
     AuthConfigError,
     AuthSettings,
     ScopeChallengingServer,
@@ -39,6 +51,12 @@ from .auth import (
     TokenVerifier,
     build_resource_server_auth,
     current_access_token,
+)
+from .auth.approval import (
+    APPROVAL_DETAIL_TYPE,
+    approval_declined,
+    approval_invalid,
+    approval_required,
 )
 from .config import Settings
 from .errors import (
@@ -51,6 +69,7 @@ from .errors import (
 from .opensky import MAX_HISTORY_S, TIME_RESOLUTION_S, BBox
 from .ops import TIGHT_CONNECTION_MINUTES, DownstreamTokenRejected, normalise_flight, summarise
 from .otel import configure_tracing, tracer, tracing_kind
+from .rebooking import Proposal, approved_digest, build_proposal
 from .resilience import breakers, configure_breakers
 from .runtime import Runtime, get_runtime
 from .telemetry import REGISTRY as METRICS_REGISTRY
@@ -75,11 +94,23 @@ non-empty, say so instead of concluding that operations are normal.
 authorises an operational decision.
 6. `flight_passenger_impact` reads the internal operations API as the signed-in \
 user and returns counts only. Never ask it for, or infer, an individual passenger.
+7. `propose_rebooking` is the only tool that changes anything, and it cannot \
+complete on your say-so. It answers with a request for a human approval; a person \
+other than the user you act for must approve the exact proposal. If the approval \
+is refused, missing or declined, report that and stop. Never try to supply, guess \
+or work around an approval.
 """
 
 _log = get_logger(__name__)
 
-ToolFn = Callable[..., Awaitable[dict[str, Any]]]
+# A tool answers with a payload, or with the protocol's request for more input.
+ToolResult = dict[str, Any] | InputRequiredResult
+ToolFn = Callable[..., Awaitable[ToolResult]]
+
+# The first revision that can answer `tools/call` with `input_required`.
+MRTR_REVISION: Final = "2026-07-28"
+# The key of the one question `propose_rebooking` asks, and of its answer.
+APPROVAL_REQUEST: Final = "approval"
 
 # Tools register here rather than on a server object, because there are two
 # servers: the unauthenticated stdio one and the authenticated HTTP one. The SDK
@@ -96,7 +127,7 @@ def guarded(fn: Any) -> Any:
     """
 
     @functools.wraps(fn)
-    async def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def wrapper(*args: Any, **kwargs: Any) -> ToolResult:
         # One span per tool body, parented to whatever the transport made current:
         # the request middleware span on an inbound call, or the composite tool's
         # span when one tool calls another. That is what makes a triage show its
@@ -107,7 +138,7 @@ def guarded(fn: Any) -> Any:
             attributes={"mcp.tool.name": fn.__name__},
         ) as span:
             try:
-                result: dict[str, Any] = await fn(*args, **kwargs)
+                result: ToolResult = await fn(*args, **kwargs)
             except ToolFailure as exc:
                 TOOL_CALLS.labels(tool=fn.__name__, outcome=exc.code).inc()
                 _log.info("tool_failure", tool=fn.__name__, code=exc.code)
@@ -130,6 +161,11 @@ def guarded(fn: Any) -> Any:
                         "Report this rather than retrying blindly; the server log holds the detail."
                     ),
                 ).to_payload()
+            if isinstance(result, InputRequiredResult):
+                # Neither success nor failure: the tool stopped to ask, and did nothing.
+                TOOL_CALLS.labels(tool=fn.__name__, outcome="input_required").inc()
+                span.set_attribute("mcp.tool.outcome", "input_required")
+                return result
             TOOL_CALLS.labels(tool=fn.__name__, outcome="ok").inc()
             span.set_attribute("mcp.tool.outcome", "ok")
             span.set_attribute("mcp.tool.ok", bool(result.get("ok", True)))
@@ -161,7 +197,7 @@ def scoped(fn: ToolFn) -> ToolFn:
     name: str = fn.__name__
 
     @functools.wraps(fn)
-    async def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def wrapper(*args: Any, **kwargs: Any) -> ToolResult:
         token = current_access_token()
         if token is None:
             failure = authentication_required(name)
@@ -562,23 +598,9 @@ async def flight_passenger_impact(flight: str) -> dict[str, Any]:
 
     audience = runtime.settings.ops_api_audience
     scopes = [Scopes.PASSENGERS_READ]
-    token = await runtime.obo.token_for(inbound, audience=audience, scopes=scopes)
-    try:
-        rows = await runtime.ops.manifest(designator, token)
-    except DownstreamTokenRejected:
-        # A cached token the API no longer accepts: exchange again, once. A second
-        # refusal is a real failure, not something to loop on.
-        runtime.obo.invalidate(inbound, audience=audience, scopes=scopes)
-        token = await runtime.obo.token_for(inbound, audience=audience, scopes=scopes)
-        try:
-            rows = await runtime.ops.manifest(designator, token)
-        except DownstreamTokenRejected:
-            raise ToolFailure(
-                code="downstream_auth_failed",
-                message="The internal operations API rejected a freshly exchanged token.",
-                hint="Not retryable by the caller; an operator must check the API's audience "
-                "and issuer configuration.",
-            ) from None
+    rows: list[dict[str, Any]] = await _on_behalf_of(
+        runtime, inbound, scopes, lambda token: runtime.ops.manifest(designator, token)
+    )
 
     return {
         "ok": True,
@@ -607,6 +629,272 @@ async def flight_passenger_impact(flight: str) -> dict[str, Any]:
             "before this payload is built and are never logged.",
         },
     }
+
+
+@tool
+async def propose_rebooking(
+    *,
+    from_flight: str,
+    flight_date: str,
+    to_flight: str,
+    cohort: str,
+    reason_code: str,
+    passenger_count: int,
+    ctx: Context[Any, Any],
+) -> dict[str, Any] | InputRequiredResult:
+    """Propose moving a group of passengers to another flight. Needs a human approval.
+
+    The only tool that changes anything. It does not complete on the first call:
+    it answers with a request for approval, and executes only when a person other
+    than the signed-in user approves this exact proposal. You cannot approve it,
+    and changing any argument makes it a new proposal needing a new approval.
+    Calling it again with the same arguments is safe: the same proposal is
+    executed at most once and a repeat returns the original result.
+
+    It names a group, never a passenger, and returns counts only. It needs a
+    user's token carrying `flightops.rebooking.write`, so it is unavailable to a
+    service principal and over stdio. Spends no OpenSky credits.
+
+    Args:
+        from_flight: Flight the passengers are booked on, e.g. SK1429.
+        flight_date: Departure date of from_flight, YYYY-MM-DD.
+        to_flight: Flight to move them to, e.g. SK1431.
+        cohort: Which passengers: "tight_connections", "connecting",
+            "needing_assistance" or "all".
+        reason_code: Why: "weather", "technical", "crew", "atc", "late_inbound"
+            or "other".
+        passenger_count: How many passengers this moves, as reported by
+            flight_passenger_impact for that cohort. The rebooking is refused if
+            the number has changed since.
+    """
+    runtime = get_runtime()
+    proposal = build_proposal(
+        from_flight=from_flight,
+        flight_date=flight_date,
+        to_flight=to_flight,
+        cohort=cohort,
+        reason_code=reason_code,
+        passenger_count=passenger_count,
+    )
+    inbound = current_access_token()
+    if inbound is None:
+        raise ToolFailure(
+            code="user_token_required",
+            message="A rebooking is only proposed on behalf of a signed-in user.",
+            hint="Call this tool through the authenticated HTTP server with a user's token. "
+            "It is not available over stdio.",
+        )
+    proposer = inbound.subject or inbound.client_id
+    audience = runtime.settings.ops_api_audience
+    scopes = [Scopes.REBOOKING_WRITE]
+    # Exchanged before anyone is asked to approve: a caller who could never
+    # execute the rebooking must find that out without spending a person's time.
+    await runtime.obo.token_for(inbound, audience=audience, scopes=scopes)
+
+    answer = (ctx.input_responses or {}).get(APPROVAL_REQUEST)
+    if answer is None:
+        if ctx.request_state is not None:
+            raise approval_required("The request carried no approval response.")
+        return _ask_for_approval(ctx, runtime, proposal, proposer)
+
+    _check_proposal_state(ctx.request_state, proposal)
+    if not isinstance(answer, ElicitResult):
+        raise approval_invalid()
+    if answer.action != "accept":
+        _log.info(
+            "rebooking_declined",
+            proposed_by=proposer,
+            proposal_sha256=proposal.sha256,
+            action=answer.action,
+        )
+        raise approval_declined(answer.action)
+    grant = (answer.content or {}).get("approval_token")
+    if not isinstance(grant, str) or not grant:
+        raise approval_required("The approval response carried no approval grant.")
+    approval = await runtime.approvals.verify(
+        grant, proposal_sha256=proposal.sha256, proposer=proposer, digest=approved_digest
+    )
+
+    # Only now, with a verified approval, is the operations API called at all.
+    body = {
+        "from_flight": proposal.from_flight,
+        "flight_date": proposal.flight_date,
+        "to_flight": proposal.to_flight,
+        "cohort": proposal.cohort,
+        "reason_code": proposal.reason_code,
+        "expected_passengers": proposal.passenger_count,
+        "approved_by": approval.approved_by,
+        "proposal_sha256": proposal.sha256,
+    }
+    executed: dict[str, Any] = await _on_behalf_of(
+        runtime,
+        inbound,
+        scopes,
+        lambda token: runtime.ops.rebook(
+            body, idempotency_key=proposal.idempotency_key, token=token
+        ),
+    )
+    replayed = bool(executed.pop("replayed"))
+    approved_at = datetime.fromtimestamp(approval.approved_at, tz=UTC).isoformat()
+    # The audit record: who approved, what was proposed, what executed. Every
+    # field is a closed vocabulary, a count, a digest or an opaque subject id.
+    _log.info(
+        "rebooking_audit",
+        proposed_by=proposer,
+        approved_by=approval.approved_by,
+        approved_at=approved_at,
+        proposal=proposal.as_dict(),
+        proposal_sha256=proposal.sha256,
+        idempotency_key=proposal.idempotency_key,
+        rebooking_id=executed["rebooking_id"],
+        passengers_rebooked=executed["passengers_rebooked"],
+        replayed=replayed,
+    )
+    return {
+        "ok": True,
+        "as_of": _iso_now(runtime.clock),
+        # Identical for the original call and for every replay of it.
+        "result": executed,
+        "idempotency": {"key": proposal.idempotency_key, "replayed": replayed},
+        "audit": {
+            "proposed_by": proposer,
+            "proposed": proposal.as_dict(),
+            "proposal_sha256": proposal.sha256,
+            "approved_by": approval.approved_by,
+            "approved_at": approved_at,
+            "executed": {
+                "rebooking_id": executed["rebooking_id"],
+                "passengers_rebooked": executed["passengers_rebooked"],
+            },
+        },
+        "unknowns": [],
+        "delegation": {
+            "flow": "on-behalf-of (RFC 8693 token exchange)",
+            "acting_for": "the signed-in user",
+            "downstream_audience": audience,
+            "downstream_scope": scopes,
+        },
+        "source": {
+            "name": "Internal operations API",
+            "data_minimisation": "Counts only. The passengers moved are not returned, "
+            "logged or kept.",
+        },
+    }
+
+
+# --- the approval round trip ---------------------------------------------------
+def _ask_for_approval(
+    ctx: Context[Any, Any], runtime: Runtime, proposal: Proposal, proposer: str
+) -> InputRequiredResult:
+    """Answer a proposal with the question a human must answer. Writes nothing."""
+    version = ctx.protocol_version
+    if version is None or not is_version_at_least(version, MRTR_REVISION):
+        raise approval_required(
+            f"This connection predates MCP {MRTR_REVISION} and cannot carry an approval request."
+        )
+    if not _can_elicit(ctx.client_capabilities):
+        raise approval_required("This client cannot relay an approval request to a person.")
+
+    _log.info(
+        "rebooking_proposed",
+        proposed_by=proposer,
+        proposal=proposal.as_dict(),
+        proposal_sha256=proposal.sha256,
+        idempotency_key=proposal.idempotency_key,
+    )
+    message = (
+        f"Approve rebooking: move {proposal.passenger_count} passenger(s) "
+        f"({proposal.cohort}) from {proposal.from_flight} on {proposal.flight_date} to "
+        f"{proposal.to_flight}. Reason: {proposal.reason_code}. Proposed by {proposer}. "
+        f"Proposal SHA-256: {proposal.sha256}. An approver other than the proposer must "
+        "approve this exact proposal; return the approval grant, or decline."
+    )
+    request = ElicitRequest(
+        params=ElicitRequestFormParams(
+            message=message,
+            requested_schema={
+                "type": "object",
+                "properties": {
+                    # The canonical proposal, as the form's own data. An approval
+                    # client reads it from here instead of parsing the prose above,
+                    # and the approver's grant must describe exactly this object.
+                    "proposal": {
+                        "type": "string",
+                        "title": "Proposal (canonical JSON, read-only)",
+                        "description": "Exactly what will be executed. The approval grant "
+                        f"must carry this object as a {APPROVAL_DETAIL_TYPE!r} authorization "
+                        f"detail, for audience {runtime.settings.approval_audience!r}, with "
+                        f"scope {Scopes.REBOOKING_APPROVE!r}.",
+                        "default": proposal.canonical().decode("ascii"),
+                    },
+                    "approval_token": {
+                        "type": "string",
+                        "title": "Approval grant",
+                        "description": "The signed grant issued to the approver for this "
+                        "proposal. Not a password and not an access token.",
+                    },
+                },
+                "required": ["approval_token"],
+            },
+        )
+    )
+    state = json.dumps(
+        {"v": 1, "proposal_sha256": proposal.sha256, "proposed_at": runtime.clock()},
+        separators=(",", ":"),
+    )
+    return InputRequiredResult(input_requests={APPROVAL_REQUEST: request}, request_state=state)
+
+
+def _can_elicit(capabilities: ClientCapabilities | None) -> bool:
+    """Form elicitation declared. A bare `elicitation: {}` predates modes and means form."""
+    elicitation = capabilities.elicitation if capabilities is not None else None
+    return elicitation is not None and (elicitation.form is not None or elicitation.url is None)
+
+
+def _check_proposal_state(state: str | None, proposal: Proposal) -> None:
+    """An approval answers a question this server asked, about this proposal.
+
+    The SDK has already authenticated the state and bound it to the caller, the
+    tool and the arguments. This is the second check, and the one that says so in
+    this codebase's own terms.
+    """
+    if state is None:
+        raise approval_required("An approval was sent for a proposal this server never issued.")
+    try:
+        recorded = json.loads(state)
+    except ValueError:
+        recorded = None
+    if not isinstance(recorded, dict) or recorded.get("proposal_sha256") != proposal.sha256:
+        raise approval_required("The approval does not belong to this proposal.")
+
+
+async def _on_behalf_of(
+    runtime: Runtime,
+    inbound: AccessToken,
+    scopes: list[str],
+    call: Callable[[str], Awaitable[Any]],
+) -> Any:
+    """Run `call` with a token exchanged for the operations API, as the user.
+
+    A cached token the API no longer accepts is exchanged again, once. A second
+    refusal is a real failure, not something to loop on.
+    """
+    audience = runtime.settings.ops_api_audience
+    token = await runtime.obo.token_for(inbound, audience=audience, scopes=scopes)
+    try:
+        return await call(token)
+    except DownstreamTokenRejected:
+        runtime.obo.invalidate(inbound, audience=audience, scopes=scopes)
+        token = await runtime.obo.token_for(inbound, audience=audience, scopes=scopes)
+        try:
+            return await call(token)
+        except DownstreamTokenRejected:
+            raise ToolFailure(
+                code="downstream_auth_failed",
+                message="The internal operations API rejected a freshly exchanged token.",
+                hint="Not retryable by the caller; an operator must check the API's audience "
+                "and issuer configuration.",
+            ) from None
 
 
 # --- helpers -----------------------------------------------------------------
@@ -645,6 +933,7 @@ def create_server(
     *,
     auth: AuthSettings | None = None,
     token_verifier: TokenVerifier | None = None,
+    request_state_security: RequestStateSecurity | None = None,
 ) -> MCPServer:
     """Build a server with every registered tool, optionally behind bearer auth.
 
@@ -667,6 +956,7 @@ def create_server(
         instructions=INSTRUCTIONS,
         auth=auth,
         token_verifier=token_verifier,
+        request_state_security=request_state_security,
     )
     for fn in _TOOLS:
         server.add_tool(scoped(fn) if authenticated else fn)
@@ -754,9 +1044,27 @@ def create_http_server(
     resource_server = build_resource_server_auth(
         settings, jwks_transport=jwks_transport, clock=clock
     )
-    server = create_server(auth=resource_server.settings, token_verifier=resource_server.verifier)
+    server = create_server(
+        auth=resource_server.settings,
+        token_verifier=resource_server.verifier,
+        request_state_security=request_state_security(settings),
+    )
     install_observability_routes(server)
     return server
+
+
+def request_state_security(settings: Settings) -> RequestStateSecurity:
+    """How the state between a proposal and its approval is protected.
+
+    The SDK seals it, binds it to the caller, the tool and the arguments, and
+    expires it. The TTL is the approval window. With no shared secret the key is
+    per process, which fails closed across replicas instead of trusting state
+    another process may not have minted.
+    """
+    ttl = settings.approval_window_s
+    if settings.request_state_secret:
+        return RequestStateSecurity(keys=[settings.request_state_secret], ttl=ttl)
+    return RequestStateSecurity.ephemeral(ttl=ttl)
 
 
 class HttpOptions(TypedDict):
