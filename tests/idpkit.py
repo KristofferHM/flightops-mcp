@@ -38,6 +38,7 @@ AGENT_ROLES = [
     "flightops.status.read",
 ]
 PASSENGERS_READ = "flightops.passengers.read"
+REBOOKING_WRITE = "flightops.rebooking.write"
 CREW_READ = "flightops.crew.read"  # a scope the ops API does not accept for passengers
 USER_SCOPES = "flightops.reference.read flightops.weather.read flightops.passengers.read"
 
@@ -65,7 +66,7 @@ class LocalIdp:
                     client_id=SERVER,
                     client_secret=SecretStr(self.secrets[SERVER]),
                     resource=MCP_AUDIENCE,
-                    exchange_targets={OPS_AUDIENCE: [PASSENGERS_READ]},
+                    exchange_targets={OPS_AUDIENCE: [PASSENGERS_READ, REBOOKING_WRITE]},
                 ),
                 ClientConfig(
                     client_id=BYSTANDER,
