@@ -10,7 +10,7 @@ somebody has to recognise as wrong.
 from __future__ import annotations
 
 import pytest
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from flightops_mcp.credits import WINDOW_S, CreditLedger
@@ -108,6 +108,9 @@ def test_a_negative_budget_is_refused_at_construction(budget: int) -> None:
         CreditLedger(budget, clock=FakeClock())
 
 
+# The edge itself, always: a random draw of floats almost never lands on it exactly, and the
+# first mutation run showed `< cutoff` could become `<= cutoff` unnoticed.
+@example(credits=1, past=WINDOW_S)
 @given(credits=st.integers(1, 4), past=st.floats(0, WINDOW_S, allow_nan=False))
 def test_a_charge_counts_for_exactly_one_window(credits: int, past: float) -> None:
     """Inside the window, including its edge, it counts; a moment later it does not."""

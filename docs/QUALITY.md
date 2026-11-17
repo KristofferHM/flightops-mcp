@@ -24,6 +24,7 @@ the tests that raise it. It is never raised by excluding code.
 |---|---|---|---|
 | 2026-11-17 | 88.26 % | 88 | coverage ratchet introduced (v0.5.0 suite, no new tests) |
 | 2026-11-17 | 88.84 % | 88 | property tests; still 88 rounded down |
+| 2026-11-17 | 89.08 % | 89 | tests written from the first mutation run's survivors |
 
 ### The exclusion list
 
