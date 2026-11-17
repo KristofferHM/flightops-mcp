@@ -27,5 +27,8 @@ data/*.sqlite3-journal
 htmlcov/
 probe_*.py
 
+# Agent run transcripts (uv run python -m agent run ...)
+agent-runs/
+
 # Local Claude Code overrides (the committed .claude/settings.json is the shared one)
 .claude/settings.local.json

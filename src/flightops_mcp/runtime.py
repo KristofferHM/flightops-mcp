@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from .airports import AirportDB
+from .auth import ApprovalVerifier, build_approval_verifier
 from .auth.obo import OboExchanger
 from .config import Settings
 from .opensky import OpenSkyClient
@@ -31,6 +32,7 @@ class Runtime:
     airports: AirportDB
     obo: OboExchanger
     ops: OpsApiClient
+    approvals: ApprovalVerifier
     clock: Callable[[], float]
 
     @classmethod
@@ -64,6 +66,8 @@ class Runtime:
             airports=AirportDB(resolved.airports_db),
             obo=OboExchanger(resolved, transport=idp_transport, clock=clock),
             ops=OpsApiClient(resolved, transport=ops_transport, sleep=sleep),
+            # The grants are signed by the issuer the exchange already talks to.
+            approvals=build_approval_verifier(resolved, jwks_transport=idp_transport, clock=clock),
             clock=clock,
         )
 

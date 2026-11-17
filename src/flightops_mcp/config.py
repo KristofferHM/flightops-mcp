@@ -55,6 +55,20 @@ class Settings(BaseSettings):
     ops_api_base_url: str | None = None
     ops_api_audience: str = "api://flightops-ops"
 
+    # --- Human approval of writes (docs/adr/0003) -----------------------------
+    # The audience an approval grant must name. Deliberately not this server's
+    # own: a grant must not work as an access token, nor the reverse.
+    approval_audience: str = "api://flightops-approvals"
+    # A grant older than this is refused whatever its `exp` says.
+    approval_max_age_s: float = 300.0
+    # How long a proposal waits for its approval before it must be proposed again.
+    approval_window_s: float = 600.0
+    # Seals the state a proposal carries between its two requests. At least 32
+    # bytes of secret randomness, shared by every replica. Unset means a key per
+    # process: correct for one process, and a retry that lands on another replica
+    # is then refused rather than trusted.
+    request_state_secret: str | None = None
+
     # --- Reference data ------------------------------------------------------
     airports_db: Path = Field(default=Path("data/airports.sqlite3"))
 

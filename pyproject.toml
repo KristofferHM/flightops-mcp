@@ -39,6 +39,13 @@ dev = [
     "respx>=0.23.1",
     "ruff>=0.17.5",
     { include-group = "services" },
+    { include-group = "agent" },
+]
+# The agent loop's model backends. Not a runtime dependency of the server, and
+# the offline backend imports none of it: the SDK is loaded only when the
+# `anthropic` backend is selected.
+agent = [
+    "anthropic>=2.9.0",
 ]
 # The local IdP and the mock ops API. Not runtime dependencies of the server:
 # they exist so the auth matrix can be tested without a cloud tenant.

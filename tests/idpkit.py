@@ -38,6 +38,7 @@ AGENT_ROLES = [
     "flightops.status.read",
 ]
 PASSENGERS_READ = "flightops.passengers.read"
+REBOOKING_WRITE = "flightops.rebooking.write"
 CREW_READ = "flightops.crew.read"  # a scope the ops API does not accept for passengers
 USER_SCOPES = "flightops.reference.read flightops.weather.read flightops.passengers.read"
 
@@ -65,7 +66,7 @@ class LocalIdp:
                     client_id=SERVER,
                     client_secret=SecretStr(self.secrets[SERVER]),
                     resource=MCP_AUDIENCE,
-                    exchange_targets={OPS_AUDIENCE: [PASSENGERS_READ]},
+                    exchange_targets={OPS_AUDIENCE: [PASSENGERS_READ, REBOOKING_WRITE]},
                 ),
                 ClientConfig(
                     client_id=BYSTANDER,
@@ -108,6 +109,7 @@ class LocalIdp:
         audience: str = MCP_AUDIENCE,
         client_id: str = AGENT,
         expires_in: int | None = None,
+        authorization_details: list[dict[str, Any]] | None = None,
     ) -> str:
         body: dict[str, Any] = {
             "sub": sub,
@@ -117,6 +119,8 @@ class LocalIdp:
         }
         if expires_in is not None:
             body["expires_in"] = expires_in
+        if authorization_details is not None:
+            body["authorization_details"] = authorization_details
         async with self.http() as client:
             response = await client.post("/dev/user-token", json=body)
         assert response.status_code == 200, response.text

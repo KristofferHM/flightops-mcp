@@ -81,6 +81,14 @@ class JwtVerifier:
             claims={name: claims[name] for name in _KEPT_CLAIMS if name in claims},
         )
 
+    async def verified_claims(self, token: str) -> dict[str, Any]:
+        """Every claim of a token that passes verification. Raises `TokenRejected`.
+
+        For a caller that must read a claim the `AccessToken` allow-list drops, and
+        that turns a rejection into its own failure instead of a silent `None`.
+        """
+        return await self._verify(token)
+
     async def _verify(self, token: str) -> dict[str, Any]:
         try:
             header = jwt.get_unverified_header(token)

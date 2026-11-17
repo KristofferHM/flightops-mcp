@@ -30,6 +30,7 @@ EXPECTED_TOOLS = {
     "disruption_triage",
     "upstream_status",
     "flight_passenger_impact",
+    "propose_rebooking",
 }
 
 EMPTY_STATES = {"time": 1_700_000_000, "states": []}
@@ -140,6 +141,27 @@ async def test_all_tools_are_published_with_schemas(settings: Settings) -> None:
             f"{tool.name} needs a usable description"
         )
         assert tool.input_schema.get("type") == "object"
+
+
+async def test_the_write_tool_publishes_its_arguments_and_not_its_plumbing(
+    settings: Settings,
+) -> None:
+    """The model sees the six fields of a proposal. The request context is not an argument."""
+    install(settings)
+    async with Client(srv.mcp) as client:
+        tools = await client.list_tools()
+
+    (write,) = [tool for tool in tools.tools if tool.name == "propose_rebooking"]
+    assert set(write.input_schema["properties"]) == {
+        "from_flight",
+        "flight_date",
+        "to_flight",
+        "cohort",
+        "reason_code",
+        "passenger_count",
+    }
+    assert set(write.input_schema["required"]) == set(write.input_schema["properties"])
+    assert "approval" in write.description.lower(), "the caveat lives where the model reads it"
 
 
 async def test_resolve_airport_returns_the_icao_and_iata_pair(settings: Settings) -> None:

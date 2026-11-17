@@ -35,6 +35,14 @@ ARGUMENTS: dict[str, dict[str, Any]] = {
     "disruption_triage": {"airport": "ESGG"},
     "upstream_status": {},
     "flight_passenger_impact": {"flight": "SK1429"},
+    "propose_rebooking": {
+        "from_flight": "SK1429",
+        "flight_date": "2026-11-16",
+        "to_flight": "SK1431",
+        "cohort": "tight_connections",
+        "reason_code": "late_inbound",
+        "passenger_count": 2,
+    },
 }
 
 
@@ -61,6 +69,22 @@ def challenge_of(response: Any) -> dict[str, str]:
 def test_every_published_tool_has_a_scope_entry() -> None:
     for name in EXPECTED_TOOLS:
         assert Scopes.for_tool(name), f"{name} must require at least one scope"
+
+
+def test_the_write_has_a_scope_of_its_own() -> None:
+    """Reading passengers and moving them are different permissions, in both directions."""
+    assert Scopes.for_tool("propose_rebooking") == {Scopes.REBOOKING_WRITE}
+    assert Scopes.missing("propose_rebooking", [Scopes.PASSENGERS_READ]) == [Scopes.REBOOKING_WRITE]
+    assert Scopes.missing("flight_passenger_impact", [Scopes.REBOOKING_WRITE]) == [
+        Scopes.PASSENGERS_READ
+    ]
+
+
+def test_the_approve_permission_opens_no_tool() -> None:
+    """It belongs on an approval grant. As a caller's scope it is worth nothing."""
+    assert Scopes.REBOOKING_APPROVE not in Scopes.all()
+    for name in EXPECTED_TOOLS:
+        assert Scopes.missing(name, [Scopes.REBOOKING_APPROVE]) == sorted(Scopes.for_tool(name))
 
 
 def test_an_unknown_tool_has_no_scopes_rather_than_empty_scopes() -> None:
@@ -138,8 +162,12 @@ async def test_every_tool_refuses_a_token_with_no_scopes(tool: str, remote: Remo
     assert challenge_of(response)["scope"].split() == sorted(Scopes.for_tool(tool))
 
 
-# The on-behalf-of tool also needs an IdP and a downstream; its success path is in test_obo.py.
-@pytest.mark.parametrize("tool", sorted(EXPECTED_TOOLS - {"flight_passenger_impact"}))
+# The on-behalf-of tools also need an IdP and a downstream. Their success paths are in
+# test_obo.py and test_rebooking_gate.py.
+ON_BEHALF_OF = {"flight_passenger_impact", "propose_rebooking"}
+
+
+@pytest.mark.parametrize("tool", sorted(EXPECTED_TOOLS - ON_BEHALF_OF))
 async def test_every_tool_runs_with_exactly_its_own_scopes(tool: str, remote: RemoteServer) -> None:
     token = KEY.mint(scp=" ".join(Scopes.for_tool(tool)))
 

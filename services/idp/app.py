@@ -38,6 +38,7 @@ class UserTokenRequest(BaseModel):
     scope: str
     client_id: str
     expires_in: int | None = None
+    authorization_details: list[dict[str, Any]] | None = None
 
 
 class ExpireRequest(BaseModel):
@@ -122,6 +123,7 @@ def create_app(
             scope=body.scope,
             client_id=body.client_id,
             expires_in=body.expires_in,
+            authorization_details=body.authorization_details,
         )
         return _token_response(issued)
 

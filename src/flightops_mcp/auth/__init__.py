@@ -17,6 +17,7 @@ from mcp.server.auth.settings import AuthSettings
 from pydantic import AnyHttpUrl
 
 from ..config import Settings
+from .approval import Approval, ApprovalVerifier
 from .challenge import ScopeChallengingServer
 from .jwks import JwksCache
 from .passthrough import refuse_inbound_token
@@ -25,6 +26,8 @@ from .verifier import JwtVerifier, TokenRejected
 
 __all__ = [
     "AccessToken",
+    "Approval",
+    "ApprovalVerifier",
     "AuthConfigError",
     "AuthSettings",
     "JwksCache",
@@ -35,6 +38,7 @@ __all__ = [
     "TokenRejected",
     "TokenVerifier",
     "UnknownToolError",
+    "build_approval_verifier",
     "build_resource_server_auth",
     "current_access_token",
     "refuse_inbound_token",
@@ -103,3 +107,34 @@ def build_resource_server_auth(
         validate_token_resource=True,
     )
     return ResourceServerAuth(settings=auth, verifier=verifier, jwks=jwks)
+
+
+def build_approval_verifier(
+    settings: Settings,
+    *,
+    jwks_transport: httpx.AsyncBaseTransport | None = None,
+    clock: Callable[[], float] = time.time,
+) -> ApprovalVerifier:
+    """The verifier for approval grants. Unconfigured without an issuer: it then refuses.
+
+    Same issuer and keys as inbound tokens, a different audience. The audience is
+    what keeps the two kinds of token from standing in for each other.
+    """
+    if not (settings.auth_issuer and settings.auth_jwks_url):
+        return ApprovalVerifier(None, clock=clock, max_age_s=settings.approval_max_age_s)
+    jwks = JwksCache(
+        settings.auth_jwks_url,
+        transport=jwks_transport,
+        ttl_s=settings.jwks_cache_ttl_s,
+        min_refresh_interval_s=settings.jwks_min_refresh_interval_s,
+        timeout_s=settings.http_timeout_s,
+        user_agent=settings.user_agent,
+    )
+    verifier = JwtVerifier(
+        issuer=settings.auth_issuer,
+        audience=settings.approval_audience,
+        jwks=jwks,
+        clock=clock,
+        clock_skew_s=settings.auth_clock_skew_s,
+    )
+    return ApprovalVerifier(verifier, clock=clock, max_age_s=settings.approval_max_age_s)

@@ -35,7 +35,8 @@ services:
          {"client_id": "flightops-mcp",
           "client_secret": "${DEV_MCP_CLIENT_SECRET:?generate one into .env, see the top of this file}",
           "resource": "http://localhost:8000/mcp",
-          "exchange_targets": {"api://flightops-ops": ["flightops.passengers.read"]}}]
+          "exchange_targets": {"api://flightops-ops": [
+            "flightops.passengers.read", "flightops.rebooking.write"]}}]
     read_only: true
     tmpfs:
       - /tmp
