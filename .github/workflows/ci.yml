@@ -55,7 +55,9 @@ jobs:
       - name: Fail on skipped tests
         # A skipped test is an untested path. Nothing here may skip silently.
         run: |
-          if grep -q "skipped" pytest.out; then
+          # pytest says "N skipped"; coverage says "N files skipped due to complete coverage",
+          # which is not a skipped test.
+          if grep -qE "[0-9]+ skipped" pytest.out; then
             echo "::error::tests were skipped; account for them or remove them"
             exit 1
           fi
