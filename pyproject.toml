@@ -138,6 +138,11 @@ pytest_add_cli_args_test_selection = [
     "tests/test_agent_offline.py",
     "tests/test_properties_scopes.py",
     "tests/test_properties_credits.py",
+    # A static scan of the source text for clients without the passthrough guard. mutmut's
+    # instrumented copy contains every mutant side by side, including those that drop the
+    # guard, so the scan fails before any mutant runs. It still runs in the normal suite.
+    "--deselect",
+    "tests/test_no_passthrough.py::test_every_outbound_http_client_installs_the_guard",
 ]
 pytest_add_cli_args = ["-p", "no:cacheprovider"]
 
