@@ -191,11 +191,12 @@ portfolio piece and an engineering claim.
 
 ### Acceptance criteria
 
-- [ ] Harness runs offline in CI in under 60 s
-      — **not ticked: no CI run of this branch has been observed yet.** Locally the full offline run of
-      54 scenarios takes 9.5–11.8 s (10.11 s on `de1f6c9`), and the CI job enforces the limit twice
-      (`--max-seconds 60` in the harness, `jq '.duration_s < 60'` after it). Tick it when the
-      `evals (offline)` job on this branch reports its duration.
+- [x] Harness runs offline in CI in under 60 s
+      — CI run [44092100736](https://github.com/KristofferHM/flightops-mcp/actions/runs/44092100736) on
+      `feat/phase-4-evals`: the `evals (offline)` job completed in **30 s** including checkout and setup, all
+      eight jobs green. The harness itself reports 9.84 s for 54 scenarios, and the limit is enforced twice in
+      the job (`--max-seconds 60` in the harness, and a check after it), so a slow run fails rather than
+      quietly becoming the slowest job and getting removed.
 - [x] Baseline committed; a regression of >2 points fails the build
       — `evals/baseline.json`, 54 of 54, recorded 2026-11-17 (`69d43a5`), README table generated from it.
       The regression rule is counted two ways, and the stricter decides: more than 2 points on any line,
