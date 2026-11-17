@@ -80,6 +80,8 @@ TOOL_CACHE_HINTS: Final[Mapping[str, CacheHint]] = {
     "airport_live_traffic": CacheHint(ttl_ms=10_000, scope="public"),
     # A one-hour window whose end is rounded to 5 s: a minute changes almost nothing.
     "airport_movements": CacheHint(ttl_ms=60_000, scope="public"),
+    # Schiphol's schedule: published times, updated by the airport as they change.
+    "schiphol_flights": CacheHint(ttl_ms=60_000, scope="public"),
     # Composed from three cached parts. Caching the composite as well would let its
     # severity outlive the evidence it was computed from.
     "disruption_triage": CacheHint(ttl_ms=0),

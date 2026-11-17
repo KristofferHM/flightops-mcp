@@ -51,18 +51,18 @@ than 2 points on any line of it, or on any one scenario that fails a check it pa
 <!-- evals:begin -->
 <!-- Written by the harness from evals/baseline.json. Do not edit: CI fails if this block and the baseline disagree. -->
 
-**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-17; **Scenarios:** 54
+**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-17; **Scenarios:** 58
 
 | Axis | Passed | Applies to | Score |
 |---|---:|---:|---:|
-| Tool selection | 54 | 54 | 100.00 % |
-| Argument validity | 50 | 50 | 100.00 % |
-| Refusal correctness | 18 | 18 | 100.00 % |
-| No hallucination | 20 | 20 | 100.00 % |
-| Outcome (answer class, writes) | 54 | 54 | 100.00 % |
-| **Scenarios passing every check that applies** | 54 | 54 | 100.00 % |
+| Tool selection | 58 | 58 | 100.00 % |
+| Argument validity | 54 | 54 | 100.00 % |
+| Refusal correctness | 20 | 20 | 100.00 % |
+| No hallucination | 21 | 21 | 100.00 % |
+| Outcome (answer class, writes) | 58 | 58 | 100.00 % |
+| **Scenarios passing every check that applies** | 58 | 58 | 100.00 % |
 
-Absent-evidence group (answering confidently when the evidence is not there): **20 scenarios** over 9 kinds: `empty_result` 3, `malformed_payload` 3, `partial_coverage` 2, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 2, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
+Absent-evidence group (answering confidently when the evidence is not there): **21 scenarios** over 9 kinds: `empty_result` 4, `malformed_payload` 3, `partial_coverage` 2, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 2, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
 
 No scenario fails in this run.
 

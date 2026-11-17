@@ -33,6 +33,7 @@ ARGUMENTS: dict[str, dict[str, Any]] = {
     "airport_live_traffic": {"airport": "ESGG"},
     "airport_movements": {"airport": "ESGG"},
     "disruption_triage": {"airport": "ESGG"},
+    "schiphol_flights": {"direction": "departure"},
     "upstream_status": {},
     "flight_passenger_impact": {"flight": "SK1429"},
     "propose_rebooking": {

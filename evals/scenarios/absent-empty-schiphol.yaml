@@ -1,0 +1,31 @@
+id: absent-empty-schiphol
+group: absent-evidence
+why: 'Schiphol lists no arrivals in the window: a quiet period or a gap in the published schedule, not proof that nothing will land.'
+question: Is anything due to land at Schiphol in the next half hour?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.schedule.read
+clock:
+  start: '2026-11-16T03:00:00+00:00'
+fixture:
+  schiphol:
+    flights:
+      status: 200
+      json:
+        flights: []
+offline:
+  policy: schiphol_schedule
+  params:
+    direction: arrival
+    window_minutes: 30
+expect:
+  tools:
+    required:
+    - schiphol_flights
+  arguments:
+    schiphol_flights:
+      direction: arrival
+      window_minutes: 30
+  answer: unknown
+  absent_evidence: empty_result

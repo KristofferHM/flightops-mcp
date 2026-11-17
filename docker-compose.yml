@@ -31,7 +31,8 @@ services:
           "client_secret": "${DEV_AGENT_CLIENT_SECRET:?generate one into .env, see the top of this file}",
           "app_roles": {"http://localhost:8000/mcp": [
             "flightops.reference.read", "flightops.weather.read",
-            "flightops.traffic.read", "flightops.status.read"]}},
+            "flightops.traffic.read", "flightops.status.read",
+            "flightops.schedule.read"]}},
          {"client_id": "flightops-mcp",
           "client_secret": "${DEV_MCP_CLIENT_SECRET:?generate one into .env, see the top of this file}",
           "resource": "http://localhost:8000/mcp",
@@ -101,6 +102,10 @@ services:
       FLIGHTOPS_OPENSKY_CLIENT_ID: ${FLIGHTOPS_OPENSKY_CLIENT_ID:-}
       FLIGHTOPS_OPENSKY_CLIENT_SECRET: ${FLIGHTOPS_OPENSKY_CLIENT_SECRET:-}
       FLIGHTOPS_CREDIT_BUDGET_PER_HOUR: ${FLIGHTOPS_CREDIT_BUDGET_PER_HOUR:-400}
+      # Schiphol Public Flight API. Unset leaves `schiphol_flights` answering
+      # `credentials_missing`; no key is shipped and none has been used (docs/adr/0005).
+      FLIGHTOPS_SCHIPHOL_CLIENT_ID: ${FLIGHTOPS_SCHIPHOL_CLIENT_ID:-}
+      FLIGHTOPS_SCHIPHOL_CLIENT_SECRET: ${FLIGHTOPS_SCHIPHOL_CLIENT_SECRET:-}
       # The HTTP transport refuses to start without an issuer: there is no
       # unauthenticated remote mode. This stack trusts the local IdP above.
       FLIGHTOPS_AUTH_ISSUER: http://idp:9000

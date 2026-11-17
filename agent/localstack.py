@@ -84,6 +84,10 @@ def _no_weather(_request: httpx.Request) -> httpx.Response:
     return httpx.Response(204)
 
 
+def _no_schedule(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json={"flights": []})
+
+
 @dataclass(frozen=True, slots=True)
 class Upstreams:
     """What the world outside the server answers during one run.
@@ -97,6 +101,10 @@ class Upstreams:
     weather: Handler = _no_weather
     # False runs the server with no OpenSky client configured at all.
     opensky_credentials: bool = True
+    # Schiphol's flights resource and its Auth0 token endpoint, the same way.
+    schiphol: Handler = _no_schedule
+    schiphol_token: Handler = _upstream_token
+    schiphol_credentials: bool = True
     # Answers a request to the operations API in its place. None lets it through.
     ops: Callable[[httpx.Request], httpx.Response | None] | None = None
     # Free seats per target flight. None keeps the operations API's own.
@@ -223,6 +231,8 @@ async def local_stack(
             _env_file=None,  # type: ignore[call-arg]  # a developer's .env must not leak into a run
             opensky_client_id="offline-fixture" if world.opensky_credentials else None,
             opensky_client_secret=_throwaway() if world.opensky_credentials else None,
+            schiphol_client_id="offline-fixture" if world.schiphol_credentials else None,
+            schiphol_client_secret=_throwaway() if world.schiphol_credentials else None,
             airports_db=airports_db,
             backoff_base_s=0.0,
             auth_issuer=ISSUER,
@@ -240,6 +250,8 @@ async def local_stack(
             opensky_transport=httpx.MockTransport(world.opensky),
             token_transport=httpx.MockTransport(world.opensky_token),
             weather_transport=httpx.MockTransport(world.weather),
+            schiphol_transport=httpx.MockTransport(world.schiphol),
+            schiphol_token_transport=httpx.MockTransport(world.schiphol_token),
             idp_transport=idp,
             ops_transport=ops,
             # The fixture describes the world at the scenario's start, so the

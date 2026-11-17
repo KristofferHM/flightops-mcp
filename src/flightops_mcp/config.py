@@ -28,6 +28,24 @@ class Settings(BaseSettings):
         "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
     )
 
+    # --- Schiphol Public Flight API (OAuth2 client credentials + audience) ---
+    # The vendor's documented shape (developer.schiphol.nl, API Consumer Migration
+    # Guide, 2026-07-20): a token from Auth0 for one audience, 30 minutes, sent as a
+    # bearer. No live key has been used with this adapter: see docs/adr/0005.
+    schiphol_client_id: str | None = None
+    schiphol_client_secret: str | None = None
+    schiphol_base_url: str = "https://api.schiphol.nl/public"
+    schiphol_auth_url: str = "https://api.auth.schiphol.nl/oauth/token"
+    # Must match the tier called, exactly; a token is scoped to one audience.
+    schiphol_audience: str = "https://api.schiphol.nl/public"
+    # The vendor's advice is to refresh 60 s before expiry, not on a 401.
+    schiphol_token_refresh_ahead_s: float = 60.0
+    # Requests, not credits: the public tier is rate limited per minute. A local
+    # ceiling, charged by the same ledger as OpenSky's credits.
+    schiphol_request_budget_per_hour: int = 1200
+    # Pages of 20 flights fetched per direction before the answer says it is truncated.
+    schiphol_max_pages: int = 3
+
     # --- AviationWeather.gov (no authentication) ----------------------------
     avwx_base_url: str = "https://aviationweather.gov/api/data"
 

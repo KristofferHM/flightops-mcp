@@ -29,6 +29,7 @@ EXPECTED_TOOLS = {
     "airport_movements",
     "airport_weather",
     "disruption_triage",
+    "schiphol_flights",
     "upstream_status",
     "flight_passenger_impact",
     "propose_rebooking",
@@ -102,6 +103,10 @@ def install(
         opensky_transport=httpx.MockTransport(opensky_handler),
         token_transport=httpx.MockTransport(token_handler),
         weather_transport=httpx.MockTransport(weather_handler),
+        schiphol_transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"flights": []})
+        ),
+        schiphol_token_transport=httpx.MockTransport(token_handler),
         sleep=SleepRecorder(),
         clock=time.time,
         data_clock=data_clock or (lambda: float(FIXTURE_NOW)),

@@ -1,0 +1,59 @@
+id: happy-schiphol-departures
+group: happy-path
+why: 'Schiphol''s published departures in the v4 shape: one cancelled, one late by its estimate. The second upstream, under the same governance.'
+question: What departures are due at Schiphol in the next two hours, and is anything cancelled or late?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.schedule.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  schiphol:
+    flights:
+      status: 200
+      json:
+        flights:
+        - flightName: KL1001
+          flightDirection: D
+          scheduleDateTime: '2026-11-16T10:20:00.000+01:00'
+          publicEstimatedOffBlockTime: '2026-11-16T10:20:00.000+01:00'
+          publicFlightState:
+            flightStates:
+            - SCH
+          route:
+            destinations:
+            - LHR
+        - flightName: KL1131
+          flightDirection: D
+          scheduleDateTime: '2026-11-16T10:45:00.000+01:00'
+          publicEstimatedOffBlockTime: '2026-11-16T11:25:00.000+01:00'
+          publicFlightState:
+            flightStates:
+            - SCH
+          route:
+            destinations:
+            - CPH
+        - flightName: HV5821
+          flightDirection: D
+          scheduleDateTime: '2026-11-16T11:05:00.000+01:00'
+          publicFlightState:
+            flightStates:
+            - CNX
+          route:
+            destinations:
+            - AGP
+offline:
+  policy: schiphol_schedule
+  params:
+    direction: departure
+    window_minutes: 120
+expect:
+  tools:
+    required:
+    - schiphol_flights
+  arguments:
+    schiphol_flights:
+      direction: departure
+      window_minutes: 120
+  answer: reported

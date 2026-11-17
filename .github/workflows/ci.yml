@@ -402,7 +402,7 @@ jobs:
         # http://localhost:8000/mcp) are defined in docker-compose.yml; only the secrets are not.
         run: |
           umask 077
-          for name in DEV_AGENT_CLIENT_SECRET DEV_MCP_CLIENT_SECRET; do
+          for name in DEV_AGENT_CLIENT_SECRET DEV_MCP_CLIENT_SECRET MOCK_SCHIPHOL_CLIENT_SECRET; do
             value="$(openssl rand -hex 24)"
             echo "::add-mask::$value"
             echo "$name=$value" >> .env
@@ -442,6 +442,23 @@ jobs:
             echo '### Phase 1 matrix against docker compose'
             echo '```'
             cat matrix.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The second adapter through the stack, against the mock upstream
+        # Schiphol's documented auth shape (audience, expiry), served by services/mock_upstream.
+        # A scope refusal that reaches nothing, a debit the mock agrees with, no wrong audience,
+        # no expired token, no retired header. A mock of the documentation, not Schiphol.
+        run: |
+          set -euo pipefail
+          export MATRIX_SERVER=http://localhost:8000
+          export MATRIX_IDP=http://127.0.0.1:9000
+          export MATRIX_MOCK=http://127.0.0.1:9200
+          uv run python scripts/second_upstream.py | tee second-upstream.out
+          {
+            echo '### Second adapter (Schiphol shape) against the mock upstream'
+            echo '```'
+            cat second-upstream.out
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

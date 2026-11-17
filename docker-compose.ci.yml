@@ -5,6 +5,9 @@
 #   1. ops-api published on the host. By design the only way to it is through the server;
 #      matrix line 9 calls it directly to prove it refuses a server-audience token.
 #   2. A second, untrusted issuer for matrix line 3: its own signing key, no clients.
+#   3. The mock upstream, in Schiphol's documented auth shape, and the server pointed at it,
+#      so the second adapter is exercised through the stack (scripts/second_upstream.py).
+#      A mock of the documentation: no live Schiphol key exists anywhere in CI.
 #
 # docker-compose.yml is the stack as shipped and is not edited for this.
 services:
@@ -17,6 +20,37 @@ services:
       # No collector in the matrix run: the observability profile is off, so an
       # OTLP exporter would spend the whole job retrying into a closed port.
       FLIGHTOPS_OTEL_EXPORTER: none
+      FLIGHTOPS_SCHIPHOL_BASE_URL: http://mock-upstream:9200/schiphol/public
+      FLIGHTOPS_SCHIPHOL_AUTH_URL: http://mock-upstream:9200/schiphol/oauth/token
+      FLIGHTOPS_SCHIPHOL_CLIENT_ID: flightops-schiphol
+      FLIGHTOPS_SCHIPHOL_CLIENT_SECRET: ${MOCK_SCHIPHOL_CLIENT_SECRET:?generate one into .env}
+    depends_on:
+      mock-upstream:
+        condition: service_healthy
+
+  mock-upstream:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+    command: ["services.mock_upstream.app:create_app", "--port", "9200"]
+    ports:
+      - "127.0.0.1:9200:9200"
+    environment:
+      MOCK_SCHIPHOL_CLIENT_SECRET: ${MOCK_SCHIPHOL_CLIENT_SECRET:?generate one into .env}
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request as u; u.urlopen('http://127.0.0.1:9200/healthz', timeout=3)"
+      interval: 5s
+      timeout: 4s
+      retries: 10
 
   idp-other:
     build:

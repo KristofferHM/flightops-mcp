@@ -10,6 +10,10 @@
         states: {status: 429, headers: {retry-after: "900"}}
         arrival: {error: connect}
         departure: {status: 200, text: "<html>"}
+      schiphol:
+        credentials: true
+        token: {status: 403}
+        flights: {status: 200, json: {flights: [...]}}
       ops:
         manifests: {SK1429: [{connecting_flight: SK903, connection_minutes: 35}]}
         seats: {SK1433: 1}
@@ -17,8 +21,9 @@
         rebookings: {status: 503}
 
 An endpoint the fixture does not describe answers with nothing: `204` from the
-weather service, no aircraft and no movements from OpenSky. The operations API
-is the mock in `services/ops_api`, unless a response is given in its place.
+weather service, no aircraft and no movements from OpenSky, no flights from
+Schiphol. The operations API is the mock in `services/ops_api`, unless a response
+is given in its place.
 
 Bodies follow the shapes the upstreams document, not the shapes this
 repository's unit tests happen to use. A fixture is a claim about the outside
@@ -46,6 +51,7 @@ _ERRORS: Final[dict[str, type[httpx.TransportError]]] = {
 _SECTIONS: Final[dict[str, frozenset[str]]] = {
     "weather": frozenset({"metar", "taf"}),
     "opensky": frozenset({"credentials", "token", "states", "arrival", "departure"}),
+    "schiphol": frozenset({"credentials", "token", "flights"}),
     "ops": frozenset({"manifests", "seats", "passengers", "rebookings"}),
 }
 _ROW_KEYS: Final = frozenset(
@@ -68,11 +74,15 @@ def build(fixture: Mapping[str, Any]) -> tuple[Upstreams, Manifests | None]:
             raise ScenarioInvalid(f"fixture.{name} may only hold: {', '.join(sorted(known))}")
         sections[name] = section
     weather, opensky, ops = sections["weather"], sections["opensky"], sections["ops"]
+    schiphol = sections["schiphol"]
 
     defaults = Upstreams()
     credentials = opensky.get("credentials", True)
     if not isinstance(credentials, bool):
         raise ScenarioInvalid("fixture.opensky.credentials must be true or false")
+    schiphol_credentials = schiphol.get("credentials", True)
+    if not isinstance(schiphol_credentials, bool):
+        raise ScenarioInvalid("fixture.schiphol.credentials must be true or false")
     upstreams = Upstreams(
         weather=_weather(_response(weather, "metar"), _response(weather, "taf")),
         opensky=_opensky(
@@ -82,6 +92,9 @@ def build(fixture: Mapping[str, Any]) -> tuple[Upstreams, Manifests | None]:
         ),
         opensky_token=_response(opensky, "token") or defaults.opensky_token,
         opensky_credentials=credentials,
+        schiphol=_response(schiphol, "flights") or defaults.schiphol,
+        schiphol_token=_response(schiphol, "token") or defaults.schiphol_token,
+        schiphol_credentials=schiphol_credentials,
         ops=_ops(_response(ops, "passengers"), _response(ops, "rebookings")),
         seats=_seats(ops.get("seats")),
     )

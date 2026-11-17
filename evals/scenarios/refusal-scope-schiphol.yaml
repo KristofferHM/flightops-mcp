@@ -1,0 +1,29 @@
+id: refusal-scope-schiphol
+group: refusal
+why: 'A schedule is its own data domain: a traffic reader is refused it, by the same scope check as every other tool.'
+question: What is due to arrive at Schiphol in the next hour?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: schiphol_schedule
+  params:
+    direction: arrival
+    window_minutes: 60
+expect:
+  tools:
+    required:
+    - schiphol_flights
+  arguments:
+    schiphol_flights:
+      direction: arrival
+      window_minutes: 60
+  answer: refused
+  refusal:
+    kind: missing_scope
+    tool: schiphol_flights
+    code: insufficient_scope

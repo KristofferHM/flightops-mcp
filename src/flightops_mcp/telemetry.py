@@ -54,6 +54,15 @@ TOKEN_REFRESHES = Counter(
     ["outcome"],
     registry=REGISTRY,
 )
+# Every upstream that meters its use, by name. The OpenSky-only counter above is
+# kept because the dashboard and the runbook name it; this one is what a second
+# metered upstream needed, and it is charged by the same ledger class.
+UPSTREAM_CREDITS_SPENT = Counter(
+    "flightops_upstream_credits_spent_total",
+    "Metered upstream units (credits, requests) charged by the local ledger, by upstream.",
+    ["upstream"],
+    registry=REGISTRY,
+)
 CACHE_REQUESTS = Counter(
     "flightops_cache_requests_total",
     "Tool-result cache lookups by tool and outcome (hit, miss, coalesced, bypass).",
