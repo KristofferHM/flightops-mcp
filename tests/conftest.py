@@ -36,6 +36,11 @@ hypothesis_settings.register_profile(
     print_blob=True,
     suppress_health_check=[HealthCheck.too_slow],
 )
+# Mutation runs repeat the selected tests once per mutant: fewer examples, and fixed ones,
+# so a mutant is killed or not by the same inputs every time.
+hypothesis_settings.register_profile(
+    "mutation", max_examples=50, derandomize=True, deadline=None, database=None
+)
 hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 

@@ -209,6 +209,54 @@ jobs:
           path: eval-runs/
           if-no-files-found: error
 
+  # Phase 4b, gate 3 (docs/QUALITY.md). Mutants of auth/, the credit ledger and the agent's
+  # approval types, each run against the tests that exercise it. Linux only: mutmut forks per
+  # mutant. The budget is the `timeout` below; a run it cuts short leaves mutants unchecked,
+  # and the gate script fails on that rather than reporting a flattering lower bound.
+  mutation:
+    name: mutation (auth, credit ledger, approval)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Mutate (budget 35 minutes)
+        env:
+          HYPOTHESIS_PROFILE: mutation
+        run: |
+          set +e
+          timeout 35m uv run mutmut run --max-children 4 > mutmut.out 2>&1
+          status=$?
+          tail -n 20 mutmut.out
+          echo "mutmut exited $status"
+
+      - name: Survivors against the ceiling
+        run: |
+          set -o pipefail
+          uv run python scripts/mutation_gate.py --report mutation-report.md | tee mutation-gate.out
+          {
+            echo '### Mutation testing'
+            echo '```'
+            cat mutation-gate.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the survivor report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: |
+            mutation-report.md
+            mutmut.out
+          if-no-files-found: warn
+
   # Phase 4b, gate 4. Secrets in the tree and in every commit on every ref, then known
   # vulnerabilities in the locked dependencies. A finding fails the job. The only allowlist is
   # .gitleaksignore, which names each verified false positive and why.

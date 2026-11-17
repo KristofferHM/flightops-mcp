@@ -37,3 +37,4 @@ eval-runs/
 # Local Claude Code overrides (the committed .claude/settings.json is the shared one)
 .claude/settings.local.json
 .hypothesis/
+mutants/
