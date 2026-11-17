@@ -26,7 +26,7 @@ jobs:
       - name: Ruff (format)
         run: uv run ruff format --check .
       - name: Mypy (strict)
-        run: uv run mypy src services agent
+        run: uv run mypy src services agent evals
 
   tests:
     name: tests (py${{ matrix.python }})
@@ -131,6 +131,75 @@ jobs:
         with:
           name: agent-offline-transcripts
           path: runs/
+          if-no-files-found: error
+
+  # Phase 4's acceptance criteria, made mechanical. The golden scenarios are run against the real
+  # stack with the scripted backend (no model, no network) and compared with the committed
+  # baseline. The harness itself exits non-zero on a regression of more than 2 points, on a
+  # scenario set the baseline was not recorded for, on a README table that is not what the
+  # baseline renders to, and on a run longer than 60 s, so this job has no logic of its own.
+  evals-offline:
+    name: evals (offline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Run the golden scenarios against the committed baseline
+        run: |
+          set -euo pipefail
+          mkdir -p eval-runs
+          uv run python -m evals.run --offline \
+            --out eval-runs/results.json \
+            --table-out eval-runs/table.md \
+            --transcripts eval-runs/transcripts | tee eval-runs/output.txt
+
+      - name: Under 60 seconds, and the README table is the baseline's
+        # The harness has already failed the step above if either were false. This states the
+        # two numbers where a reader of the run will see them.
+        run: |
+          set -euo pipefail
+          duration="$(jq -r '.duration_s' eval-runs/results.json)"
+          echo "duration: ${duration} s (limit 60 s)"
+          jq -e '.duration_s < 60 and .failures == []' eval-runs/results.json > /dev/null
+          {
+            echo '### Evals (offline)'
+            echo
+            cat eval-runs/table.md
+            echo
+            echo "Ran in ${duration} s (limit 60 s)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Broken scenarios fail the gate
+        # The steps above cannot fail if the gate cannot. This one shows that it can. Two
+        # expected answers are changed, not one: with this many scenarios one is worth less
+        # than the 2 points the gate allows (docs/EVALS.md, "The gate"), and the point of this
+        # step is to see the points rule itself fire.
+        run: |
+          set -euo pipefail
+          cp -r evals/scenarios broken-scenarios
+          for name in happy-weather-vfr happy-weather-lifr; do
+            sed -i 's/^  answer: reported$/  answer: unknown/' "broken-scenarios/$name.yaml"
+            ! cmp -s "evals/scenarios/$name.yaml" "broken-scenarios/$name.yaml"
+          done
+          if uv run python -m evals.run --offline --scenarios broken-scenarios > broken.out; then
+            echo "::error::scenarios with broken expectations passed the gate"
+            exit 1
+          fi
+          grep -E "^FAIL: outcome: .* points below the baseline" broken.out
+
+      - name: Keep the table, the results and the transcripts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evals-offline
+          path: eval-runs/
           if-no-files-found: error
 
   contract:

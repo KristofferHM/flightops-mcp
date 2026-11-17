@@ -1,0 +1,45 @@
+id: happy-weather-vfr
+group: happy-path
+why: 'A current METAR and TAF exist and flag nothing: the answer reports that, and no more.'
+question: What is the weather at Stockholm Arlanda?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: ESSA
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: ESSA 160850Z 24008KT 9999 BKN030 08/05 Q1008
+        fltCat: VFR
+        temp: 8
+        dewp: 5
+        wdir: 240
+        wspd: 8
+        visib: 6+
+        altim: 1008
+    taf:
+      status: 200
+      json:
+      - icaoId: ESSA
+        issueTime: '2026-11-16T08:30:00Z'
+        rawTAF: TAF ESSA 160830Z 1609/1709 24010KT 9999 BKN030
+offline:
+  policy: airport_brief
+  params:
+    airport: Arlanda
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_weather
+  arguments:
+    airport_weather:
+      airport: ESSA
+  answer: reported

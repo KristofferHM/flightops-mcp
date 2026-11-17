@@ -1,0 +1,47 @@
+id: happy-weather-lifr
+group: happy-path
+why: 'Low visibility, fog and gusts are in the METAR: the flags are reported as flags.'
+question: Is the weather a problem at Gothenburg Landvetter?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: ESGG
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: ESGG 160850Z 24030G45KT 0500 FG VV002 02/02 Q0995
+        fltCat: LIFR
+        temp: 8
+        dewp: 5
+        wdir: 240
+        wspd: 30
+        visib: 0.3
+        altim: 995
+        wgst: 45
+        wxString: FG
+    taf:
+      status: 200
+      json:
+      - icaoId: ESGG
+        issueTime: '2026-11-16T08:30:00Z'
+        rawTAF: TAF ESGG 160830Z 1609/1709 24010KT 9999 BKN030
+offline:
+  policy: airport_brief
+  params:
+    airport: Landvetter
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_weather
+  arguments:
+    airport_weather:
+      airport: ESGG
+  answer: reported

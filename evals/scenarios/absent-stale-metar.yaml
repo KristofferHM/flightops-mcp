@@ -1,0 +1,46 @@
+id: absent-stale-metar
+group: absent-evidence
+why: 'The only METAR is six hours old when the question is asked: it is not ''right now''.'
+question: What are conditions at Gothenburg Landvetter right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: ESGG
+        reportTime: '2026-11-16T02:50:00Z'
+        rawOb: ESGG 160250Z 24008KT 9999 BKN030 08/05 Q1008
+        fltCat: VFR
+        temp: 8
+        dewp: 5
+        wdir: 240
+        wspd: 8
+        visib: 6+
+        altim: 1008
+    taf:
+      status: 200
+      json:
+      - icaoId: ESGG
+        issueTime: '2026-11-16T08:30:00Z'
+        rawTAF: TAF ESGG 160830Z 1609/1709 24010KT 9999 BKN030
+offline:
+  policy: airport_brief
+  params:
+    airport: Landvetter
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_weather
+  arguments:
+    airport_weather:
+      airport: ESGG
+  answer: unknown
+  absent_evidence: stale_data

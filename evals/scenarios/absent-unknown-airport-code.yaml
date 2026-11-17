@@ -1,0 +1,45 @@
+id: absent-unknown-airport-code
+group: absent-evidence
+why: 'A code that looks like an ICAO code and is not one: nothing is looked up in its place.'
+question: What is the weather at ESXX?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: ESGG
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: ESGG 160850Z 24008KT 9999 BKN030 08/05 Q1008
+        fltCat: VFR
+        temp: 8
+        dewp: 5
+        wdir: 240
+        wspd: 8
+        visib: 6+
+        altim: 1008
+    taf:
+      status: 200
+      json:
+      - icaoId: ESGG
+        issueTime: '2026-11-16T08:30:00Z'
+        rawTAF: TAF ESGG 160830Z 1609/1709 24010KT 9999 BKN030
+offline:
+  policy: airport_brief
+  params:
+    airport: ESXX
+expect:
+  tools:
+    required:
+    - resolve_airport
+  arguments:
+    resolve_airport:
+      query: ESXX
+  answer: unknown
+  absent_evidence: unknown_airport

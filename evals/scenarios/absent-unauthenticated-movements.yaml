@@ -1,0 +1,33 @@
+id: absent-unauthenticated-movements
+group: absent-evidence
+why: No OpenSky client, and the movements tool still answers `ok`, with every direction unknown.
+question: How many departures has ESSA had in the last hour?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    credentials: false
+offline:
+  policy: airport_movements
+  params:
+    airport: ESSA
+    direction: departure
+expect:
+  tools:
+    required:
+    - airport_movements
+    allowed:
+    - resolve_airport
+  arguments:
+    airport_movements:
+      airport: ESSA
+      direction: departure
+  answer:
+  - refused
+  - unknown
+  absent_evidence: unauthenticated_read

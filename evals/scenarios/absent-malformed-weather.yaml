@@ -1,0 +1,33 @@
+id: absent-malformed-weather
+group: absent-evidence
+why: 'NOAA answers 200 with an HTML error page: a body that is not a weather report.'
+question: What is the weather at Oslo Gardermoen?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      text: <html><body>Service temporarily unavailable</body></html>
+    taf:
+      status: 200
+      text: <html><body>Service temporarily unavailable</body></html>
+offline:
+  policy: airport_brief
+  params:
+    airport: Gardermoen
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_weather
+  arguments:
+    airport_weather:
+      airport: ENGM
+  answer: unknown
+  absent_evidence: malformed_payload

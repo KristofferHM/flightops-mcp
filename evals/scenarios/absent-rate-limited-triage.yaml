@@ -1,0 +1,65 @@
+id: absent-rate-limited-triage
+group: absent-evidence
+why: 'Bad weather is visible, traffic and movements are rate-limited: severity cannot be low.'
+question: Is Copenhagen disrupted?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: EKCH
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: EKCH 160850Z 24030G45KT 0500 FG VV002 02/02 Q0995
+        fltCat: LIFR
+        temp: 8
+        dewp: 5
+        wdir: 240
+        wspd: 30
+        visib: 0.3
+        altim: 995
+        wgst: 45
+        wxString: FG
+    taf:
+      status: 200
+      json:
+      - icaoId: EKCH
+        issueTime: '2026-11-16T08:30:00Z'
+        rawTAF: TAF EKCH 160830Z 1609/1709 24010KT 9999 BKN030
+  opensky:
+    states:
+      status: 429
+      headers:
+        x-rate-limit-retry-after-seconds: '900'
+        x-rate-limit-remaining: '0'
+    arrival:
+      status: 429
+      headers:
+        x-rate-limit-retry-after-seconds: '900'
+        x-rate-limit-remaining: '0'
+    departure:
+      status: 429
+      headers:
+        x-rate-limit-retry-after-seconds: '900'
+        x-rate-limit-remaining: '0'
+offline:
+  policy: airport_triage
+  params:
+    airport: Copenhagen
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - disruption_triage
+  arguments:
+    disruption_triage:
+      airport: EKCH
+  answer: unknown
+  absent_evidence: rate_limited

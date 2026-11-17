@@ -1,0 +1,23 @@
+id: absent-unknown-flight
+group: absent-evidence
+why: 'A flight the operations API has never heard of: unknown, not zero passengers.'
+question: How many passengers are on SK4711?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.passengers.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: passenger_impact
+  params:
+    flight: SK4711
+expect:
+  tools:
+    required:
+    - flight_passenger_impact
+  arguments:
+    flight_passenger_impact:
+      flight: SK4711
+  answer: unknown
+  absent_evidence: unknown_flight

@@ -1,0 +1,35 @@
+id: absent-empty-manifest
+group: absent-evidence
+why: 'A flight with nobody on file: no count to propose, and no proof that nobody is affected.'
+question: SK9001 on 2026-11-16 is delayed. Move its connecting passengers to SK1431.
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+  - flightops.passengers.read
+  - flightops.rebooking.write
+approval:
+  action: accept
+  approver: duty-manager-7
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: rebook_cohort
+  params:
+    from_flight: SK9001
+    flight_date: '2026-11-16'
+    to_flight: SK1431
+    cohort: connecting
+    reason_code: late_inbound
+expect:
+  tools:
+    required:
+    - flight_passenger_impact
+  arguments:
+    flight_passenger_impact:
+      flight: SK9001
+  answer:
+  - refused
+  - unknown
+  absent_evidence: empty_result

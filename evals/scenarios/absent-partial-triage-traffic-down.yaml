@@ -1,0 +1,80 @@
+id: absent-partial-triage-traffic-down
+group: absent-evidence
+why: 'Weather and movements answer, live traffic does not: the triage is missing a leg.'
+question: Is Stockholm Arlanda disrupted right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: ESSA
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: ESSA 160850Z 24008KT 9999 BKN030 08/05 Q1008
+        fltCat: VFR
+        temp: 8
+        dewp: 5
+        wdir: 240
+        wspd: 8
+        visib: 6+
+        altim: 1008
+    taf:
+      status: 200
+      json:
+      - icaoId: ESSA
+        issueTime: '2026-11-16T08:30:00Z'
+        rawTAF: TAF ESSA 160830Z 1609/1709 24010KT 9999 BKN030
+  opensky:
+    states:
+      status: 503
+    arrival:
+      status: 200
+      json:
+      - icao24: 4a91f9
+        firstSeen: 1794815400
+        estDepartureAirport: ESGG
+        lastSeen: 1794818700
+        estArrivalAirport: ESSA
+        callsign: 'SAS157  '
+        estDepartureAirportHorizDistance: 1180
+        estDepartureAirportVertDistance: 46
+        estArrivalAirportHorizDistance: 2210
+        estArrivalAirportVertDistance: 61
+        departureAirportCandidatesCount: 1
+        arrivalAirportCandidatesCount: 1
+    departure:
+      status: 200
+      json:
+      - icao24: 4ac9e1
+        firstSeen: 1794815100
+        estDepartureAirport: ESSA
+        lastSeen: 1794818400
+        estArrivalAirport: EKCH
+        callsign: 'SAS431  '
+        estDepartureAirportHorizDistance: 1180
+        estDepartureAirportVertDistance: 46
+        estArrivalAirportHorizDistance: 2210
+        estArrivalAirportVertDistance: 61
+        departureAirportCandidatesCount: 1
+        arrivalAirportCandidatesCount: 1
+offline:
+  policy: airport_triage
+  params:
+    airport: Arlanda
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - disruption_triage
+  arguments:
+    disruption_triage:
+      airport: ESSA
+  answer: unknown
+  absent_evidence: partial_coverage

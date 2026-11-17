@@ -40,6 +40,58 @@ credential or a passenger identifier.
 
 ---
 
+## Evaluation
+
+A demo shows it working once. This shows how often it works: the golden scenarios in
+[`evals/scenarios/`](evals/scenarios) are run end to end against the real server, and each run is scored on
+four axes that are reported separately, because they fail for different reasons. The table is the committed
+baseline (`evals/baseline.json`). CI re-runs the scenarios on every push and fails on a regression of more
+than 2 points on any line of it.
+
+<!-- evals:begin -->
+<!-- Written by the harness from evals/baseline.json. Do not edit: CI fails if this block and the baseline disagree. -->
+
+**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-17; **Scenarios:** 54
+
+| Axis | Passed | Applies to | Score |
+|---|---:|---:|---:|
+| Tool selection | 54 | 54 | 100.00 % |
+| Argument validity | 50 | 50 | 100.00 % |
+| Refusal correctness | 18 | 18 | 100.00 % |
+| No hallucination | 17 | 20 | 85.00 % |
+| Outcome (answer class, writes) | 47 | 54 | 87.04 % |
+| **Scenarios passing every check that applies** | 47 | 54 | 87.04 % |
+
+Absent-evidence group (answering confidently when the evidence is not there): **20 scenarios** over 9 kinds: `empty_result` 3, `malformed_payload` 3, `partial_coverage` 2, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 2, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
+
+Failing in this run, and published as such:
+
+| Scenario | Fails |
+|---|---|
+| `absent-malformed-rows` | no hallucination, outcome (answer class, writes) |
+| `absent-stale-metar` | no hallucination, outcome (answer class, writes) |
+| `absent-stale-traffic` | no hallucination, outcome (answer class, writes) |
+| `happy-movements-arrivals` | outcome (answer class, writes) |
+| `happy-movements-both` | outcome (answer class, writes) |
+| `happy-triage-composite` | outcome (answer class, writes) |
+| `happy-triage-elevated` | outcome (answer class, writes) |
+
+Regenerate: `uv run python -m evals.run --offline --update-baseline`. What these numbers measure, and what they do not: [`docs/EVALS.md`](docs/EVALS.md).
+<!-- evals:end -->
+
+Two things to read this table with. The model is `offline`: a scripted policy that is told which plan to
+follow, so the first two lines measure the server's contract and not anybody's planning. And the failures
+are left in on purpose: each is a place where the server answers confidently, or cannot answer, on evidence
+it should have questioned. They are listed with their causes in
+[`docs/EVALS.md`](docs/EVALS.md#what-fails-today-and-why).
+
+```bash
+uv run python -m evals.run --offline                     # the CI gate: no model, no network
+uv run python -m evals.run --offline --update-baseline   # record a new baseline, deliberately
+```
+
+---
+
 ## Architecture
 
 ```

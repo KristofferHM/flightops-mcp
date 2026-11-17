@@ -8,11 +8,12 @@ from typing import Any, cast
 
 from .approval import Approver
 from .clock import LogicalClock
-from .localstack import local_stack
+from .localstack import Upstreams, local_stack
 from .loop import SYSTEM, run_agent
 from .offline import OfflineProvider
-from .provider import Provider
+from .provider import Provider, ToolSpec
 from .scenarios import Scenario
+from .tools import ToolsUnavailable
 from .transcript import BACKENDS, Transcript
 
 
@@ -25,6 +26,9 @@ class RunResult:
     transcript: Transcript
     # Counted by the mock operations API, not by anything on the agent's side.
     ops_api: dict[str, int]
+    # The tools the server offered this user, with the schemas it published.
+    # The evaluation harness checks the run's arguments against these.
+    offered: tuple[ToolSpec, ...] = ()
 
 
 def build_provider(backend: str, scenario: Scenario, env: Mapping[str, str]) -> Provider:
@@ -80,8 +84,11 @@ async def run_scenario(
     clock: Callable[[], float],
     manifests: dict[str, list[dict[str, Any]]] | None = None,
     approver: Approver | None = None,
+    upstreams: Upstreams | None = None,
 ) -> RunResult:
-    async with local_stack(scenario, clock=clock, manifests=manifests, approver=approver) as stack:
+    async with local_stack(
+        scenario, clock=clock, manifests=manifests, approver=approver, upstreams=upstreams
+    ) as stack:
         # The server's own instructions go to the planner with the agent's.
         instructions = stack.tools.instructions
         transcript = await run_agent(
@@ -94,4 +101,8 @@ async def run_scenario(
             clock=clock,
             system=f"{SYSTEM}\n{instructions}" if instructions else SYSTEM,
         )
-        return RunResult(transcript=transcript, ops_api=stack.ops_api_counts())
+        try:
+            offered = await stack.tools.list_tools()
+        except ToolsUnavailable:
+            offered = ()
+        return RunResult(transcript=transcript, ops_api=stack.ops_api_counts(), offered=offered)

@@ -1,0 +1,68 @@
+id: happy-traffic-radius
+group: happy-path
+why: 'A radius is asked for: it is passed, in range, as the tool''s own argument.'
+question: What is flying within 80 nautical miles of ESSA?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    states:
+      status: 200
+      json:
+        time: 1794819595
+        states:
+        - - 4a91f9
+          - 'SAS157  '
+          - Sweden
+          - 1794819592
+          - 1794819592
+          - 17.6
+          - 59.9
+          - 3352.8
+          - false
+          - 118.3
+          - 182.0
+          - 0.0
+          - null
+          - 3352.8
+          - '1000'
+          - false
+          - 0
+        - - 4ca7b5
+          - 'RYR8ZM  '
+          - Sweden
+          - 1794819592
+          - 1794819592
+          - 18.42
+          - 59.31
+          - 10058.4
+          - false
+          - 118.3
+          - 182.0
+          - 0.0
+          - null
+          - 10058.4
+          - '1000'
+          - false
+          - 0
+offline:
+  policy: airport_traffic
+  params:
+    airport: ESSA
+    radius_nm: 80
+expect:
+  tools:
+    required:
+    - airport_live_traffic
+    allowed:
+    - resolve_airport
+  arguments:
+    airport_live_traffic:
+      airport: ESSA
+      radius_nm: 80
+  answer: reported

@@ -1,0 +1,42 @@
+id: absent-partial-no-taf
+group: absent-evidence
+why: 'An observation exists and the forecast does not: half of the question has no answer.'
+question: What is the weather at Bergen, and what is the forecast?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: ENBR
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: ENBR 160850Z 24008KT 9999 BKN030 08/05 Q1008
+        fltCat: VFR
+        temp: 8
+        dewp: 5
+        wdir: 240
+        wspd: 8
+        visib: 6+
+        altim: 1008
+    taf:
+      status: 204
+offline:
+  policy: airport_brief
+  params:
+    airport: Bergen
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_weather
+  arguments:
+    airport_weather:
+      airport: ENBR
+  answer: unknown
+  absent_evidence: partial_coverage

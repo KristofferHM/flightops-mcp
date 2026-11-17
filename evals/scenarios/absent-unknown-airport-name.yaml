@@ -1,0 +1,25 @@
+id: absent-unknown-airport-name
+group: absent-evidence
+why: 'An airport that does not exist: no similar airport is substituted for it.'
+question: Is Atlantis International disrupted?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: airport_triage
+  params:
+    airport: Atlantis International
+expect:
+  tools:
+    required:
+    - resolve_airport
+  arguments:
+    resolve_airport:
+      query: Atlantis International
+  answer: unknown
+  absent_evidence: unknown_airport

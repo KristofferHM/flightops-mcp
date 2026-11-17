@@ -8,9 +8,11 @@ exchanged by the IdP fixture, and the approval gate is the one in
 
 What is a fixture, and is named as one:
 
-* **The upstreams.** OpenSky and AviationWeather answer from here, and they
-  answer with nothing: no aircraft, no METAR. That is a legitimate state of the
-  world, and the tools must report it as unknown.
+* **The upstreams.** OpenSky and AviationWeather answer from here. Unless a run
+  says otherwise (`Upstreams`) they answer with nothing: no aircraft, no METAR.
+  That is a legitimate state of the world, and the tools must report it as
+  unknown. The evaluation harness describes other states of the world, one per
+  scenario, through the same seam.
 * **The IdP.** `services/idp` mints a user token on request (ADR 0001). The
   approver obtains a grant from it like any other principal (ADR 0003).
 * **Its secrets.** Client secrets are generated per stack and die with it.
@@ -27,7 +29,7 @@ import secrets
 import tempfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
@@ -63,16 +65,60 @@ SERVER_CLIENT: Final = "flightops-mcp"
 SEED_AIRPORTS: Final = Path(__file__).parent.parent / "data" / "airports_seed.csv"
 
 
+Handler = Callable[[httpx.Request], httpx.Response]
+
+
+def _no_traffic(request: httpx.Request) -> httpx.Response:
+    if "/flights/" in request.url.path:
+        return httpx.Response(200, json=[])
+    return httpx.Response(200, json={"time": 0, "states": []})
+
+
+def _upstream_token(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json={"access_token": _throwaway(), "expires_in": 1800})
+
+
+def _no_weather(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(204)
+
+
+@dataclass(frozen=True, slots=True)
+class Upstreams:
+    """What the world outside the server answers during one run.
+
+    The defaults are the empty world: no aircraft, no weather report, a working
+    OpenSky client. A handler may raise an `httpx` error to be a dead upstream.
+    """
+
+    opensky: Handler = _no_traffic
+    opensky_token: Handler = _upstream_token
+    weather: Handler = _no_weather
+    # False runs the server with no OpenSky client configured at all.
+    opensky_credentials: bool = True
+    # Answers a request to the operations API in its place. None lets it through.
+    ops: Callable[[httpx.Request], httpx.Response | None] | None = None
+    # Free seats per target flight. None keeps the operations API's own.
+    seats: dict[str, int] | None = field(default=None)
+
+
 class _OpsTap(httpx.AsyncBaseTransport):
     """Passes requests through to the operations API and counts the rebooking ones."""
 
-    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
+    def __init__(
+        self,
+        inner: httpx.AsyncBaseTransport,
+        override: Callable[[httpx.Request], httpx.Response | None] | None = None,
+    ) -> None:
         self._inner = inner
+        self._override = override
         self.rebooking_requests = 0
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/rebookings":
             self.rebooking_requests += 1
+        answered = self._override(request) if self._override else None
+        if answered is not None:
+            return answered
         return await self._inner.handle_async_request(request)
 
 
@@ -129,13 +175,16 @@ async def local_stack(
     clock: Callable[[], float],
     manifests: dict[str, list[dict[str, Any]]] | None = None,
     approver: Approver | None = None,
+    upstreams: Upstreams | None = None,
 ) -> AsyncIterator[LocalStack]:
     """Bring the system up for one run, connected as the scenario's user.
 
     `clock` is the run's clock, used for what the agent records. `manifests`
-    replaces the operations API's passengers, and `approver` the scripted
-    approval channel; both exist for tests.
+    replaces the operations API's passengers, `approver` the scripted approval
+    channel, and `upstreams` what OpenSky, AviationWeather and the operations API
+    answer. They exist for tests and for the evaluation harness.
     """
+    world = upstreams or Upstreams()
     server_secret = secrets.token_urlsafe(24)
     idp_app = create_idp(
         IdpConfig(
@@ -159,8 +208,9 @@ async def local_stack(
         OpsApiConfig(issuer=ISSUER, jwks_url=jwks_url, audience=OPS_AUDIENCE),
         jwks_transport=idp,
         manifests=manifests,
+        seats=world.seats,
     )
-    ops = _OpsTap(httpx.ASGITransport(app=ops_app))
+    ops = _OpsTap(httpx.ASGITransport(app=ops_app), world.ops)
 
     with tempfile.TemporaryDirectory(
         prefix="flightops-agent-", ignore_cleanup_errors=True
@@ -169,8 +219,8 @@ async def local_stack(
         build_from_csv(SEED_AIRPORTS, airports_db)
         settings = Settings(
             _env_file=None,  # type: ignore[call-arg]  # a developer's .env must not leak into a run
-            opensky_client_id="offline-fixture",
-            opensky_client_secret=_throwaway(),
+            opensky_client_id="offline-fixture" if world.opensky_credentials else None,
+            opensky_client_secret=_throwaway() if world.opensky_credentials else None,
             airports_db=airports_db,
             backoff_base_s=0.0,
             auth_issuer=ISSUER,
@@ -185,9 +235,9 @@ async def local_stack(
         )
         runtime = Runtime.build(
             settings,
-            opensky_transport=httpx.MockTransport(_no_traffic),
-            token_transport=httpx.MockTransport(_upstream_token),
-            weather_transport=httpx.MockTransport(_no_weather),
+            opensky_transport=httpx.MockTransport(world.opensky),
+            token_transport=httpx.MockTransport(world.opensky_token),
+            weather_transport=httpx.MockTransport(world.weather),
             idp_transport=idp,
             ops_transport=ops,
         )
@@ -246,17 +296,3 @@ async def _user_token(
 def _throwaway() -> str:
     """A secret for a fixture that lives as long as this process. Never a constant."""
     return secrets.token_urlsafe(24)
-
-
-def _no_traffic(request: httpx.Request) -> httpx.Response:
-    if "/flights/" in request.url.path:
-        return httpx.Response(200, json=[])
-    return httpx.Response(200, json={"time": 0, "states": []})
-
-
-def _upstream_token(_request: httpx.Request) -> httpx.Response:
-    return httpx.Response(200, json={"access_token": _throwaway(), "expires_in": 1800})
-
-
-def _no_weather(_request: httpx.Request) -> httpx.Response:
-    return httpx.Response(204)

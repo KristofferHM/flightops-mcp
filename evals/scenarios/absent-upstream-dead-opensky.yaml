@@ -1,0 +1,29 @@
+id: absent-upstream-dead-opensky
+group: absent-evidence
+why: 'OpenSky cannot be reached at all: a dead connection, on every retry.'
+question: What is flying around Frankfurt?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    states:
+      error: connect
+offline:
+  policy: airport_traffic
+  params:
+    airport: Frankfurt
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_live_traffic
+  arguments:
+    airport_live_traffic:
+      airport: EDDF
+  answer: unknown
+  absent_evidence: upstream_error
