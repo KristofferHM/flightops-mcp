@@ -288,6 +288,8 @@ async def test_every_refusal_leaves_an_audit_record_naming_the_approver(
     code: str,
     reason: str,
 ) -> None:
+    # A copy: the parameter dict is shared by every run of this test in the process.
+    claims = dict(claims)
     offset = claims.pop("now_offset", 0)
     token = grant(clock, now=clock() + offset, **claims)
     clock.advance(advance)
