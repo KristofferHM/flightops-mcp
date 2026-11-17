@@ -43,7 +43,7 @@ from flightops_mcp.config import Settings
 from flightops_mcp.errors import ToolFailure
 from flightops_mcp.rebooking import approved_digest
 
-from .authkit import ISSUER, JWKS_URL, RESOURCE, JwksEndpoint, signing_key
+from .authkit import ISSUER, JWKS_URL, RESOURCE, JwksEndpoint, forge, signing_key
 from .conftest import FakeClock, LogCapture
 from .test_approval import APPROVER, AUDIENCE, PROPOSAL, PROPOSER, detail, grant
 
@@ -96,6 +96,7 @@ async def test_rejections_carry_what_an_operator_needs(clock: FakeClock, logs: L
     other = signing_key("contract-other")
     await check.verify_token(other.mint(now=clock(), kid=KEY.kid))
     expired = KEY.mint(now=clock() - 400, expires_in=300)
+    clock.advance(0.25)  # expired for 100.25 s: the log rounds to one decimal
     await check.verify_token(expired)
     # Correctly signed, but the payload is a JSON array: PyJWT's generic error path.
     await check.verify_token(
@@ -107,8 +108,22 @@ async def test_rejections_carry_what_an_operator_needs(clock: FakeClock, logs: L
     assert "malformed" in by_reason
     assert by_reason["unknown_key_id"]["kid"] == "unknown-kid"
     assert by_reason["bad_signature"]["kid"] == KEY.kid
-    assert by_reason["expired"]["expired_for_s"] == 100.0
+    assert by_reason["expired"]["expired_for_s"] == 100.2
     assert by_reason["invalid"]["error_class"] == "DecodeError"
+
+
+@pytest.mark.parametrize(
+    ("kid", "reason"),
+    # PyJWT refuses a header whose `kid` is not a string before our check runs; an empty
+    # string reaches it, and is the case that tells "missing" from "unknown".
+    [("", "missing_key_id"), (5, "malformed"), (None, "malformed"), (["key"], "malformed")],
+)
+async def test_a_key_id_that_is_not_a_non_empty_string_is_refused_before_a_lookup(
+    clock: FakeClock, logs: LogCapture, kid: Any, reason: str
+) -> None:
+    token = forge({"alg": "RS256", "typ": "JWT", "kid": kid}, {"sub": "x"})
+    assert await verifier(clock).verify_token(token) is None
+    assert logs.events("token_rejected")[-1]["reason"] == reason
 
 
 async def test_the_client_is_azp_then_appid_then_sub(clock: FakeClock) -> None:
@@ -267,7 +282,7 @@ async def refused(approvals: ApprovalVerifier, token: str, proposer: str = PROPO
         ),
         ({}, APPROVER, 0, "approver_is_proposer", "self_approval"),
         ({"now_offset": 600}, PROPOSER, 0, "approval_invalid", "issued_in_the_future"),
-        ({"expires_in": 3600.0}, PROPOSER, 400, "approval_expired", "too_old"),
+        ({"expires_in": 3600.0}, PROPOSER, 400.25, "approval_expired", "too_old"),
         ({"authorization_details": []}, PROPOSER, 0, "approval_invalid", "names_no_proposal"),
         (
             {"authorization_details": [detail({"v": 1, "from_flight": "SK1"})]},
@@ -299,7 +314,7 @@ async def test_every_refusal_leaves_an_audit_record_naming_the_approver(
     assert event["reason"] == reason
     assert event["approver"] == APPROVER
     if reason == "too_old":
-        assert event["age_s"] == 400.0
+        assert event["age_s"] == 400.2
     assert token not in logs.text
 
 
@@ -340,6 +355,23 @@ async def test_a_grant_whose_issue_time_is_not_a_number_is_invalid(
     assert await refused(approvals, grant(clock)) == "approval_invalid"
 
 
+async def test_the_approval_verifier_uses_the_configured_clock_skew(
+    settings: Settings, clock: FakeClock
+) -> None:
+    approvals = build_approval_verifier(
+        configured(settings, auth_clock_skew_s=5.0, approval_audience=AUDIENCE),
+        jwks_transport=JwksEndpoint(APPROVAL_KEY).transport,
+        clock=clock,
+    )
+    await approvals.verify(
+        grant(clock, nbf=int(clock()) + 5),
+        proposal_sha256=PROPOSAL.sha256,
+        proposer=PROPOSER,
+        digest=approved_digest,
+    )
+    assert await refused(approvals, grant(clock, nbf=int(clock()) + 6)) == "approval_invalid"
+
+
 async def test_the_default_age_limit_is_five_minutes(clock: FakeClock) -> None:
     approvals = approvals_for(clock)
     token = grant(clock, expires_in=3600.0)
@@ -351,21 +383,29 @@ async def test_the_default_age_limit_is_five_minutes(clock: FakeClock) -> None:
     assert await refused(approvals, token) == "approval_expired"
 
 
-REFUSALS = [
-    approval_module.approval_required("Because."),
-    approval_module.approval_declined("decline"),
-    approval_module.approval_invalid(),
-    approval_module.approval_expired(),
-    approval_module.approval_payload_mismatch("a", "b"),
-    approval_module.approver_not_authorised(),
-    approval_module.approver_is_proposer(),
-    approval_module.approval_not_configured(),
+# Constructors and their arguments, not failures: a failure built at import time is built
+# before any mutant is switched on, so a test of it can never fail. The second mutation run
+# showed exactly that (every `hint=None` survived a test that looked as if it checked hints).
+REFUSALS: list[tuple[Any, tuple[Any, ...]]] = [
+    (approval_module.approval_required, ("Because.",)),
+    (approval_module.approval_declined, ("decline",)),
+    (approval_module.approval_invalid, ()),
+    (approval_module.approval_expired, ()),
+    (approval_module.approval_payload_mismatch, ("a", "b")),
+    (approval_module.approver_not_authorised, ()),
+    (approval_module.approver_is_proposer, ()),
+    (approval_module.approval_not_configured, ()),
 ]
 
 
-@pytest.mark.parametrize("failure", REFUSALS, ids=lambda failure: failure.code)
-def test_every_approval_refusal_says_what_happened_and_what_to_do(failure: ToolFailure) -> None:
+@pytest.mark.parametrize(
+    ("build", "args"), REFUSALS, ids=lambda item: getattr(item, "__name__", "")
+)
+def test_every_approval_refusal_says_what_happened_and_what_to_do(
+    build: Any, args: tuple[Any, ...]
+) -> None:
     """CLAUDE.md rule 3: code, message and hint, so the model can act on it."""
+    failure: ToolFailure = build(*args)
     payload = failure.to_payload()["error"]
     assert payload["code"] == failure.code
     assert payload["message"]
@@ -492,6 +532,27 @@ async def test_a_body_in_several_chunks_is_read_whole_and_replayed_whole() -> No
     )
     assert allowed.calls == 1
     assert allowed.body == body, "the app downstream gets every byte, in order"
+
+
+async def test_a_final_message_need_not_say_more_body_false() -> None:
+    """ASGI's default for `more_body` is False: reading on would wait for a message never sent."""
+    _, sent = await drive([{"type": "http.request", "body": call("airport_weather")}])
+    assert sent[0]["status"] == 403
+
+
+async def test_the_size_limit_is_on_the_whole_body_not_each_chunk() -> None:
+    # A call the token cannot make, one byte over the limit in total, in two chunks that
+    # are each well under it. Only the running total can tell this from an inspectable body.
+    body = call("airport_weather")
+    body += b" " * (DEFAULT_MAX_REQUEST_BODY_SIZE + 1 - len(body))
+    half = len(body) // 2
+    messages = [
+        {"type": "http.request", "body": body[:half], "more_body": True},
+        {"type": "http.request", "body": body[half:], "more_body": False},
+    ]
+    app, sent = await drive(messages)
+    assert app.calls == 1, "over the limit in total: passed on uninspected"
+    assert sent[0]["status"] == 200
 
 
 async def test_a_message_without_a_body_key_is_an_empty_chunk() -> None:

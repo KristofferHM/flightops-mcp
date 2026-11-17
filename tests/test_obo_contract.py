@@ -229,6 +229,34 @@ async def test_a_rejection_is_logged_with_what_was_asked_for(
     assert event["idp_error"] == "consent_required"
 
 
+async def test_several_scopes_are_asked_for_space_separated(
+    settings: Settings, clock: FakeClock
+) -> None:
+    exchanger, endpoint = exchanger_with(settings, clock)
+    await exchanger.token_for(user("alice"), audience=OPS_AUDIENCE, scopes=["a.read", "b.read"])
+    (request,) = endpoint.requests
+    assert dict(httpx.QueryParams(request.content.decode()))["scope"] == "a.read b.read"
+
+
+async def test_an_exchange_is_logged_with_its_target_and_lifetime(
+    settings: Settings, clock: FakeClock, logs: LogCapture
+) -> None:
+    exchanger, _ = exchanger_with(settings, clock)
+    await exchanger.token_for(user("alice"), audience=OPS_AUDIENCE, scopes=["a", "b"])
+    (event,) = logs.events("obo_exchanged")
+    assert (event["audience"], event["scope"], event["ttl_s"]) == (OPS_AUDIENCE, "a b", 300.0)
+
+
+async def test_an_entry_is_pruned_at_the_instant_it_expires(
+    settings: Settings, clock: FakeClock
+) -> None:
+    exchanger, _ = exchanger_with(settings, clock)
+    await exchanger.token_for(user("early"), audience=OPS_AUDIENCE, scopes=["a"])
+    clock.advance(300 - 30)  # exactly its expiry
+    await exchanger.token_for(user("late"), audience=OPS_AUDIENCE, scopes=["a"])
+    assert len(exchanger._cache) == 1
+
+
 async def test_exchanges_are_counted(settings: Settings, clock: FakeClock) -> None:
     exchanger, _ = exchanger_with(settings, clock)
     for name in ("a", "b", "c"):
@@ -260,8 +288,12 @@ def test_each_server_credential_is_required(settings: Settings, missing: str) ->
     assert OboExchanger(obo_settings(settings)).configured() is True
 
 
-@pytest.mark.parametrize("failure", [obo_not_configured(), obo_exchange_rejected("x")])
-def test_every_refusal_says_what_happened_and_what_to_do(failure: ToolFailure) -> None:
+# Built inside the test: one built at import time exists before a mutant is switched on.
+@pytest.mark.parametrize(
+    ("build", "args"), [(obo_not_configured, ()), (obo_exchange_rejected, ("x",))]
+)
+def test_every_refusal_says_what_happened_and_what_to_do(build: Any, args: tuple[Any, ...]) -> None:
+    failure: ToolFailure = build(*args)
     assert failure.message
     assert failure.hint
     assert failure.to_payload()["error"]["hint"] == failure.hint
