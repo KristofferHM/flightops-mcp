@@ -69,6 +69,8 @@ def test_a_drop_of_more_than_two_points_fails_and_names_the_axis() -> None:
         "no_hallucination: 90.00 is 4.00 points below the baseline's 94.00 "
         "(more than the 2 allowed)",
         "overall: 90.00 is 4.00 points below the baseline's 94.00 (more than the 2 allowed)",
+        "scenarios: 2 now fail a check they passed in the baseline (absent-003, absent-004); "
+        "more than the 0 allowed",
     ]
     assert "absent-003 now fails no_hallucination" in verdict.notes
     assert "absent-004 now fails no_hallucination" in verdict.notes
@@ -79,7 +81,8 @@ def test_a_drop_of_exactly_two_points_is_inside_the_limit_and_is_still_said() ->
     recorded = baselines.record(run_of(scenarios(50, failing=3)), "2026-11-17")
     slightly_worse = run_of(scenarios(50, failing=4))
 
-    verdict = baselines.compare(recorded, slightly_worse)
+    # The points rule on its own; the scenario rule is tested below.
+    verdict = baselines.compare(recorded, slightly_worse, max_regressed_scenarios=1)
 
     assert verdict.failures == []
     assert (
@@ -97,24 +100,49 @@ def test_one_more_failure_among_forty_is_already_over_the_limit() -> None:
     assert verdict.failures[0].startswith("no_hallucination: 97.50 is 2.50 points below")
 
 
-def test_one_more_failure_among_fifty_four_is_inside_the_limit_and_two_are_not() -> None:
+def test_one_more_failure_among_fifty_four_passes_the_points_rule_and_fails_the_scenario_rule() -> (
+    None
+):
     """The arithmetic of the committed set, pinned so nobody has to discover it.
 
-    An axis that applies to 54 scenarios moves 1.85 points per scenario. One
-    regression there is a note, not a failure. That is the limit as specified,
-    and docs/EVALS.md says what it costs.
+    An axis that applies to 54 scenarios moves 1.85 points per scenario, so the
+    points rule alone lets one regression through. The scenario rule does not,
+    and the stricter of the two decides.
     """
     recorded = baselines.record(run_of(scenarios(54)), "2026-11-17")
+    one_down = run_of(scenarios(54, failing=1, check="outcome"))
 
-    one = baselines.compare(recorded, run_of(scenarios(54, failing=1, check="outcome")))
-    two = baselines.compare(recorded, run_of(scenarios(54, failing=2, check="outcome")))
-
-    assert one.failures == []
-    assert "absent-000 now fails outcome" in one.notes
-    assert "outcome: 98.15 is 1.85 points below the baseline's 100.00, inside the 2 allowed" in (
-        one.notes
+    points_only = baselines.compare(recorded, one_down, max_regressed_scenarios=54)
+    both = baselines.compare(recorded, one_down)
+    two = baselines.compare(
+        recorded, run_of(scenarios(54, failing=2, check="outcome")), max_regressed_scenarios=54
     )
+
+    assert points_only.failures == []
+    assert "outcome: 98.15 is 1.85 points below the baseline's 100.00, inside the 2 allowed" in (
+        points_only.notes
+    )
+    assert both.failures == [
+        "scenarios: 1 now fail a check they passed in the baseline (absent-000); "
+        "more than the 0 allowed"
+    ]
+    assert "absent-000 now fails outcome" in both.notes
     assert [failure.split(":")[0] for failure in two.failures] == ["outcome", "overall"]
+
+
+def test_the_scenario_limit_is_a_setting() -> None:
+    recorded = baselines.record(run_of(scenarios(54)), "2026-11-17")
+    two_down = run_of(scenarios(54, failing=2, check="outcome"))
+
+    def failures(limit: int) -> list[str]:
+        # Points switched off, so only the scenario rule can fire.
+        verdict = baselines.compare(
+            recorded, two_down, max_regression=100, max_regressed_scenarios=limit
+        )
+        return verdict.failures
+
+    assert failures(2) == []
+    assert [failure.split(":")[0] for failure in failures(1)] == ["scenarios"]
 
 
 def test_only_the_axis_that_dropped_is_reported() -> None:
@@ -123,15 +151,26 @@ def test_only_the_axis_that_dropped_is_reported() -> None:
 
     failures = baselines.compare(recorded, worse).failures
 
-    assert [failure.split(":")[0] for failure in failures] == ["tool_selection", "overall"]
+    assert [failure.split(":")[0] for failure in failures] == [
+        "tool_selection",
+        "overall",
+        "scenarios",
+    ]
 
 
 def test_the_limit_is_a_setting_and_zero_means_any_drop() -> None:
     recorded = baselines.record(run_of(scenarios(100)), "2026-11-17")
     one_down = run_of(scenarios(100, failing=1))
 
-    assert baselines.compare(recorded, one_down).failures == []
-    assert len(baselines.compare(recorded, one_down, max_regression=0).failures) == 2
+    assert baselines.compare(recorded, one_down, max_regressed_scenarios=1).failures == []
+    assert (
+        len(
+            baselines.compare(
+                recorded, one_down, max_regression=0, max_regressed_scenarios=1
+            ).failures
+        )
+        == 2
+    )
 
 
 # --- improvement ------------------------------------------------------------------------------
@@ -149,8 +188,8 @@ def test_a_better_run_passes_and_does_not_move_the_baseline() -> None:
     assert baselines.dump(recorded) == before, "comparing does not write"
 
 
-def test_a_fix_and_a_break_that_cancel_out_are_both_named() -> None:
-    """The score is unchanged, so the build passes. The swap is still printed."""
+def test_a_fix_and_a_break_that_cancel_out_still_fail_on_the_break() -> None:
+    """The score is unchanged, so the points rule passes. The scenario rule does not."""
     recorded = baselines.record(
         run_of([result("absent-a", fails=("outcome",)), result("absent-b")]), "2026-11-17"
     )
@@ -158,7 +197,10 @@ def test_a_fix_and_a_break_that_cancel_out_are_both_named() -> None:
 
     verdict = baselines.compare(recorded, swapped)
 
-    assert verdict.failures == []
+    assert verdict.failures == [
+        "scenarios: 1 now fail a check they passed in the baseline (absent-b); "
+        "more than the 0 allowed"
+    ]
     assert "absent-a now passes outcome" in verdict.notes
     assert "absent-b now fails outcome" in verdict.notes
 

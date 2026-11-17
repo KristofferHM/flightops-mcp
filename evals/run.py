@@ -8,6 +8,7 @@
 no network, and it exits non-zero when:
 
 * a score is more than `--max-regression` points below `evals/baseline.json`,
+* more than `--max-regressed-scenarios` scenarios fail a check they passed there,
 * the scenarios are not the ones the baseline was recorded for,
 * the README's table is not what the baseline renders to,
 * or the run took longer than `--max-seconds`.
@@ -129,7 +130,12 @@ def _gate(run: Mapping[str, Any], args: argparse.Namespace) -> list[str]:
         recorded = baselines.load(args.baseline)
     except baselines.BaselineInvalid as exc:
         return [f"{exc}. Record one with --update-baseline."]
-    verdict = baselines.compare(recorded, run, max_regression=args.max_regression)
+    verdict = baselines.compare(
+        recorded,
+        run,
+        max_regression=args.max_regression,
+        max_regressed_scenarios=args.max_regressed_scenarios,
+    )
     for note in verdict.notes:
         print(f"note: {note}")
     failures = list(verdict.failures)
@@ -207,6 +213,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--transcripts", type=Path, help="keep every transcript in this directory")
     parser.add_argument("--max-seconds", type=float, default=MAX_SECONDS)
     parser.add_argument("--max-regression", type=float, default=baselines.MAX_REGRESSION)
+    parser.add_argument(
+        "--max-regressed-scenarios", type=int, default=baselines.MAX_REGRESSED_SCENARIOS
+    )
     parser.add_argument("--date", help="the run's date, YYYY-MM-DD (default: today, UTC)")
     parser.add_argument("--verbose", action="store_true", help="show the server's warnings")
     return parser

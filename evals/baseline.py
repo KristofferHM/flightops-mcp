@@ -6,9 +6,14 @@ every scenario it was recorded for. A run is compared with it and nothing else.
 
 Three rules:
 
-* **Worse fails.** A check, or the overall figure, more than `max_regression`
-  points below the baseline fails the build. Points, not percent of percent:
-  95.0 against a baseline of 97.5 is 2.5 points down.
+* **Worse fails, counted two ways.** A check, or the overall figure, more than
+  `max_regression` points below the baseline fails the build. Points, not
+  percent of percent: 95.0 against a baseline of 97.5 is 2.5 points down. And
+  more than `max_regressed_scenarios` scenarios failing a check they passed in
+  the baseline fails it too. Both are applied; whichever is stricter decides.
+  With 54 scenarios one is worth 1.85 points on the wide axes, so the points
+  rule alone would let a single scenario regress unseen. The offline run is
+  deterministic, so the scenario limit is 0: any scenario that gets worse fails.
 * **Better does not update.** A run that beats the baseline passes and says so.
   The baseline moves only when someone runs `--update-baseline` and commits the
   file, so it cannot ratchet up, or be lowered, by accident.
@@ -31,6 +36,7 @@ from .scoring import CHECKS
 SCHEMA: Final = "flightops.evals.baseline/v1"
 DEFAULT_PATH: Final = Path(__file__).parent / "baseline.json"
 MAX_REGRESSION: Final = 2.0
+MAX_REGRESSED_SCENARIOS: Final = 0
 
 
 class BaselineInvalid(Exception):
@@ -85,7 +91,11 @@ def load(path: Path) -> dict[str, Any]:
 
 
 def compare(
-    baseline: Mapping[str, Any], run: Mapping[str, Any], *, max_regression: float = MAX_REGRESSION
+    baseline: Mapping[str, Any],
+    run: Mapping[str, Any],
+    *,
+    max_regression: float = MAX_REGRESSION,
+    max_regressed_scenarios: int = MAX_REGRESSED_SCENARIOS,
 ) -> Comparison:
     """What `run` is, measured against `baseline`."""
     verdict = Comparison()
@@ -131,15 +141,22 @@ def compare(
             verdict.improved = True
             verdict.notes.append(f"{label}: {after:.2f}, up {delta:.2f} from {before:.2f}")
 
+    regressed: list[str] = []
     for name in sorted(set(current) & set(recorded)):
         was, now = recorded[name]["checks"], current[name]["checks"]
         broke = [c for c in CHECKS if was.get(c) is True and now[c]["passed"] is False]
         fixed = [c for c in CHECKS if was.get(c) is False and now[c]["passed"] is True]
         if broke:
+            regressed.append(name)
             verdict.notes.append(f"{name} now fails {', '.join(broke)}")
         if fixed:
             verdict.improved = True
             verdict.notes.append(f"{name} now passes {', '.join(fixed)}")
+    if len(regressed) > max_regressed_scenarios:
+        verdict.failures.append(
+            f"scenarios: {len(regressed)} now fail a check they passed in the baseline "
+            f"({', '.join(regressed)}); more than the {max_regressed_scenarios} allowed"
+        )
 
     if verdict.improved and not verdict.failures:
         verdict.notes.append(

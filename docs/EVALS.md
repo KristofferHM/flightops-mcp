@@ -154,7 +154,8 @@ an agent built on a model is, and the README says so beside the table.
 
 | Failure | Why it is a failure |
 |---|---|
-| An axis, the outcome check or the overall figure is **more than 2 points** below the baseline | A regression. Points, not percent of percent: 95.0 against 97.5 is 2.5 down. `--max-regression` changes the limit. |
+| An axis, the outcome check or the overall figure is **more than 2 points** below the baseline | A regression, in points. Points, not percent of percent: 95.0 against 97.5 is 2.5 down. `--max-regression` changes the limit. |
+| **More than 0 scenarios** fail a check they passed in the baseline | A regression, in scenarios. `--max-regressed-scenarios` changes the limit. |
 | The scenarios are not the ones the baseline was recorded for | An added, removed or edited scenario makes the two runs incomparable. Without this, deleting a failing scenario would raise the score. |
 | The README block is not what the baseline renders to | The table is generated. A hand-edited number is a different block. |
 | The run took longer than 60 s | `--max-seconds`. The duration is printed and written to the results. |
@@ -164,21 +165,19 @@ baseline moves only when someone runs `--update-baseline` and commits `evals/bas
 together. It cannot ratchet up by accident, and it cannot be lowered by accident either. CI never passes that
 flag.
 
-**What 2 points means in scenarios.** One scenario is worth `100 / N` points on an axis that applies to `N`
-scenarios. So the limit bites differently per line of the table:
+**Why two limits, and which one decides.** One scenario is worth `100 / N` points on a line that applies to
+`N` scenarios:
 
-| Scenarios an axis applies to | One scenario is worth | One regression |
+| Scenarios a line applies to | One scenario is worth | One regression, points rule alone |
 |---|---|---|
-| fewer than 50 (refusal correctness, no hallucination) | more than 2 points | fails the build |
-| 50 or more (tool selection, argument validity, outcome, overall) | 2 points or less | **passes**, printed as a `note:` line |
+| fewer than 50 (refusal correctness, no hallucination) | more than 2 points | fails |
+| 50 or more (tool selection, argument validity, outcome, overall) | 2 points or less (1.85 at 54) | passes |
 
-That is the limit working as specified, and it is weaker than it sounds on the wide axes: a single scenario
-can regress there without failing the build, and two cannot. The note names the scenario and the check, so
-it is visible in the job log, and it does not stop a merge. `--max-regression 0` makes any drop fail; whether
-CI should run with it is an open decision, not something this phase changed.
-
-A drop of exactly 2 points passes and is printed as a note. A fix and a break that cancel out leave the
-score unchanged, so the build passes; both are still printed.
+So a points rule alone lets a single scenario regress on the wide lines, and the roadmap's "more than 2
+points" is weaker than it sounds. Both rules are applied and the stricter one decides. The offline run is
+deterministic, so the scenario limit is 0, and at 54 scenarios it is always the stricter: any scenario that
+gets worse fails the build, with the scenario and the check named. A fix and a break that cancel out leave
+every score unchanged and still fail, on the break.
 
 ## Adding a scenario
 

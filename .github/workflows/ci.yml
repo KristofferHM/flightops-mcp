@@ -179,8 +179,8 @@ jobs:
       - name: Broken scenarios fail the gate
         # The steps above cannot fail if the gate cannot. This one shows that it can. Two
         # expected answers are changed, not one: with this many scenarios one is worth less
-        # than the 2 points the gate allows (docs/EVALS.md, "The gate"), and the point of this
-        # step is to see the points rule itself fire.
+        # than 2 points (docs/EVALS.md, "The gate"), and this step checks that the points rule
+        # itself fires, as well as the scenario rule that would catch a single one.
         run: |
           set -euo pipefail
           cp -r evals/scenarios broken-scenarios
@@ -193,6 +193,7 @@ jobs:
             exit 1
           fi
           grep -E "^FAIL: outcome: .* points below the baseline" broken.out
+          grep -E "^FAIL: scenarios: 2 now fail a check they passed in the baseline" broken.out
 
       - name: Keep the table, the results and the transcripts
         if: always()

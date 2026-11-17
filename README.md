@@ -46,7 +46,7 @@ A demo shows it working once. This shows how often it works: the golden scenario
 [`evals/scenarios/`](evals/scenarios) are run end to end against the real server, and each run is scored on
 four axes that are reported separately, because they fail for different reasons. The table is the committed
 baseline (`evals/baseline.json`). CI re-runs the scenarios on every push and fails on a regression of more
-than 2 points on any line of it.
+than 2 points on any line of it, or on any one scenario that fails a check it passed in the baseline.
 
 <!-- evals:begin -->
 <!-- Written by the harness from evals/baseline.json. Do not edit: CI fails if this block and the baseline disagree. -->
