@@ -5,6 +5,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Phase 5 of [ROADMAP.md](ROADMAP.md): product hardening and docs, on `feat/phase-5-hardening`. Not tagged:
+`v1.0.0` is the owner's decision.
+
+### Added
+- **Result cache under the protocol's `ttlMs`/`cacheScope`** (`cache.py`, ADR 0004). One hint per tool, required
+  at registration like a scope. Zero TTL is never stored; private results are partitioned by subject, client and
+  granted scopes; only successes are kept; the cache sits inside the scope check; hits are labelled and spend
+  nothing; concurrent identical calls are coalesced. `flightops_cache_requests_total` and
+  `flightops_cache_entries` on `/metrics`.
+- `tools/list` and `server/discover` carry `ttlMs: 300000, cacheScope: "public"`, and **tools are published
+  sorted by name**, byte-identical across builds, so a host's prompt cache can hit.
+- **Second upstream adapter: Schiphol Public Flight API v4** (`schiphol.py`, `schiphol_flights`, scope
+  `flightops.schedule.read`), OAuth2 client credentials with an `audience`, refreshed 60 s before expiry, per
+  the vendor's 2026-07-20 migration guide. **Exercised only against a mock of that documented API; no live key
+  was used** (ADR 0005).
+- `services/mock_upstream`: Schiphol, OpenSky and AviationWeather in their documented shapes, strict where the
+  vendors are strict, counting what a client gets wrong. In the compose matrix in CI.
+- `scripts/second_upstream.py`: the adapter through a live stack (scope refusal that spends nothing, a debit the
+  mock agrees with, no wrong audience, no expired token). Runs in the `compose-matrix` job.
+- **Load test** (`scripts/load_test.sh`, docs/LOAD-TEST.md): 50 rps for 60 s, open loop, on a 2-core laptop.
+  3000/3000 ok, p50 10.1 ms, p95 41.1 ms, p99 67.7 ms, 160 OpenSky credits. With the cache off the credit ledger
+  stops OpenSky at exactly its 400-credit budget and refuses 27.87 % of calls. Both result files committed.
+- Four golden scenarios for the new tool (58 in all), baseline and README table regenerated.
+- **Image scan** in CI: trivy v0.69.3, the binary pinned by sha256 (not `trivy-action`; CVE-2026-33634), gating on
+  fixable HIGH and CRITICAL, with a planted finding to show the gate can fail.
+- docs: README rewritten around the eval table; ADRs 0004 (caching), 0005 (second adapter), 0006 (pinning and
+  scanning); docs/DEMO.md (a clone to an approved rebooking, every step with its expected output);
+  docs/SECURITY.md (pinning review, history audit).
+
+### Changed
+- The OAuth2 client-credentials token manager is shared: `ClientCredentialsTokenManager` takes the token URL,
+  credentials, `audience` and refresh margin; `OpenSkyTokenManager` is its OpenSky configuration.
+- The 401/429 policy moved from `OpenSkyClient` into `http.authorized_get`, used by both adapters.
+- `missing_credentials` names the upstream and its variables. `flightops_upstream_credits_spent_total{upstream}`
+  counts every metered upstream.
+- Every GitHub Action is pinned to a commit SHA. The shipped image runs `apt-get upgrade` at build.
+
+### Security
+- History audit over all 45 commits on every ref: **no findings** (docs/SECURITY.md). `pip-audit`: no known
+  vulnerabilities.
+- The first image scan failed on a real fixable HIGH, zlib CVE-2026-85091 (DSA-6613-1), because the upgrade step
+  had not reached that commit. 47 other HIGH findings have no Debian fix and are reported, not gated.
+
 ## [0.6.0] - 2026-11-18
 
 Phase 4b of [ROADMAP.md](ROADMAP.md): quality gates. The suite was already large; this release is the

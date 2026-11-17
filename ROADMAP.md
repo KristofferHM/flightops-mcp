@@ -93,8 +93,10 @@ is being a correct OAuth 2.1 **resource server** while calling a downstream API 
       guard itself is pytest-only, see "What this does not prove"; line 9)
 - [x] 50 concurrent authenticated calls produce exactly one exchange per identity
       (live: counted in the IdP's access log, 1 `POST /token` for 50 answered calls; line 10)
-- [ ] The whole matrix runs in `docker compose up` with no external account
-      **unverified on this host (no Docker)**: `docker: command not found`, so no image was built and
+- [x] The whole matrix runs in `docker compose up` with no external account
+      — green in CI: job `compose matrix (phase 1 acceptance)`, run
+      [44162966637](https://github.com/KristofferHM/flightops-mcp/actions/runs/44162966637) on
+      `feat/phase-5-hardening`, 12/12 lines against the compose stack. Still **unverified on this host (no Docker)**: `docker: command not found`, so no image was built and
       compose was never run. The same three services were proven as local processes instead.
       The CI job that will run it exists (`compose-matrix` in `.github/workflows/ci.yml`) and **has not
       run yet**. Tick this box when that job is green on a pushed commit, and cite the run.
@@ -228,6 +230,60 @@ portfolio piece and an engineering claim.
    asciinema/GIF demo, `CHANGELOG.md`, tagged release with generated notes.
 5. **Security pass**: `pip-audit`, image scan in CI, dependency pinning reviewed, secrets audit of the
    git history (`git log -p | grep -i token` as a sanity check).
+
+### Acceptance criteria
+
+On `feat/phase-5-hardening`, 2026-11-17. Ticked only where shown; the evidence is next to each box.
+
+- [x] Cache hints honoured with the scope respected: a `ttlMs` of 0 is not cached, a private-scope result is
+      never served to a different identity, and the cache is observable (hit/miss counters on `/metrics`)
+      — `tests/test_cache.py` (25 tests): `test_a_ttl_of_zero_is_not_cached` (two calls, two runs, nothing
+      stored) and zero-TTL tools are not even wrapped; `test_private_results_are_partitioned_by_subject_client_and_scopes`
+      (four contexts, four real calls); `test_a_caller_without_the_scope_never_reaches_the_cache`;
+      `test_the_cache_is_observable_on_metrics` (1 miss, 2 hits, read from a real `/metrics` scrape). End to
+      end through the real exchange: `tests/test_obo.py::test_a_private_result_is_never_served_to_another_identity`,
+      five users × ten concurrent calls, **exactly one** ops-API read per user, 45 hits, and
+      `::test_a_cached_private_result_is_not_served_to_a_narrower_token_of_the_same_user`. ADR 0004.
+- [x] Deterministic tool ordering asserted by a test, so prompt caching is a property and not a hope
+      — `tests/test_cache.py::test_tool_order_is_by_name_and_byte_identical_across_builds`: two builds and a
+      build with the registration order **reversed** publish byte-identical `tools/list` JSON, sorted by name;
+      the authenticated server publishes the same order. `tools/list` carries `ttlMs: 300000`,
+      `cacheScope: "public"`, asserted over the 2026-07-28 client.
+- [x] Second adapter implemented and exercised against a mock of the documented auth shape, with the governance
+      layer provably shared (a test that shows a scope refusal and a credit debit through the new adapter)
+      — Schiphol v4 (`schiphol.py`), OAuth2 client credentials with `audience`, per the vendor's 2026-07-20
+      migration guide, against `services/mock_upstream`. `tests/test_schiphol.py` (26):
+      `test_a_scope_refusal_through_the_new_adapter_reaches_nothing_and_spends_nothing` (403, ledger 0, the mock
+      not even asked for a token), `test_a_call_through_the_new_adapter_debits_the_shared_ledger` (2 requests,
+      ledger 2, counter +2), `test_the_shared_ledger_stops_the_new_adapter_with_the_same_error`
+      (`local_budget_exhausted`), the token refreshed at 59 s left and never used expired, a wrong audience as
+      `upstream_auth_failed`, the caller's token never at the mock. In CI through `docker compose`
+      (`compose-matrix`, run [44162966637](https://github.com/KristofferHM/flightops-mcp/actions/runs/44162966637)):
+      `scripts/second_upstream.py` 4/4. Shared by construction, no new abstraction; what had to change is in
+      ADR 0005. **No live Schiphol key was used**; the docs say so wherever the adapter is named. One divergence
+      from the brief, on purpose: no API-key header, because the vendor retired those headers.
+- [x] Load test run on this machine with p50/p95/p99, error rate and credit spend stated in the README, and a
+      documented command that reproduces it
+      — `bash scripts/load_test.sh` on an Intel Core i7-7600U (2 cores, 4 threads, 16 GB, Windows 10), all
+      processes on that machine, 25 ms simulated upstream latency: **3000/3000 ok, 0.00 % errors, p50 10.1 ms,
+      p95 41.1 ms, p99 67.7 ms, 160 OpenSky credits, 2 Schiphol requests**. The same load with the cache off:
+      p95 109.1 ms, 27.87 % refused by the ledger at exactly 400 credits. Both JSON results committed under
+      `docs/load/`; method and limits in docs/LOAD-TEST.md.
+- [x] README rewritten around the eval table, ADRs 0004–0006 present, `docs/DEMO.md` runnable
+      — README leads with the generated table (58 scenarios, regenerated by the harness, which accepts the
+      block), then the load numbers, the demo, and a "does not do" list longer than the capability table.
+      ADRs 0004, 0005, 0006. docs/DEMO.md: every command run on this machine with its output pasted; a fresh
+      clone to an approved rebooking in 24 s on a warm uv cache. **No recording**: no reliable terminal
+      recorder on this host, and none was faked.
+- [ ] Image scan in CI, pinning review written, history secrets audit result stated
+      — Pinning review and history audit: docs/SECURITY.md (no findings in 45 commits; pip-audit clean). The
+      image scan runs in CI and **failed on its first run** (44162966637) on a fixable zlib HIGH; result after
+      the fix: pending.
+- [ ] All jobs green in CI on the branch, run linked in the roadmap
+      — pending.
+
+Not done in this phase: the `v1.0.0` tag and generated release notes (the owner's decision), a live Schiphol run
+(needs a key), a recording of the demo.
 
 ## Phase 4b — Quality gates: mutation, coverage ratchet, properties (1 week)
 

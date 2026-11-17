@@ -2,51 +2,27 @@
 
 [![ci](https://github.com/KristofferHM/flightops-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/KristofferHM/flightops-mcp/actions/workflows/ci.yml)
 
-A governed [Model Context Protocol](https://modelcontextprotocol.io) server that lets an AI agent ask
-questions about the operational state of an airport — and refuses to answer badly.
+A governed [Model Context Protocol](https://modelcontextprotocol.io) server that gives an AI agent scoped,
+audited, rate-limited access to airport operations data, takes one action only with a person's
+signed approval, and says "unknown" when its evidence is thin.
 
-Most MCP examples on GitHub are a stdio server with two read-only tools. This one is built around the
-parts that actually break in production: OAuth2 client-credential token lifecycles, a credit-metered
-upstream with a real `429` contract, honest reporting of missing data, and logs that never contain a
-credential or a passenger identifier.
+The tools are the easy part. This repository is about the layer around them: OAuth 2.1 resource-server
+auth with on-behalf-of exchange, a credit ledger in front of every metered upstream, a result cache that
+honours the protocol's `ttlMs`/`cacheScope` without leaking across users, logs that never hold a
+credential or a passenger, and an evaluation harness that measures all of it.
 
-- **Protocol:** MCP revision `2026-07-28` (stateless: no `initialize` handshake, no session id,
-  per-request capability negotiation), via the Python SDK's `MCPServer`.
-- **Verified:** `300 passed, 0 skipped` · `ruff` clean · `mypy --strict` clean · a live end-to-end
-  stdio run against AviationWeather.gov returning real METARs.
-- **Cost:** zero. Every upstream is free; the authenticated one is optional.
+MCP revision `2026-07-28` (stateless), Python SDK `mcp==2.3.0`, Python 3.12+.
 
 ---
 
-## Requirements → what is actually in the repo
+## How often it is right
 
-| Capability | Where it lives | How it is proven |
-|---|---|---|
-| MCP tools with typed schemas | `src/flightops_mcp/server.py` | `test_all_tools_are_published_with_schemas` asserts every tool has a usable description and an object schema |
-| OAuth2 **client credentials** (M2M) | `opensky_token.py` | `test_fifty_concurrent_callers_make_exactly_one_token_request` |
-| Token lifecycle (expiry, revocation) | `opensky_token.py`, `opensky.py` | refresh-ahead inside the skew; a `401` invalidates and retries once |
-| Rate limits | `http.py`, `opensky.py` | `429` + `Retry-After` / `X-Rate-Limit-Retry-After-Seconds` honoured when short, surfaced as data when long |
-| API budget / least privilege | `opensky.py` credit ledger | `test_local_credit_budget_stops_a_runaway_loop` |
-| REST integration, no-auth path | `weather.py` | live NOAA call in CI (advisory job) |
-| Safe logging, no PII | `telemetry.py` | canary tests: a planted token and passenger record must not appear in emitted logs |
-| Ground-truth reference data | `airports.py` + `scripts/build_airports_db.py` | distance validated two independent ways |
-| Failures the model can act on | `errors.py` | every failure carries `code`, `message`, `hint`, `retry_after_s` |
-| Containerisation | `Dockerfile`, `docker-compose.yml` | CI builds the image, asserts non-root, asserts the reference DB is baked in |
-| Trace propagation across the boundary | `otel.py`, `guarded`, `http.py` | the client's `traceparent` becomes the parent span; upstream headers carry the context on |
-| Liveness vs readiness | `/healthz`, `/readyz` (`install_observability_routes`) | readiness fails on an empty database and does **not** fail on an upstream outage |
-| Fail fast when a provider dies | `resilience.py` | `test_the_circuit_fails_fast_rather_than_sleeping` |
-| Operations documentation | `docs/runbook.md` | alerts, playbooks, rotation, and what the stack does not do |
-| Version control hygiene | `.gitignore`, `.gitattributes`, `uv.lock` | no secrets, no multi-megabyte data blobs, LF-normalised |
-
----
-
-## Evaluation
-
-A demo shows it working once. This shows how often it works: the golden scenarios in
-[`evals/scenarios/`](evals/scenarios) are run end to end against the real server, and each run is scored on
-four axes that are reported separately, because they fail for different reasons. The table is the committed
-baseline (`evals/baseline.json`). CI re-runs the scenarios on every push and fails on a regression of more
-than 2 points on any line of it, or on any one scenario that fails a check it passed in the baseline.
+The golden scenarios in [`evals/scenarios/`](evals/scenarios) run end to end against the real server
+(auth, token exchange, approval gate, tools, upstream clients) with the upstreams described per scenario.
+Each run is scored on five axes, reported separately because they fail for different reasons. CI re-runs
+the scenarios on every push and fails on a regression of more than 2 points on any line, or on any one
+scenario that fails a check it passed in the baseline. The table between the markers is written by the
+harness from `evals/baseline.json`; nobody edits it.
 
 <!-- evals:begin -->
 <!-- Written by the harness from evals/baseline.json. Do not edit: CI fails if this block and the baseline disagree. -->
@@ -69,305 +45,241 @@ No scenario fails in this run.
 Regenerate: `uv run python -m evals.run --offline --update-baseline`. What these numbers measure, and what they do not: [`docs/EVALS.md`](docs/EVALS.md).
 <!-- evals:end -->
 
-Read this table with one thing in mind. The model is `offline`: a scripted policy that is told which
-plan to follow, so 100 % here means the server's contract holds on every scenario, not that an agent
-planned well. The first baseline scored 47 of 54. All seven failures were server defects (stale data passed
-as current, unreadable rows dropped silently, OpenSky's movements response unreadable), fixed with no
-expectation edited. The causes and fixes are in
-[`docs/EVALS.md`](docs/EVALS.md#what-failed-in-the-first-baseline-and-what-was-done).
+**Read it with one thing in mind.** The model is `offline`: a scripted policy that is told which plan to
+follow. So 100 % means the *server's* contract held on every scenario: right tool, valid arguments,
+refusals for the right reason, no confident answer from absent evidence. It does not mean an agent
+planned well. The first baseline scored 47 of 54, and all seven failures were server defects (stale data
+passed as current, unreadable rows dropped silently, OpenSky's movements response unreadable). They were
+fixed in the server with no expectation edited ([`docs/EVALS.md`](docs/EVALS.md#what-failed-in-the-first-baseline-and-what-was-done)).
+Twenty-one scenarios target the failure this project exists to prevent: answering confidently when the
+evidence is not there.
+
+## Under load
+
+50 requests per second for 60 seconds, open loop, authenticated, over HTTP, against the mock upstream.
+Measured on an **Intel Core i7-7600U laptop (2 cores, 4 threads, 16 GB, Windows 10)**, with the load
+generator, server, IdP and mock all on that one machine and 25 ms of simulated upstream latency.
+Latency is measured from each request's scheduled send time, so queueing is not hidden.
+
+| | Shipped (cache on) | Cache off |
+|---|---:|---:|
+| Requests completed | 3000 / 3000 | 3000 / 3000 |
+| Error rate | **0.00 %** | 27.87 % (refused by the credit ledger) |
+| p50 / p95 / p99 latency | **10.1 / 41.1 / 67.7 ms** | 30.1 / 109.1 / 146.2 ms |
+| OpenSky credits spent | **160** | 400, the hourly budget, then refused |
+| Schiphol requests | 2 | 600 |
 
 ```bash
-uv run python -m evals.run --offline                     # the CI gate: no model, no network
-uv run python -m evals.run --offline --update-baseline   # record a new baseline, deliberately
+bash scripts/load_test.sh        # starts the stack, runs the check and the load, stops the stack
 ```
 
+The second column is the credit ledger working: without the cache the same questions spend the
+400-credit hourly budget in under a minute, and every further credit-spending call is refused at once,
+as data. Method, per-tool numbers and what the run does not show: [`docs/LOAD-TEST.md`](docs/LOAD-TEST.md).
+
+## Try it in two minutes
+
+```bash
+git clone https://github.com/KristofferHM/flightops-mcp.git && cd flightops-mcp && uv sync
+mkdir -p agent-runs
+uv run python -m agent run --scenario rebook-approved --backend offline --out agent-runs/approved.json
+```
+
+One JSON line ending in `"ops_api": {"rebooking_requests": 1, "rebookings_written": 1}`. An agent read
+passenger counts as a user, proposed a rebooking, a different person approved that exact proposal, and
+the operations API wrote it once. No API key, no Docker, no network. The full script, with the refusals:
+[`docs/DEMO.md`](docs/DEMO.md).
+
 ---
+
+## What is in the repository, and how each part is proven
+
+| Capability | Where it lives | Proven by |
+|---|---|---|
+| OAuth 2.1 resource server: RS256, JWKS, audience, `403` scope challenge | `auth/verifier.py`, `auth/jwks.py`, `auth/challenge.py` | `test_auth_verifier.py`, `test_scopes.py`, Phase 1 matrix in `docker compose` (CI) |
+| One scope per data domain, enforced twice, fail closed | `auth/scopes.py`, `scoped` in `server.py` | a tool with no scope cannot register; `test_every_tool_runs_with_exactly_its_own_scopes` |
+| On-behalf-of (RFC 8693), narrowing only, single flight per identity | `auth/obo.py` | `test_obo.py`: fifty concurrent calls, one exchange per user |
+| No token passthrough, inbound or outbound | `auth/passthrough.py` | a hook on every HTTP client, and a test that scans the source for one without it |
+| Human approval of the only write, as a signed grant for one payload | `auth/approval.py`, `propose_rebooking` | ADR 0003; refused without approval, on self-approval, on a changed payload; one write per idempotency key |
+| OAuth2 client credentials, shared by both authenticated upstreams | `opensky_token.py` | single flight; refresh before expiry; one retry on `401` |
+| `429` as a contract: short waits honoured, long ones returned as data | `http.authorized_get` | the same policy object for OpenSky and Schiphol |
+| A credit ledger in front of every metered upstream | `credits.py` | property tests, mutation-tested, and the load test above |
+| **Result cache under `ttlMs`/`cacheScope`**, private results partitioned by identity | `cache.py` | ADR 0004; `test_cache.py`; five users × ten concurrent calls, one downstream read each |
+| **Deterministic tool order** for prompt caching | `create_server` | the published list is byte-identical across builds and a reversed registration |
+| **Second authenticated upstream (Schiphol, OAuth2 with `audience`)**, **exercised only against a mock of its documented API; no live Schiphol key has been used** | `schiphol.py`, `services/mock_upstream` | ADR 0005; `test_schiphol.py`; a scope refusal that spends nothing and a debit the mock agrees with, in CI through `docker compose` |
+| Absent evidence is never "all clear" | every tool's `unknowns` | 21 absent-evidence eval scenarios |
+| PII- and secret-safe logs | `telemetry.py` | canary tests over the emitted log lines |
+| Traces, metrics, liveness vs readiness, circuit breaker | `otel.py`, `/metrics`, `/readyz`, `resilience.py` | `test_otel.py`, `test_health.py`, `test_resilience.py` |
+| An agent loop with a deterministic offline backend | `agent/` | byte-identical transcripts, checked in CI |
+| Quality gates | `pyproject.toml`, `ci.yml` | branch coverage ≥ 89 %, ≤ 90 surviving mutants on `auth/` and the ledger, zero skipped tests |
+| Supply chain | `ci.yml`, `Dockerfile`, `uv.lock` | gitleaks (tree and history), pip-audit, trivy image scan, actions pinned to commits ([`docs/SECURITY.md`](docs/SECURITY.md)) |
 
 ## Architecture
 
 ```
-        MCP host (Claude Desktop, Inspector, an agent loop)
-                              │  JSON-RPC over stdio or Streamable HTTP
-                              ▼
-                    ┌───────────────────┐
-                    │  flightops-mcp    │  6 typed tools, guarded
-                    │  (MCPServer)      │  failures become data, never 500s
-                    └─────┬───────┬─────┘
-             OAuth2 M2M   │       │   no auth
-        client_credentials│       │
-                   ┌─────▼─────┐ ┌─▼──────────────────┐ ┌──────────────────────┐
-                   │ OpenSky   │ │ AviationWeather.gov│ │ OurAirports SQLite   │
-                   │ REST API  │ │ (NOAA)             │ │ (bundled, offline)   │
-                   │ credits   │ │ METAR / TAF        │ │ 49,353 airports      │
-                   │ 429 wall  │ │ 204 = no data      │ │ public domain        │
-                   └───────────┘ └────────────────────┘ └──────────────────────┘
+        MCP host (Claude Desktop, Inspector, the agent in agent/)
+                     │  stdio, or Streamable HTTP with a bearer token
+                     ▼
+   ┌──────────────────────────────────────────────────────────────┐
+   │ flightops-mcp                                                │
+   │                                                              │
+   │  bearer check ─► scope check ─► result cache ─► tool         │
+   │  (RS256, JWKS)   (403 + challenge) (ttlMs, cacheScope)       │
+   │                                                  │           │
+   │        credit ledger · 429 policy · circuit breaker ·        │
+   │        passthrough guard · OAuth2 token manager              │
+   └───┬────────────┬──────────────┬────────────┬────────────┬────┘
+       │ OAuth2 M2M │ OAuth2 M2M   │ no auth    │ RFC 8693   │ local
+       │            │ + audience   │            │ OBO        │
+       ▼            ▼              ▼            ▼            ▼
+   OpenSky      Schiphol v4    AviationWeather  ops API     OurAirports
+   (credits,    (mock-verified (NOAA METAR,     (mock,      (SQLite,
+    429)         only)          TAF)             PII-shaped) bundled)
 ```
 
-Three upstreams with three different auth models is the point: the tool layer must not care, and the
-governance layer must hold for all of them.
+Five upstreams, four auth models. The tools do not care which; the governance layer is the same for all.
 
-## Quickstart
+## The tools
+
+| Tool | Scope | Upstream | Cost | Cache |
+|---|---|---|---|---|
+| `resolve_airport` | `reference.read` | OurAirports, bundled | free, offline | public, 1 h |
+| `airport_weather` | `weather.read` | AviationWeather.gov | free | public, 60 s |
+| `airport_live_traffic` | `traffic.read` | OpenSky `/states/all` | 1–4 credits | public, 10 s |
+| `airport_movements` | `traffic.read` | OpenSky `/flights/*` | 4 credits per direction | public, 60 s |
+| `disruption_triage` | `weather.read` + `traffic.read` | the three above, composed | ~9 credits, less from cache | never (its parts are) |
+| `schiphol_flights` | `schedule.read` | Schiphol v4 (**mock-verified only**) | 1 request per page | public, 60 s |
+| `flight_passenger_impact` | `passengers.read` | ops API, as the user | free | **private**, 30 s |
+| `propose_rebooking` | `rebooking.write` | ops API, as the user, after approval | free | never |
+| `upstream_status` | `status.read` | process state | free | never |
+
+Every scope is prefixed `flightops.`. The tool list carries `ttlMs: 300000, cacheScope: "public"` and
+is sorted by name.
+
+## Running it
 
 ```bash
 uv sync
-
-# The image and CI bake this from the bundled seed; locally it is one command.
 uv run python scripts/build_airports_db.py --csv data/airports_seed.csv
-
-# No credentials needed for this much:
-uv run flightops-mcp           # stdio, for Claude Desktop / mcp dev
+uv run flightops-mcp                                    # stdio, for Claude Desktop or mcp dev
 ```
 
-To unlock the traffic and movement tools, create a free account at
-<https://opensky-network.org> (Account → API Client) and put the pair in `.env`:
+Credentials are environment variables, never files in the repository: `FLIGHTOPS_OPENSKY_CLIENT_ID` /
+`_SECRET` for traffic and movements (a free OpenSky account), `FLIGHTOPS_SCHIPHOL_CLIENT_ID` / `_SECRET`
+for the schedule. Without them those tools answer `credentials_missing` and the rest keep working.
 
-```bash
-FLIGHTOPS_OPENSKY_CLIENT_ID=your-id-api-client
-FLIGHTOPS_OPENSKY_CLIENT_SECRET=your-secret
-```
-
-Then in `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "flightops": {
-      "command": "uv",
-      "args": ["run", "--project", "/absolute/path/to/flightops-mcp", "flightops-mcp"]
-    }
-  }
-}
-```
-
-## Serving it remotely
+Remote, as an OAuth 2.1 resource server (there is no unauthenticated HTTP mode; without an issuer the
+process exits):
 
 ```bash
 export FLIGHTOPS_AUTH_ISSUER=https://idp.example.com
 export FLIGHTOPS_AUTH_JWKS_URL=https://idp.example.com/.well-known/jwks.json
-export FLIGHTOPS_RESOURCE_SERVER_URL=https://flightops.example.com/mcp   # the public URL
+export FLIGHTOPS_RESOURCE_SERVER_URL=https://flightops.example.com/mcp
 uv run flightops-mcp --transport streamable-http --host 0.0.0.0 --port 8000
 ```
 
-Over HTTP the server is an OAuth 2.1 **resource server**: every request needs a bearer token, an
-RS256 JWT signed by the configured issuer and checked against its JWKS. There is no unauthenticated
-remote mode; without an issuer the process exits instead of serving. Requests are stateless (protocol
-revision 2026-07-28), so there is no session to pin a replica to.
+The whole stack (server, local IdP, mock ops API) with no external account:
+
+```bash
+echo "DEV_AGENT_CLIENT_SECRET=$(openssl rand -hex 24)" >> .env
+echo "DEV_MCP_CLIENT_SECRET=$(openssl rand -hex 24)" >> .env
+docker compose up --build                       # add --profile observability for Jaeger, Prometheus, Grafana
+```
 
 | Request | Answer |
 |---|---|
-| No token, expired token, bad signature, wrong issuer, **wrong audience** | `401` + `WWW-Authenticate: Bearer ... resource_metadata="..."` |
-| Valid token that lacks the tool's scope | `403` + `WWW-Authenticate: Bearer error="insufficient_scope", scope="..."`, and an error naming the scope |
-| `GET /.well-known/oauth-protected-resource/mcp` | RFC 9728 metadata naming the issuer |
+| No token, expired, bad signature, wrong issuer, **wrong audience** | `401` + `WWW-Authenticate: Bearer resource_metadata="..."` |
+| Valid token without the tool's scope | `403` + `error="insufficient_scope", scope="..."`, and a body naming the scope |
+| `GET /.well-known/oauth-protected-resource/mcp` | RFC 9728 metadata |
+| `/healthz`, `/readyz`, `/metrics` | liveness, readiness (never fails on an upstream outage), Prometheus |
 
-The signing algorithm is pinned before any key is fetched, so `alg: none` and HS256-with-the-public-key
-are refused outright. JWKS fetches are single-flight, and refetches triggered by an unknown key id are
-rate-limited so forged ids cannot turn the server into a request amplifier against the issuer.
-
-### No token passthrough
-
-A token is accepted only if its `aud` is this server's own URL. A token for another API behind the
-same issuer is valid in every other respect, which is exactly why it is refused: accepting it would
-make this server a place to replay tokens it was never issued. The verifier checks `aud`, and the SDK
-is configured to check it again from the verifier's report, so removing one check does not remove both.
-
-Outbound, the caller's token never goes upstream. Upstream calls use the server's own credentials.
-Every outbound HTTP client carries a request hook that aborts a request containing the caller's token
-in any header, the URL or the body, before it leaves the process; the tool returns
-`token_passthrough_blocked` and the log records where the token was found, never the token. A test
-walks the source and fails if an HTTP client is ever constructed without the hook.
-
-### Scopes
-
-The policy is one table in code, `Scopes.for_tool(name)` in `auth/scopes.py`. Delegated scopes (`scp`)
-and application roles (`roles`) are checked the same way.
-
-| Scope | Tools |
-|---|---|
-| `flightops.reference.read` | `resolve_airport` |
-| `flightops.weather.read` | `airport_weather`, `disruption_triage` |
-| `flightops.traffic.read` | `airport_live_traffic`, `airport_movements`, `disruption_triage` |
-| `flightops.status.read` | `upstream_status` |
-
-A tool with no entry in the table cannot be registered, so a new tool cannot ship unprotected by
-omission. The check runs twice: an HTTP middleware answers a missing scope with the `403` challenge
-before the tool runs, and a wrapper next to each tool refuses again for any request shape that got past
-the middleware. That wrapper fails closed: no verified token in context is a refusal. The stdio server
-has neither, because a local subprocess has no bearer token to check.
-
-### A local IdP, so none of this needs a cloud tenant
-
-`services/idp/` is a small authorization server for the test matrix. It signs RS256 tokens with a key
-generated at start-up, publishes it as a JWKS, and its claims follow the Entra shape (`aud`, `scp`,
-`roles`, `tid`).
-
-```bash
-uv run uvicorn --factory services.idp.app:create_app --port 9000
-```
-
-| Endpoint | What it is for |
-|---|---|
-| `POST /token`, `grant_type=client_credentials` | a service principal's token; permissions in `roles` |
-| `POST /token`, `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` | RFC 8693 on-behalf-of: a user's token in, a narrower token for one downstream API out |
-| `POST /revoke` | RFC 7009; a revoked token can no longer be exchanged |
-| `POST /dev/user-token` | mints a delegated user token without a browser; `expires_in: -60` gives an already-expired one |
-| `POST /dev/expire` | treats a token as expired from now on |
-| `GET /.well-known/jwks.json`, `/.well-known/openid-configuration` | keys and discovery |
-
-Exchange can narrow a token and cannot widen it: a scope is issued only if the user's token carries it
-and the target API accepts it, the exchanged token never outlives its subject, and a client can only
-exchange tokens that were issued to it. It is a test fixture, not an identity provider, and
-[ADR 0001](docs/adr/0001-local-idp-modelled-on-entra.md) lists every place it differs from Entra.
-
-## The tools
-
-| Tool | Upstream | Credentials | Cost |
-|---|---|---|---|
-| `resolve_airport` | OurAirports (local) | none | free, offline |
-| `airport_weather` | AviationWeather.gov | none | free |
-| `airport_live_traffic` | OpenSky `/states/all` | OAuth2 | 1–4 credits |
-| `airport_movements` | OpenSky `/flights/*` | OAuth2 | 4 credits per direction |
-| `disruption_triage` | all three, composed | OAuth2 for the traffic half | ~9 credits |
-| `upstream_status` | process state | none | free |
+Operating it (alerts, playbooks per failure code, secret rotation): [`docs/runbook.md`](docs/runbook.md).
 
 ## Design decisions worth defending
 
-1. **A `429` is a contract, not noise.** If the upstream says "retry in 3 s" and our ceiling is 5 s,
-   the client waits and retries exactly once. If it says "retry in 900 s", the call returns a
-   structured error carrying that number. Sleeping fifteen minutes inside a tool call is not
-   resilience; it is a hung agent.
-2. **Tokens are single-flight.** Fifty concurrent tool calls that find an empty cache produce one
-   token request, not fifty. The lock is double-checked so the winner refreshes and the rest reuse.
-3. **Credits are charged before the request.** A call that times out still spends upstream budget, so
-   the local ledger must record it too or the guard under-reports real spend. `/states/all` costs a
-   documented function of bounding-box area — `BBox.credit_cost` mirrors that table and the test pins
-   every band boundary.
-4. **Absence of data is never "all clear".** A `204` from NOAA, an empty movements list, and a missing
-   credential produce three different explicit `unknowns` entries. An empty result from an ADS-B feed
-   means "nothing heard", which is not "nothing happening".
-5. **Redaction is tested, not asserted.** A canary string is planted as a token, a PNR and a passenger
-   name; the emitted log lines are parsed and searched for it. GDPR claims that are not executed are
-   marketing.
-6. **Triage degrades to `unknown`, not to `low`.** Without credentials the composite tool still
-   returns weather, and reports severity `unknown` with the reason — it does not imply the airport is
-   fine because it could not see the traffic.
-7. **Provenance travels with the data.** Every payload names the upstream and its licence, so an
-   operator can see that "traffic" means ADS-B estimates and "weather" means a government observation.
+1. **A `429` is a contract, not noise.** "Retry in 3 s" is waited out once; "retry in 900 s" is returned
+   as a structured error carrying the number. Sleeping fifteen minutes inside a tool call is a hung agent.
+2. **Credits are charged before the request**, because a call that times out still spends upstream budget.
+3. **Absence of data is never "all clear".** A `204` from NOAA, an empty movements list and a missing
+   credential are three different `unknowns`, and triage degrades to `unknown`, never to `low`.
+4. **Caching is a per-tool decision in the protocol's words**, inside the scope check, private by identity,
+   and a hit says it is a hit (ADR 0004).
+5. **A second upstream is a parameter, not an interface.** Adding Schiphol needed two things made
+   configurable and one policy moved out of OpenSky's client, and no new abstraction (ADR 0005).
+6. **An approval is a signed grant for one payload, not an answer.** The agent carries the approval, so it
+   must not be able to forge one (ADR 0003).
+7. **Pin what can be rewritten, scan what cannot be pinned** (ADR 0006).
 
-## Observability
-
-Three endpoints on the HTTP transport, registered with the SDK's `custom_route`, so they need no token —
-a load balancer has none and Prometheus has no user identity:
-
-| Endpoint | Answers | Deliberately does not |
-|---|---|---|
-| `/healthz` | liveness: this process is serving | touch an upstream, ever |
-| `/readyz` | readiness: the reference data opens and holds rows | fail because a provider is down — it reports breaker state instead, so one third party's outage cannot empty your load balancer |
-| `/metrics` | tool calls by outcome, upstream latency and status, credits spent, token refreshes, circuit state | expose a secret or a passenger field |
-
-Traces are opt-in: `FLIGHTOPS_OTEL_EXPORTER` = `none` (default) · `console` · `otlp` · `memory`.
-One triage call is one trace, and the client's `traceparent` from the request `_meta` is the parent:
-
-```
-tools/call disruption_triage        SERVER    parent = client traceparent (from _meta)
-└── tool.disruption_triage          INTERNAL
-    ├── tool.airport_weather        INTERNAL
-    │   ├── HTTP GET  CLIENT  upstream.name=aviationweather  http.response.status_code=200
-    │   └── HTTP GET  CLIENT
-    ├── tool.airport_movements      INTERNAL
-    └── tool.airport_live_traffic   INTERNAL
-```
-
-`MCPServer` already installs the SDK's `OpenTelemetryMiddleware` as its outermost built-in. Registering a
-second request-span middleware produces **two server spans per request** — found by counting spans for one
-call, removed, and pinned by `test_exactly_one_server_span_per_request`.
-
-Full local stack, including Jaeger, Prometheus and a provisioned Grafana dashboard:
-
-```bash
-docker compose --profile observability up -d
-# Jaeger http://127.0.0.1:16686  ·  Prometheus :9090  ·  Grafana :3000
-```
-
-What to do when it breaks — alerts, playbooks per failure code, secret rotation — is in
-[`docs/runbook.md`](docs/runbook.md).
-
-## What running it actually found
-
-Two defects that reviewing the code would not have caught, both now pinned by tests:
-
-- **NOAA rejects `hours` on `/taf`.** `GET /api/data/taf?ids=ESGG&format=json&hours=12` returns
-  `HTTP 400 {"status":"error","error":"Unexpected query parameter provided"}`, while `/metar` accepts
-  it happily. The first live run failed here; `test_taf_request_omits_the_hours_parameter` is the
-  regression.
-- **A monotonic clock is the wrong clock for epoch maths.** The runtime originally defaulted to
-  `time.monotonic()`, which is right for token TTLs and wrong for movement windows — it would have
-  asked OpenSky for traffic in January 1970. Wall clock is now the default, with the reasoning in a
-  comment.
-
-Live data also carries `"visib": "6+"` — a string, not a number — so a strict `isinstance` check would
-have silently dropped real observations and lost a flag. `_number()` coerces it, and a test covers it.
+Decision records: [0001 local IdP modelled on Entra](docs/adr/0001-local-idp-modelled-on-entra.md) ·
+[0002 revocation is enforced at the IdP](docs/adr/0002-token-revocation-is-enforced-at-the-idp.md) ·
+[0003 an approval is a signed grant](docs/adr/0003-an-approval-is-a-signed-grant-not-an-answer.md) ·
+[0004 caching inside the scope check](docs/adr/0004-tool-results-are-cached-inside-the-scope-check.md) ·
+[0005 the second adapter](docs/adr/0005-a-second-adapter-shares-the-governance-layer-by-parameters.md) ·
+[0006 pinning and scanning](docs/adr/0006-pin-what-can-be-rewritten-scan-what-cannot-be-pinned.md).
 
 ## The test suite
 
-```
-tests/test_token.py          7   caching, single flight, skew, rejection, malformed response
-tests/test_http.py          12   Retry-After (seconds + HTTP-date), retry counts, 429 passthrough
-tests/test_opensky.py       21   credit table, decoding, 429 policy, 401 recovery, budget guard
-tests/test_airports.py       9   build, resolve, nearest, cross-checked distances
-tests/test_weather.py        8   no-data semantics, field mapping, flag thresholds
-tests/test_server_tools.py  11   end-to-end through a real MCP client, in memory
-tests/test_redaction.py      5   keyed secrets, nested structures, bearer scrubbing, canary
-tests/test_idp.py           42   the local IdP: client credentials, exchange, revocation
-tests/test_obo.py           43   on-behalf-of: narrowing, escalation refusals, single flight
-tests/test_scopes.py        34   per-tool scopes and the WWW-Authenticate challenge
-tests/test_auth_verifier.py 26   JWKS, RS256, audience, issuer, expiry, key rotation
-tests/test_no_passthrough.py 33  the confused-deputy cases, both directions
-tests/test_http_transport.py 16  Streamable HTTP behaviour on the real app
-tests/test_matrix_log_source.py 6  a log source that is empty must stop the run
-tests/test_otel.py          10   traceparent parenting, nesting, upstream propagation
-tests/test_resilience.py    11   breaker open/half-open/close, 429 and 4xx neutrality
-tests/test_health.py         6   liveness vs readiness vs metrics
-                          ----
-                           300
-```
+**1149 tests, 0 skipped** (CI fails on a skip), ruff and `mypy --strict` clean over `src`, `services`,
+`agent` and `evals`. Branch coverage 89.18 % against a floor of 89. Mutation testing on `auth/` and the
+credit ledger with at most 90 surviving mutants, each one judged in
+[`docs/MUTATION-SURVIVORS.md`](docs/MUTATION-SURVIVORS.md). No network, no sleeps and no real clock in the
+unit suite: transports, sleep and clock are injected. Method and history: [`docs/QUALITY.md`](docs/QUALITY.md).
 
-No network, no sleeps, no real clock: transports, sleep and clock are injected. The suite runs on a
-bare interpreter in under 10 seconds, and CI fails if any test reports as skipped.
+Running it found real defects that reading would not have: NOAA rejects `hours` on `/taf`; a monotonic
+clock asked OpenSky for traffic in 1970; live METARs carry `"visib": "6+"`, a string; two server spans per
+request from a doubled middleware; and the seven server defects the first eval baseline exposed.
 
-## What this deliberately does not do
+## What this still does not do
 
-- **No write operations.** Nothing here rebooks a passenger. The scope is observation and triage;
-  a write path needs an idempotency story and a human-approval gate that this repo does not claim.
-- **No LLM in the loop.** The server is the hard part and it stays testable without a model. Adding an
-  agent loop on top is the next increment, not a hidden requirement.
-- **No Kubernetes, no frontend, no vector database.** Each would be a week of work that demonstrates
+- **No live Schiphol run.** The adapter is built to Schiphol's documented API and tested against a mock of
+  it, in the suite and in CI. No key was available, and none is in the repository. Field names, the
+  local-time window format and the public tier's rate limit are unverified against the live service.
+- **No real model in the scored evals.** The table is the offline scripted policy. A model run is
+  supported (`--backend anthropic`) but is not in CI and is not the published number.
+- **No answer-quality measure beyond a lexicon.** Answers are classified by a small fixed vocabulary.
+  That is exact for the offline policy's templates and only a heuristic for a model's prose.
+- **No shared state across replicas.** The cache, the credit ledger, the circuit breakers and the
+  single-flight locks are per process. Two replicas have two budgets and two caches.
+- **No persistence.** The ops API's rebookings and the approval ledger live in memory and die with the
+  process. Idempotency holds within one process lifetime.
+- **No production identity provider.** `services/idp` is a fixture modelled on Entra
+  ([ADR 0001](docs/adr/0001-local-idp-modelled-on-entra.md) lists the differences). Nothing has been run
+  against a real Entra tenant.
+- **No load numbers beyond one laptop.** 50 rps held on a 2-core machine with everything co-located; the
+  rate at which it stops holding was not measured, and nothing ran for longer than a minute.
+- **No cache-hostile load test.** Eight airports repeat inside every TTL, so the shipped run is a
+  favourable case. The cache-off column is the other bound.
+- **No private caching under load.** Partitioning by identity is proven by tests, not by the load run.
+- **No digest-pinned base image**, on purpose (ADR 0006), and the trivy hash is pinned on first use,
+  not from a second source ([`docs/SECURITY.md`](docs/SECURITY.md)). The image still carries 47 HIGH
+  findings Debian has not fixed. The optional observability images are old and unscanned.
+- **No terminal recording of the demo.** The demo is a script with expected output, and its transcript is
+  the record.
+- **One write, deliberately.** `propose_rebooking` moves a cohort, never a named passenger. There is no
+  cancel, no hotel, no diversion; the eval set checks that the server refuses those.
+- **ADS-B is not a schedule, and a schedule is not an observation.** OpenSky's origin and destination are
+  estimates; Schiphol's states are what the airport published. Both caveats are in the tool descriptions
+  the model reads.
+- **No inbound rate limit per caller.** The credit ledger protects the upstreams' budgets, not this
+  server: one caller with a valid token can send as many requests as the process will take.
+- **A revoked access token works until it expires** for tools that need no exchange. Revocation is
+  enforced where tokens are exchanged, not checked on every request
+  ([ADR 0002](docs/adr/0002-token-revocation-is-enforced-at-the-idp.md)).
+- **No tamper-evident audit store.** Who approved what is a structured log line on stdout, redacted and
+  complete, and only as durable as wherever the logs are shipped.
+- **One tenant.** There is no tenant isolation beyond what the issuer's tokens say.
+- **No Kubernetes manifests, no frontend, no vector database.** Each would be a week of work that shows
   nothing about integration engineering.
-- **ADS-B is not a schedule.** OpenSky deduces arrivals and departures from transponder positions, so
-  origin and destination fields are estimates. That caveat is in the tool description, not only here.
+- **No release tag.** `v1.0.0` is the owner's decision ([`ROADMAP.md`](ROADMAP.md)).
 
 ## Data sources and licences
 
 | Source | Data | Licence / terms |
 |---|---|---|
-| [OpenSky Network](https://opensky-network.org) | state vectors, movements | Free for personal and non-profit use; **commercial use requires OpenSky's consent** |
+| [OpenSky Network](https://opensky-network.org) | state vectors, movements | Free for personal and non-profit use; commercial use needs OpenSky's consent |
 | [AviationWeather.gov](https://aviationweather.gov/data/api/) (NOAA) | METAR, TAF | US Government open data, public domain |
-| [OurAirports](https://ourairports.com/data/) | airports, runways, navaids | Public domain |
+| [OurAirports](https://ourairports.com/data/) | airports | Public domain |
+| [Schiphol Public Flight API](https://developer.schiphol.nl) | scheduled flights at AMS | Schiphol developer terms; requires a registered application. Not exercised live by this project |
 
 This project is the personal-use case: no commercial deployment, no redistribution of upstream data.
-
-## Roadmap
-
-`v0.1.0` ships the governed tool layer and its test suite. [`ROADMAP.md`](ROADMAP.md) is the phased plan
-to `v1.0`: auth-hardened remote server with OBO, observability and a runbook, an agent loop with a human
-approval gate, an evaluation harness, then hardening and documentation.
-
-## Roadmap → next milestones
-
-### Near-term milestones
-
-- [ ] Streamable HTTP server with MCP-spec OAuth 2.1 resource-server behaviour (JWKS validation, scope
-      challenges in `WWW-Authenticate`, no token passthrough)
-- [ ] On-behalf-of token exchange (RFC 8693) so a user's identity, not a service's, reaches the upstream
-- [ ] OpenTelemetry traces with `traceparent` propagated into `_meta` as the 2026-07-28 revision specifies
-- [ ] An agent loop with a human-approval gate for the first write tool
-- [ ] Tool-calling eval harness: golden scenarios scored for tool choice, argument validity and refusal
+The plan and what each phase proved: [`ROADMAP.md`](ROADMAP.md). What changed when: [`CHANGELOG.md`](CHANGELOG.md).
