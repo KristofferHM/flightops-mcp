@@ -249,6 +249,41 @@ suite worth measuring before you ask whether they would catch a bug. Before `v1.
 Run mutation testing in CI on Linux — it is slow and file-locking makes it flaky on a developer's Windows
 machine. Gate it to those modules; a full-repo run is an hour nobody looks at.
 
+### Acceptance criteria
+
+All six on CI run [44123397766](https://github.com/KristofferHM/flightops-mcp/actions/runs/44123397766) on `feat/phase-4b-quality-gates` at `249adc2`: ten jobs, all green.
+Numbers and method in [docs/QUALITY.md](docs/QUALITY.md).
+
+- [x] Coverage gate enforced with a stated branch-coverage floor, no new exclusions beyond a short documented list
+      — `fail_under = 89` in `pyproject.toml`, enforced in both `tests` jobs: measured **88.26 %** branch
+      coverage at the start (floor 88), **89.08 %** now (floor raised to 89 in the commit that added the tests).
+      Shown failing: a floor of 89 against the starting number exits 2. Exclusions are the existing
+      `__main__` guards and three `pragma: no cover` lines, plus `TYPE_CHECKING` (none today), each with its
+      reason in docs/QUALITY.md. Nothing was excluded to raise the number.
+- [x] Property tests over the four arithmetic modules above, deterministic, with a CI profile
+      — 65 properties in five files (scopes and the exchange's subset rule, the credit ledger and box cost,
+      Retry-After / credit header / backoff, OpenSky decoding, the airport CSV loader). No clock is read; the
+      `ci` profile runs 500 examples derandomized. They found ten defects, all fixed: among them
+      `--limit` ignored below 5000 rows, a `TypeError` in the aircraft sort, and `Retry-After: inf` reaching a
+      payload.
+- [x] Mutation testing runs on the money paths in CI within a stated budget, with a **committed survivor
+      report** and a ceiling that the build enforces
+      — `mutation` job: `auth/`, `credits.py`, `agent/approval.py` (no mutants: no function bodies), 1324
+      mutants, **90 survivors against a ceiling of 90**, mutmut in 5–8 min of a 35-minute budget. The gate
+      also fails on unchecked mutants (it did, on run 2) and a second step shows a ceiling of 89 fails.
+      Report: [docs/MUTATION-SURVIVORS.md](docs/MUTATION-SURVIVORS.md).
+- [x] Every survivor named in the report either got a new test or a written justification — no silent survivors
+      — 391 → 128 → 90 over three readings. The kills include the builders' issuer check (`issuer=None`
+      survived), the JWKS client's passthrough guard (asserted only by a source scan), a JWKS parser that a
+      bad entry would truncate, and three tests that could not fail, each fixed. All 90 remaining are named
+      with a judgement: 58 message or hint wording, 32 behaviour-identical.
+- [x] `gitleaks` (tree + history) and `pip-audit` green, and the history scan result stated plainly
+      — `scans` job. History: **35 commits scanned, no leaks** (every ref, full depth). One verified false
+      positive is named in `.gitleaksignore`: a content-hash idempotency key in a test, not a credential.
+      Tree: no leaks. `pip-audit` over every locked dependency in every group: no known vulnerabilities.
+- [x] All of it green in CI on the branch, with the run linked in `ROADMAP.md` when the boxes are ticked
+      — [44123397766](https://github.com/KristofferHM/flightops-mcp/actions/runs/44123397766).
+
 ### `v1.0` Definition of Done
 
 - [ ] All five phases' acceptance criteria green in CI

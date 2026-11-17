@@ -162,7 +162,7 @@ The `scans` job. Each step fails the build on a finding.
 | Scan | What it covers | Result on this branch |
 |---|---|---|
 | `gitleaks dir .` (8.30.1, checksum-verified) | the checked-out tree, before any install | clean |
-| `gitleaks git . --log-opts=--all` | every commit on every ref (`fetch-depth: 0`) | clean: 28 commits scanned (the 32 in `git rev-list --all` less 4 merges, which add no content), one verified false positive, named below |
+| `gitleaks git . --log-opts=--all` | every commit on every ref (`fetch-depth: 0`) | clean: 35 commits scanned on run 44123397766 (merges add no content and are not counted), one verified false positive, named below |
 | `pip-audit` | every package in `uv.lock`, all dependency groups, hashes required | no known vulnerabilities |
 
 `.gitleaksignore` is the allowlist, and every entry in it names the line and why it is not a secret. There is
