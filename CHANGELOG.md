@@ -5,6 +5,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Phase 4b of [ROADMAP.md](ROADMAP.md): quality gates that measure whether the suite would catch a bug.
+Details and every number in [docs/QUALITY.md](docs/QUALITY.md).
+
+### Added
+- Coverage ratchet: branch coverage enforced in CI, floor 89 (measured 88.26 % at the start, 89.08 % now).
+- 65 `hypothesis` properties over scopes, the credit ledger, Retry-After and backoff, OpenSky decoding and
+  the airport loader; a derandomized 500-example `ci` profile.
+- Mutation testing (`mutmut`) on `auth/`, the credit ledger and `agent/approval.py` in CI, with a survivor
+  ceiling of 90 enforced by `scripts/mutation_gate.py` and every survivor judged in
+  `docs/MUTATION-SURVIVORS.md`. 391 survivors on the first run.
+- `scans` job: `gitleaks` over the tree and every commit, `pip-audit` over the lock.
+
+### Changed
+- The credit ledger is `credits.CreditLedger`; OpenSky decoding is `decode_states` / `decode_movements`;
+  backoff is `http.backoff_delay`. One strict Retry-After parser replaces two that disagreed.
+
+### Fixed
+- `build_airports_db.py --limit N` loaded the whole file for any N below 5000; the loader counted repeated
+  idents twice, stored a blank ident, crashed on an elevation of `inf`, and left its database open.
+- A non-numeric `last_contact` in an OpenSky row crashed the most-recent-first sort; `on_ground: "false"` was
+  read as true; a `states` field of `0`, `""` or `{}` was read as an empty sky.
+- `Retry-After` of `inf`, `nan`, `1_000` or `-5` was read as a wait; OpenSky's parser ignored HTTP-dates.
+- `roles: [1, null, ""]` became grants.
+
 ## [0.5.0] - 2026-11-17
 
 Phase 4 of [ROADMAP.md](ROADMAP.md): the credibility gate — an eval harness that publishes how often the

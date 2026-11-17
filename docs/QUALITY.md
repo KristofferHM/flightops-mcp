@@ -82,6 +82,79 @@ Two refactors made the properties possible without an HTTP stack: the credit led
 into `credits.py`, and response decoding into `decode_states` / `decode_movements`. Behaviour is unchanged
 except as listed above.
 
+## 3. Mutation testing
+
+*If the code is broken, does a test fail?* Run on the code where a wrong answer is a security answer or a
+money answer, and nowhere else.
+
+| | |
+|---|---|
+| Tool | `mutmut` 3.8. It records which tests run each function and runs only those per mutant, in a forked process, so this scope takes minutes. `cosmic-ray` reruns the whole test command per mutant, which here would be hours. |
+| Scope | `src/flightops_mcp/auth/*`, `src/flightops_mcp/credits.py`, `agent/approval.py` |
+| Tests | the 16 files in `[tool.mutmut]` in `pyproject.toml`, with the derandomized `mutation` hypothesis profile |
+| Where | the `mutation` CI job, Linux only (mutmut forks per mutant; Windows has no fork) |
+| Budget | `timeout 35m` on the run, 45 minutes on the job. Run 4 took 5 min 17 s. |
+| Gate | `scripts/mutation_gate.py`: fails above `[tool.mutation-gate] ceiling`, on any mutant left unchecked (a run cut short is a lower bound, not a pass), and on zero mutants. A second step proves a ceiling one lower fails. |
+| Report | `docs/MUTATION-SURVIVORS.md`: every survivor, each judged. The CI artifact `mutation-report` has the diffs. |
+
+`agent/approval.py` yields no mutants. It is two frozen dataclasses and a `Protocol` stub, with no function
+body to mutate. The approval *logic* is `src/flightops_mcp/auth/approval.py`, which is in scope. The one
+property of the agent module worth guarding, that the grant is kept out of `repr`, has a test
+(`tests/test_agent_offline.py`).
+
+### Runs
+
+| Run | Mutants | Killed | Survived | What happened |
+|---|---|---|---|---|
+| 1 ([44107342465](https://github.com/KristofferHM/flightops-mcp/actions/runs/44107342465)) | 1324 | 932 (+1 timeout) | 391 | first read |
+| 2 ([44116113793](https://github.com/KristofferHM/flightops-mcp/actions/runs/44116113793)) | 1324 | 0 | 0 | void: a new test mutated its own parameters and failed mutmut's second clean run; the gate refused 1324 unchecked mutants as a pass |
+| 3 ([44117501997](https://github.com/KristofferHM/flightops-mcp/actions/runs/44117501997)) | 1324 | 1196 | 128 | after the first round of tests |
+| 4 ([44121537739](https://github.com/KristofferHM/flightops-mcp/actions/runs/44121537739)) | 1324 | 1234 | **90** | after the second round; the ceiling is set here |
+
+### What the survivors were
+
+Each one was either a missing test or a test that could not fail. Both kinds were fixed. None was deleted or
+weakened.
+
+**Missing tests, the ones that matter:**
+- **The issuer check, through the builders.** `build_resource_server_auth` and `build_approval_verifier`
+  both survived passing `issuer=None` to the verifier, which turns PyJWT's issuer check off. No test had
+  built a verifier from `Settings` and shown it a token from another issuer.
+- **The JWKS client's passthrough guard.** `event_hooks=None` survived. The guard was asserted only by
+  scanning the source text (`test_every_outbound_http_client_installs_the_guard`), and mutmut's
+  instrumented copy defeats a text scan. It is now asserted by making a request.
+- **JWKS parsing.** `continue` → `break` survived, so one malformed entry would silently drop every key after
+  it. The `kty`/`use`/`alg` filters each survived as well.
+- **The OBO cache.** It survived losing the issuer from its key. A held lock could be pruned (`and` → `or`),
+  which allows a second concurrent exchange for one identity. All users could share one lock, so one slow
+  exchange stalled everyone. The last two now have tests with a gated transport.
+- **The scope challenge.** The size limit could be applied per chunk instead of to the whole body. A final
+  message without `more_body` was not covered. The `no-store` and `content-length` headers were unasserted.
+- **The verifier's clock.** Nothing showed that PyJWT's own clock checks are off (`verify_nbf`/`verify_iat`
+  could be switched on), so the suite was quietly relying on the wall clock and the injected one agreeing.
+- **The audit trail.** `approval_rejected` was asserted for 2 of its 7 reasons.
+- **The credit ledger's window edge.** `< cutoff` → `<= cutoff` survived because a random float never lands
+  exactly on the edge. It is now an explicit `@example`.
+
+**Tests that could not fail, the interesting kind:**
+- `test_a_rejection_logs_its_reason_and_never_the_grant` asserted `approved_sha256 != PROPOSAL.sha256`. That
+  is also true when the field is logged as `None`. It now asserts the digest of what the grant showed.
+- The refusal-shape tests built their `ToolFailure`s at import time, before mutmut switches a mutant on, so
+  they passed whatever the code did. Every `hint=None` survived them. They now build the failure inside the
+  test. The general lesson: an input computed at collection time is not exercised by the code under test.
+- A new test popped from its parametrized dict, which is shared by every run in a process. It passed once
+  and failed on mutmut's second clean run (run 2). It now copies the dict, and the whole selection is
+  checked to pass twice in one interpreter.
+
+### The 90 that remain
+
+All of them are judged in `docs/MUTATION-SURVIVORS.md`. 58 are prose: the wording or case of a message or
+hint. A test asserts that every refusal *has* a message and a hint; pinning the words would make a test
+that breaks on every edit. The other 32 are behaviour-identical: header-name case, which HTTP ignores;
+logger names, which are not rendered; defaults for absent claims; a `>= 400` after the branch that took
+400; the cache fast path that the locked path repeats; and four more listed there. The ceiling is 90. It
+goes down when one of these is killed, and it does not go up without a row in that file.
+
 ## 4. Secret and dependency scans
 
 The `scans` job. Each step fails the build on a finding.

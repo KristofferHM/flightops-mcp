@@ -247,6 +247,18 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: A ceiling one lower fails the gate
+        # The step above cannot fail if the gate cannot. Same results, ceiling minus one.
+        run: |
+          set -euo pipefail
+          ceiling="$(sed -n 's/^ceiling = \([0-9]*\)$/\1/p' pyproject.toml)"
+          sed "s/^ceiling = .*/ceiling = $((ceiling - 1))/" pyproject.toml > lower.toml
+          if uv run python scripts/mutation_gate.py --pyproject lower.toml --report lower.md > lower.out; then
+            echo "::error::the gate passed with the ceiling at $((ceiling - 1))"
+            exit 1
+          fi
+          grep -E "^FAIL: [0-9]+ mutants survived; the ceiling is $((ceiling - 1))$" lower.out
+
       - name: Keep the survivor report
         if: always()
         uses: actions/upload-artifact@v4
