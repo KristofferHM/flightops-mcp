@@ -34,6 +34,11 @@ class Runtime:
     ops: OpsApiClient
     approvals: ApprovalVerifier
     clock: Callable[[], float]
+    # The instant upstream data is judged against: how old a METAR or a traffic
+    # snapshot is, and which movement window to ask for. Separate from `clock`,
+    # which judges token expiry and must stay on real time. A fixture world sets
+    # this to the moment it describes; everywhere else it is `clock`.
+    data_clock: Callable[[], float]
 
     @classmethod
     def build(
@@ -47,6 +52,7 @@ class Runtime:
         ops_transport: httpx.AsyncBaseTransport | None = None,
         sleep: Any = None,
         clock: Callable[[], float] = time.time,
+        data_clock: Callable[[], float] | None = None,
     ) -> Runtime:
         # `time.time`, not `time.monotonic`: movement windows are sent upstream as
         # Unix epoch seconds, and monotonic seconds would ask OpenSky for traffic
@@ -69,6 +75,7 @@ class Runtime:
             # The grants are signed by the issuer the exchange already talks to.
             approvals=build_approval_verifier(resolved, jwks_transport=idp_transport, clock=clock),
             clock=clock,
+            data_clock=data_clock or clock,
         )
 
     async def aclose(self) -> None:

@@ -75,49 +75,53 @@ way the evidence goes missing:
 The test suite refuses a scenario set with fewer than eight of these, or with one of the first eight kinds
 missing, or with two that share a fixture and a plan.
 
-## What fails today, and why
+## What failed in the first baseline, and what was done
 
-The baseline is not 100 %, and the scenarios that fail are left in. Each one is a finding about the server,
-not about the harness. None of them was fixed in this phase: the harness's job was to find them.
+No scenario fails in the committed baseline.
 
-**The server does not notice that data is old.**
+The first baseline (`accb16f`) scored 47 of 54 and published seven failures. Each was traced to a cause
+before anything was changed, and in all seven **the server was wrong**: no expectation and no fixture was
+edited. The evidence is the same in each case, `server_flagged_a_gap: false` or an `upstream_unavailable`
+on a body in the documented shape.
 
-- `absent-stale-metar`: `airport_weather` passes on a six-hour-old METAR with an empty `unknowns`. Nothing
-  compares `observation_time` with the clock.
-- `absent-stale-traffic`: `airport_live_traffic` reports aircraft from a four-hour-old snapshot as current.
-  `snapshot_time_epoch` is returned and never checked.
+**The server did not notice that data was old.** Now it compares upstream timestamps with
+`Runtime.data_clock` and says so in `unknowns`.
 
-**The server drops what it cannot read, and counts the rest.**
+- `absent-stale-metar`: a METAR from 02:50Z, asked about at 09:00Z, came back with an empty `unknowns`. A
+  METAR more than 90 minutes old (`METAR_STALE_AFTER_S`) is now reported as not current, and one with no
+  readable observation time as of unknown currency.
+- `absent-stale-traffic`: a four-hour-old snapshot was reported as current. A snapshot more than five
+  minutes old (`STATES_STALE_AFTER_S`) is now reported as such, and aircraft with no snapshot time at all
+  are not called current.
 
-- `absent-malformed-rows`: five aircraft in the payload, three of them not arrays. `states_in_bbox` skips
-  them silently and the tool answers "2 aircraft" with an empty `unknowns`.
+**The server dropped what it could not read, and counted the rest.**
 
-In all three the agent did what it was told: `server_flagged_a_gap` is `false` in the results, meaning the
-server said nothing was missing. A careful model might catch the first two from the timestamps. The
-contract, "each payload lists `unknowns`", does not hold for them.
+- `absent-malformed-rows`: five rows, three not state vectors; the tool answered "2 aircraft" with an empty
+  `unknowns`. Unreadable rows are now counted (`StatesSnapshot.unreadable`), and the payload says the count
+  is a lower bound. Movements rows get the same treatment.
 
-**The server cannot read OpenSky's movements response.**
+**The server could not read OpenSky's movements response.**
 
 - `happy-movements-arrivals`, `happy-movements-both`: OpenSky documents `/flights/arrival` and
-  `/flights/departure` as returning a JSON **array** of flights. `OpenSkyClient.movements` requires an object
-  with an `arrival` or `departure` key and answers `upstream_unavailable` for anything else. The unit tests
-  feed it the object it expects, so they pass. Against the documented shape `airport_movements` cannot
-  succeed.
+  `/flights/departure` as returning a JSON **array** of flights (and 404 for an empty interval).
+  `OpenSkyClient.movements` required an object with an `arrival` key. It now reads the array, and an
+  object is reported as unreadable rather than as an empty window. The unit tests that fed it the
+  invented object now feed it the documented array.
 - `happy-triage-elevated`, `happy-triage-composite`: `disruption_triage` calls `airport_movements`, so it
-  always has one source down and always reports severity `unknown`.
+  always had one source down and always said severity `unknown`. Fixed by the above.
 
-These four fail **Outcome** only: the right tool was called with the right arguments and the answer honestly
-said "unknown". The system failed safe, which is the design working, and it is still a tool that cannot do
-its job. This path has never run against the live API, because it needs OpenSky credentials.
+**The server's clock for data.** The server judges token expiry against the wall clock and must keep doing
+so, while every fixture describes one moment, the scenario's `clock.start`. `Runtime.data_clock` is the
+second clock: the instant upstream data is judged against and movement windows end at. Outside a fixture
+it is the wall clock. In the local stack it is the scenario's start, for any backend, because that is the
+moment the fixture's world describes.
 
-Three smaller things the runs show that no scenario fails on:
+Still true, and failed by no scenario:
 
 - A dead connection to OpenSky or NOAA surfaces as `internal_error`, not `upstream_unavailable`
   (`absent-upstream-dead-opensky`). The operations API client catches `httpx.HTTPError`; the other two do not.
 - An HTML error page from NOAA with status 200 is reported as "NOAA holds no current observation"
   (`absent-malformed-weather`). The answer is rightly "unknown", for a reason that is not the true one.
-- `absent-partial-triage-traffic-down` passes with two sources down where the fixture takes down one, because
-  of the movements defect above.
 
 ## What is deliberately not measured
 
@@ -138,9 +142,8 @@ follow (`offline.policy`), and its answers are templates. So:
 - **Not measured at all:** whether a reported number is the right number (the scorer checks the class of the
   answer, not its content), latency, cost, robustness to rephrasing (one phrasing per question), multi-turn
   conversations, prompt injection through tool results.
-- **Staleness is relative to the scenario's clock, and the server runs on the wall clock.** Every fixture
-  timestamp is "old" to the server. When the server learns to flag stale data, the stack will have to run the
-  server on the scenario's clock, or the fresh fixtures will start failing instead.
+- **Staleness is judged against the scenario's clock**, not the wall clock (`Runtime.data_clock`). A
+  fixture's timestamps are therefore "now" or "old" as the scenario intends, whenever the run happens.
 
 So the offline numbers are a regression gate on the server's contract. They are not a claim about how good
 an agent built on a model is, and the README says so beside the table.
@@ -222,8 +225,8 @@ What a model run's numbers should be compared against:
   by construction; a model at 90 % is not "worse than offline", it is the first measurement of that axis.
 - **Itself, repeated.** One run is one sample. Run it at least three times and report the spread before
   reading a difference between two models.
-- **Outcome, with the seven known failures set aside.** No planner can pass the four movement and triage
-  scenarios until the server can read the response. The three silent-gap scenarios are passable only by a
-  model that reads the timestamps itself, which makes them the most interesting three in the set.
+- **The three stale and malformed scenarios, read closely.** The server now flags the gap, so the offline
+  policy passes them by repeating the flag. A model can still ignore it, which
+  `test_a_model_that_reads_a_stale_metar_as_current_still_fails` shows being caught.
 - **A person's reading of the answers.** The lexicon is a heuristic for prose. Read every failure on refusal
   correctness, no hallucination and outcome before believing it, and a sample of the passes.

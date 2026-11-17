@@ -36,8 +36,8 @@
     "absent-malformed-rows": {
       "checks": {
         "argument_validity": true,
-        "no_hallucination": false,
-        "outcome": false,
+        "no_hallucination": true,
+        "outcome": true,
         "refusal_correctness": null,
         "tool_selection": true
       },
@@ -106,8 +106,8 @@
     "absent-stale-metar": {
       "checks": {
         "argument_validity": true,
-        "no_hallucination": false,
-        "outcome": false,
+        "no_hallucination": true,
+        "outcome": true,
         "refusal_correctness": null,
         "tool_selection": true
       },
@@ -116,8 +116,8 @@
     "absent-stale-traffic": {
       "checks": {
         "argument_validity": true,
-        "no_hallucination": false,
-        "outcome": false,
+        "no_hallucination": true,
+        "outcome": true,
         "refusal_correctness": null,
         "tool_selection": true
       },
@@ -227,7 +227,7 @@
       "checks": {
         "argument_validity": true,
         "no_hallucination": null,
-        "outcome": false,
+        "outcome": true,
         "refusal_correctness": null,
         "tool_selection": true
       },
@@ -237,7 +237,7 @@
       "checks": {
         "argument_validity": true,
         "no_hallucination": null,
-        "outcome": false,
+        "outcome": true,
         "refusal_correctness": null,
         "tool_selection": true
       },
@@ -327,7 +327,7 @@
       "checks": {
         "argument_validity": true,
         "no_hallucination": null,
-        "outcome": false,
+        "outcome": true,
         "refusal_correctness": null,
         "tool_selection": true
       },
@@ -337,7 +337,7 @@
       "checks": {
         "argument_validity": true,
         "no_hallucination": null,
-        "outcome": false,
+        "outcome": true,
         "refusal_correctness": null,
         "tool_selection": true
       },
@@ -568,13 +568,13 @@
       },
       "no_hallucination": {
         "applicable": 20,
-        "passed": 17,
-        "score": 85.0
+        "passed": 20,
+        "score": 100.0
       },
       "outcome": {
         "applicable": 54,
-        "passed": 47,
-        "score": 87.04
+        "passed": 54,
+        "score": 100.0
       },
       "refusal_correctness": {
         "applicable": 18,
@@ -587,57 +587,11 @@
         "score": 100.0
       }
     },
-    "failing": [
-      {
-        "checks": [
-          "no_hallucination",
-          "outcome"
-        ],
-        "id": "absent-malformed-rows"
-      },
-      {
-        "checks": [
-          "no_hallucination",
-          "outcome"
-        ],
-        "id": "absent-stale-metar"
-      },
-      {
-        "checks": [
-          "no_hallucination",
-          "outcome"
-        ],
-        "id": "absent-stale-traffic"
-      },
-      {
-        "checks": [
-          "outcome"
-        ],
-        "id": "happy-movements-arrivals"
-      },
-      {
-        "checks": [
-          "outcome"
-        ],
-        "id": "happy-movements-both"
-      },
-      {
-        "checks": [
-          "outcome"
-        ],
-        "id": "happy-triage-composite"
-      },
-      {
-        "checks": [
-          "outcome"
-        ],
-        "id": "happy-triage-elevated"
-      }
-    ],
+    "failing": [],
     "overall": {
       "applicable": 54,
-      "passed": 47,
-      "score": 87.04
+      "passed": 54,
+      "score": 100.0
     },
     "scenarios": 54
   }

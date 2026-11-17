@@ -46,6 +46,9 @@ SleepFn = Callable[[float], Any]
 
 MAX_HISTORY_S = 3600  # authenticated state vectors: 1 hour back
 TIME_RESOLUTION_S = 5  # authenticated state vectors: 5-second buckets
+# Live state vectors are seconds old. A snapshot five minutes old shows aircraft
+# that have since moved several miles, so it is not "around the airport now".
+STATES_STALE_AFTER_S = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +169,18 @@ class StatesSnapshot:
     credits_remaining: int | None
     truncated: bool = False
     notes: list[str] = field(default_factory=list)
+    # Rows in the answer that were not a state vector. Counted, never dropped
+    # silently: a count over the readable rows is not the count.
+    unreadable: int = 0
+    received: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class Movements:
+    movements: list[Movement]
+    # Rows that were not a flight object. Counted for the same reason as above.
+    unreadable: int = 0
+    received: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,7 +321,8 @@ class OpenSkyClient:
         rows = body.get("states") or []
         if not isinstance(rows, list):
             raise upstream_unavailable("OpenSky", "states field was not a list")
-        vectors = [StateVector.from_row(row) for row in rows if isinstance(row, list)]
+        readable = [row for row in rows if _is_state_row(row)]
+        vectors = [StateVector.from_row(row) for row in readable]
 
         notes: list[str] = []
         truncated = len(vectors) > max_vectors
@@ -327,6 +343,8 @@ class OpenSkyClient:
             credits_remaining=self.last_credits_remaining,
             truncated=truncated,
             notes=notes,
+            unreadable=len(rows) - len(readable),
+            received=len(rows),
         )
 
     async def movements(
@@ -336,7 +354,7 @@ class OpenSkyClient:
         *,
         begin: int,
         end: int,
-    ) -> list[Movement]:
+    ) -> Movements:
         if direction not in {"arrival", "departure"}:
             raise ToolFailure(
                 code="invalid_argument",
@@ -349,16 +367,15 @@ class OpenSkyClient:
             f"/flights/{direction}",
             {"airport": airport_icao, "begin": begin, "end": end},
         )
+        # 404 is OpenSky's documented answer for "no flights in this interval".
         if body is None:
-            return []
-        if not isinstance(body, dict):
-            raise upstream_unavailable("OpenSky", "movements response was not a JSON object")
-        key = "arrival" if direction == "arrival" else "departure"
-        rows = body.get(key) or []
-        if not isinstance(rows, list):
-            return []
+            return Movements([])
+        # Documented as a JSON array of flight objects. Anything else is not an
+        # empty window, it is an answer this client cannot read.
+        if not isinstance(body, list):
+            raise upstream_unavailable("OpenSky", "movements response was not a JSON array")
         out: list[Movement] = []
-        for row in rows:
+        for row in body:
             if not isinstance(row, dict):
                 continue
             callsign = row.get("callsign")
@@ -372,7 +389,12 @@ class OpenSkyClient:
                     est_arrival_airport=row.get("estArrivalAirport"),
                 )
             )
-        return out
+        return Movements(out, unreadable=len(body) - len(out), received=len(body))
+
+
+def _is_state_row(row: object) -> bool:
+    """A state vector is an array whose first field is the transponder address."""
+    return isinstance(row, list) and bool(row) and isinstance(row[0], str) and bool(row[0])
 
 
 async def _default_sleep(seconds: float) -> None:

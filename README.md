@@ -58,32 +58,23 @@ than 2 points on any line of it.
 | Tool selection | 54 | 54 | 100.00 % |
 | Argument validity | 50 | 50 | 100.00 % |
 | Refusal correctness | 18 | 18 | 100.00 % |
-| No hallucination | 17 | 20 | 85.00 % |
-| Outcome (answer class, writes) | 47 | 54 | 87.04 % |
-| **Scenarios passing every check that applies** | 47 | 54 | 87.04 % |
+| No hallucination | 20 | 20 | 100.00 % |
+| Outcome (answer class, writes) | 54 | 54 | 100.00 % |
+| **Scenarios passing every check that applies** | 54 | 54 | 100.00 % |
 
 Absent-evidence group (answering confidently when the evidence is not there): **20 scenarios** over 9 kinds: `empty_result` 3, `malformed_payload` 3, `partial_coverage` 2, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 2, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
 
-Failing in this run, and published as such:
-
-| Scenario | Fails |
-|---|---|
-| `absent-malformed-rows` | no hallucination, outcome (answer class, writes) |
-| `absent-stale-metar` | no hallucination, outcome (answer class, writes) |
-| `absent-stale-traffic` | no hallucination, outcome (answer class, writes) |
-| `happy-movements-arrivals` | outcome (answer class, writes) |
-| `happy-movements-both` | outcome (answer class, writes) |
-| `happy-triage-composite` | outcome (answer class, writes) |
-| `happy-triage-elevated` | outcome (answer class, writes) |
+No scenario fails in this run.
 
 Regenerate: `uv run python -m evals.run --offline --update-baseline`. What these numbers measure, and what they do not: [`docs/EVALS.md`](docs/EVALS.md).
 <!-- evals:end -->
 
-Two things to read this table with. The model is `offline`: a scripted policy that is told which plan to
-follow, so the first two lines measure the server's contract and not anybody's planning. And the failures
-are left in on purpose: each is a place where the server answers confidently, or cannot answer, on evidence
-it should have questioned. They are listed with their causes in
-[`docs/EVALS.md`](docs/EVALS.md#what-fails-today-and-why).
+Read this table with one thing in mind. The model is `offline`: a scripted policy that is told which
+plan to follow, so 100 % here means the server's contract holds on every scenario, not that an agent
+planned well. The first baseline scored 47 of 54. All seven failures were server defects (stale data passed
+as current, unreadable rows dropped silently, OpenSky's movements response unreadable), fixed with no
+expectation edited. The causes and fixes are in
+[`docs/EVALS.md`](docs/EVALS.md#what-failed-in-the-first-baseline-and-what-was-done).
 
 ```bash
 uv run python -m evals.run --offline                     # the CI gate: no model, no network

@@ -19,7 +19,9 @@ What is a fixture, and is named as one:
 
 The stack runs on real time. The server's bearer check and the operations API
 both judge a token's expiry against the wall clock, so the IdP cannot be put on
-a simulated one. Nothing from that clock reaches a transcript.
+a simulated one. Nothing from that clock reaches a transcript. The age of
+upstream data is the exception: the server judges it against the scenario's
+start (`Runtime.data_clock`), because that is the moment the fixture describes.
 """
 
 from __future__ import annotations
@@ -240,6 +242,10 @@ async def local_stack(
             weather_transport=httpx.MockTransport(world.weather),
             idp_transport=idp,
             ops_transport=ops,
+            # The fixture describes the world at the scenario's start, so the
+            # age of its data is judged from there, whichever backend is planning.
+            # Tokens are still judged on real time (see the module docstring).
+            data_clock=lambda: scenario.clock_start,
         )
         set_runtime(runtime)
         try:

@@ -42,7 +42,7 @@ def install(settings: Settings, *, seen_headers: list[dict[str, str]] | None = N
             seen_headers.append(dict(request.headers))
         if "/states/" in request.url.path:
             return httpx.Response(200, json={"time": 1_700_000_000, "states": []})
-        return httpx.Response(200, json={"begin": 1, "end": 2, "arrival": [], "departure": []})
+        return httpx.Response(200, json=[])
 
     def token_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"access_token": "tok", "expires_in": 1800})

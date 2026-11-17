@@ -136,8 +136,10 @@ def test_the_failures_in_the_baseline_are_the_ones_the_docs_explain(gate: Gate) 
     documented = (REPO / "docs" / "EVALS.md").read_text(encoding="utf-8")
     failing = [entry["id"] for entry in gate.run["summary"]["failing"]]
 
-    assert failing, "if nothing fails any more, the 'what fails today' section is out of date"
     assert [name for name in failing if f"`{name}`" not in documented] == []
+    if not failing:
+        # The section must not go on describing failures that no longer happen.
+        assert "No scenario fails in the committed baseline." in documented
 
 
 # --- the gate, failing -------------------------------------------------------------------------
@@ -415,13 +417,28 @@ async def test_a_dead_upstream_in_one_scenario_is_not_an_open_circuit_in_the_nex
     assert after["run"]["steps"][-1]["result"]["class"] == "ok"
 
 
-async def test_the_server_staying_silent_about_stale_data_is_caught() -> None:
-    """Published as a failure: the METAR is six hours old and nothing says so."""
-    result = await offline(BY_ID["absent-stale-metar"])
+@pytest.mark.parametrize(
+    "name", ["absent-stale-metar", "absent-stale-traffic", "absent-malformed-rows"]
+)
+async def test_the_server_flags_the_gaps_it_used_to_stay_silent_about(name: str) -> None:
+    """These three failed in the first baseline because the server said nothing was missing."""
+    result = await offline(BY_ID[name])
 
+    assert result["run"]["server_flagged_a_gap"] is True
+    assert result["passed"] is True
+
+
+async def test_a_model_that_reads_a_stale_metar_as_current_still_fails() -> None:
+    """The server now flags the gap. An agent that ignores the flag is still caught."""
+    result = await model(
+        "absent-stale-metar",
+        call("resolve_airport", query="Landvetter", limit=1),
+        call("airport_weather", airport="ESGG"),
+        Turn(text="Conditions at Landvetter are normal: VFR, light wind, nothing to worry about."),
+    )
+
+    assert result["run"]["server_flagged_a_gap"] is True
     assert set(failed(result)) == {"no_hallucination", "outcome"}
-    assert result["run"]["server_flagged_a_gap"] is False
-    assert result["checks"]["tool_selection"]["passed"] is True
 
 
 async def test_passengers_planted_in_the_manifest_reach_no_part_of_the_result() -> None:

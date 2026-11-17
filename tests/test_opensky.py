@@ -140,6 +140,21 @@ async def test_empty_states_is_not_an_error(settings: Settings) -> None:
     assert snapshot.truncated is False
 
 
+async def test_unreadable_state_rows_are_counted_not_dropped(settings: Settings) -> None:
+    """Five rows, three not state vectors: the snapshot says so instead of counting two."""
+    good = ["a1", "ONE", "SE", None, 100, 1.0, 1.0, None, False, None, None, None]
+    rows = [good, ["a2", *good[1:]], {"icao24": "a3"}, "a4,TWO", None]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"time": 1, "states": rows})
+
+    async with client(settings, handler) as opensky:
+        snapshot = await opensky.states_in_bbox(BBox.around(57.66, 12.28, 20.0))
+
+    assert [vector.icao24 for vector in snapshot.vectors] == ["a1", "a2"]
+    assert (snapshot.unreadable, snapshot.received) == (3, 5)
+
+
 # --- rate limiting -----------------------------------------------------------
 async def test_short_rate_limit_wait_is_honoured_then_retried(
     settings: Settings, sleep: SleepRecorder
@@ -223,30 +238,53 @@ async def test_local_credit_budget_stops_a_runaway_loop(settings: Settings) -> N
 
 # --- movements ---------------------------------------------------------------
 async def test_movements_are_decoded(settings: Settings) -> None:
-    payload = {
-        "begin": 1,
-        "end": 2,
-        "arrival": [
-            {
-                "icao24": "4ca1fa",
-                "callsign": "SAS123  ",
-                "firstSeen": 1,
-                "lastSeen": 2,
-                "estDepartureAirport": "ESSA",
-                "estArrivalAirport": "ESGG",
-            }
-        ],
-    }
+    # The shape OpenSky documents: a JSON array of flights, not an object.
+    payload = [
+        {
+            "icao24": "4ca1fa",
+            "callsign": "SAS123  ",
+            "firstSeen": 1,
+            "lastSeen": 2,
+            "estDepartureAirport": "ESSA",
+            "estArrivalAirport": "ESGG",
+        }
+    ]
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert "/flights/arrival" in str(request.url)
         return httpx.Response(200, json=payload)
 
     async with client(settings, handler) as opensky:
-        movements = await opensky.movements("ESGG", "arrival", begin=1, end=2)
+        page = await opensky.movements("ESGG", "arrival", begin=1, end=2)
 
-    assert movements[0].callsign == "SAS123"
-    assert movements[0].est_departure_airport == "ESSA"
+    assert page.movements[0].callsign == "SAS123"
+    assert page.movements[0].est_departure_airport == "ESSA"
+    assert page.unreadable == 0
+
+
+async def test_an_object_instead_of_the_documented_array_is_unreadable(
+    settings: Settings,
+) -> None:
+    """The shape this client used to require. It is not what OpenSky sends."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"begin": 1, "end": 2, "arrival": []})
+
+    async with client(settings, handler) as opensky:
+        with pytest.raises(ToolFailure) as excinfo:
+            await opensky.movements("ESGG", "arrival", begin=1, end=2)
+
+    assert excinfo.value.code == "upstream_unavailable"
+
+
+async def test_unreadable_movement_rows_are_counted_not_dropped(settings: Settings) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"icao24": "4ca1fa", "callsign": "SAS1"}, "junk", None])
+
+    async with client(settings, handler) as opensky:
+        page = await opensky.movements("ESGG", "arrival", begin=1, end=2)
+
+    assert (len(page.movements), page.unreadable, page.received) == (1, 2, 3)
 
 
 async def test_unknown_direction_is_rejected_before_spending_credits(settings: Settings) -> None:
@@ -266,4 +304,7 @@ async def test_404_on_movements_is_an_empty_list_not_a_failure(settings: Setting
         return httpx.Response(404, json={})
 
     async with client(settings, handler) as opensky:
-        assert await opensky.movements("ZZZZ", "arrival", begin=1, end=2) == []
+        page = await opensky.movements("ZZZZ", "arrival", begin=1, end=2)
+
+    assert page.movements == []
+    assert page.unreadable == 0
