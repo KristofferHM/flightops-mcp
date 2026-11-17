@@ -16,6 +16,7 @@ import csv
 import math
 import sqlite3
 from collections.abc import Iterable
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -56,30 +57,41 @@ _USEFUL_TYPES = frozenset({"large_airport", "medium_airport", "small_airport", "
 
 
 def build_from_csv(csv_path: Path, db_path: Path, *, limit: int | None = None) -> int:
-    """Load OurAirports' airports.csv into SQLite. Returns the row count."""
+    """Load OurAirports' airports.csv into SQLite. Returns the number of airports stored.
+
+    A row without an ident cannot be looked up and is skipped. When an ident
+    appears twice the later row wins, and the return value counts airports in
+    the database, not rows read: the two differ exactly when the CSV repeats
+    itself. `limit` stops after that many accepted rows.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     if db_path.exists():
         db_path.unlink()
 
-    rows = 0
-    with sqlite3.connect(db_path) as connection:
+    accepted = 0
+    # `with connect()` commits but does not close; on Windows the open handle then
+    # blocks the next rebuild from deleting the file.
+    with closing(sqlite3.connect(db_path)) as connection:
         connection.executescript(_SCHEMA)
         with csv_path.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
             batch: list[tuple[Any, ...]] = []
             for record in reader:
+                if limit is not None and accepted >= limit:
+                    break
                 if record.get("type") not in _USEFUL_TYPES:
                     continue
-                lat = _to_float(record.get("latitude_deg"))
-                lon = _to_float(record.get("longitude_deg"))
+                ident = (record.get("ident") or "").strip().upper()
+                if not ident:
+                    continue
                 batch.append(
                     (
-                        (record.get("ident") or "").upper(),
-                        (record.get("iata_code") or "").upper() or None,
+                        ident,
+                        (record.get("iata_code") or "").strip().upper() or None,
                         record.get("name") or "",
                         record.get("type"),
-                        lat,
-                        lon,
+                        _to_float(record.get("latitude_deg")),
+                        _to_float(record.get("longitude_deg")),
                         _to_int(record.get("elevation_ft")),
                         record.get("iso_country"),
                         record.get("iso_region"),
@@ -87,17 +99,15 @@ def build_from_csv(csv_path: Path, db_path: Path, *, limit: int | None = None) -
                         record.get("scheduled_service"),
                     )
                 )
+                accepted += 1
                 if len(batch) >= 5000:
                     _insert(connection, batch)
-                    rows += len(batch)
                     batch.clear()
-                    if limit is not None and rows >= limit:
-                        break
             if batch:
                 _insert(connection, batch)
-                rows += len(batch)
         connection.commit()
-    return rows
+        (stored,) = connection.execute("SELECT count(*) FROM airports").fetchone()
+    return int(stored)
 
 
 def _insert(connection: sqlite3.Connection, batch: Iterable[tuple[Any, ...]]) -> None:
@@ -111,17 +121,17 @@ def _insert(connection: sqlite3.Connection, batch: Iterable[tuple[Any, ...]]) ->
 
 
 def _to_float(value: str | None) -> float | None:
+    """A finite number, or None. `float()` also reads "nan" and "inf", which are not places."""
     try:
-        return float(value) if value not in (None, "") else None
+        number = float(value) if value not in (None, "") else None
     except ValueError:
         return None
+    return number if number is not None and math.isfinite(number) else None
 
 
 def _to_int(value: str | None) -> int | None:
-    try:
-        return int(float(value)) if value not in (None, "") else None
-    except ValueError:
-        return None
+    number = _to_float(value)
+    return int(number) if number is not None else None
 
 
 class AirportDB:

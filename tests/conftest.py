@@ -5,12 +5,15 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+from hypothesis import HealthCheck
+from hypothesis import settings as hypothesis_settings
 
 from flightops_mcp.airports import build_from_csv
 from flightops_mcp.config import Settings
@@ -18,6 +21,22 @@ from flightops_mcp.runtime import Runtime, set_runtime
 from flightops_mcp.telemetry import configure_logging
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# Property-test profiles (docs/QUALITY.md). Locally: hypothesis's default 100 examples,
+# random each run, so a laptop keeps exploring. In CI: five times as many, derandomized,
+# so a red build reproduces from the commit alone. Neither has a deadline: a test that
+# fails because a disk was slow is a timing assertion, and this suite makes none.
+# Chosen with HYPOTHESIS_PROFILE.
+hypothesis_settings.register_profile("dev", max_examples=100, deadline=None)
+hypothesis_settings.register_profile(
+    "ci",
+    max_examples=500,
+    derandomize=True,
+    deadline=None,
+    print_blob=True,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 
 class FakeClock:

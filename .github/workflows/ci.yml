@@ -52,6 +52,8 @@ jobs:
           uv run pytest -q -rs --cov --cov-report=term | tee pytest.out
         env:
           UV_PYTHON: ${{ matrix.python }}
+          # 500 examples per property, derandomized (tests/conftest.py).
+          HYPOTHESIS_PROFILE: ci
       - name: Fail on skipped tests
         # A skipped test is an untested path. Nothing here may skip silently.
         run: |
