@@ -1,0 +1,32 @@
+id: absent-malformed-states
+group: absent-evidence
+why: 'OpenSky answers 200 with JSON of the wrong shape: unusable, and not the same as empty.'
+question: What is flying around Amsterdam Schiphol?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    states:
+      status: 200
+      json:
+      - unexpected
+      - payload
+offline:
+  policy: airport_traffic
+  params:
+    airport: Schiphol
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_live_traffic
+  arguments:
+    airport_live_traffic:
+      airport: EHAM
+  answer: unknown
+  absent_evidence: malformed_payload

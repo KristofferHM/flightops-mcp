@@ -12,6 +12,11 @@ in a proposal is the count the server reported, and a refusal ends the run.
 Two things a policy must never do, because either would break determinism: read
 a clock, and repeat a timestamp from a tool result in its answer. The server
 runs on real time. The policy reports counts, codes and identifiers.
+
+A policy is told which plan to follow by its scenario, and a model is not. That
+is the limit of what an offline run can show: it exercises the server's contract
+and the policy's reaction to it, and says nothing about how a model would plan
+(docs/EVALS.md).
 """
 
 from __future__ import annotations
@@ -89,14 +94,28 @@ def rebook_cohort(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observ
     return answer
 
 
-def airport_brief(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
-    """Resolve an airport, read its weather, and say what is not known."""
-    query = params["airport"]
+def _miss(query: str, resolved: Observation) -> str:
+    """The sentence that ends a run whose airport did not resolve."""
+    if resolved.ok or resolved.code == "not_found":
+        return f"No airport matched {query!r} ({resolved.code}). Nothing was looked up."
+    # A refusal is not a miss: the airport may well exist.
+    return f"{query!r} could not be resolved ({resolved.code}). Nothing was looked up."
+
+
+def _resolve(query: str) -> Generator[Calls, Sequence[Observation], tuple[str | None, str]]:
+    """Resolve an airport. Gives its ICAO code, or None and the sentence that ends the run."""
     (resolved,) = yield [("resolve_airport", {"query": query, "limit": 1})]
     matches = resolved.payload.get("matches") if resolved.ok else None
     if not matches:
-        return f"No airport matched {query!r} ({resolved.code}). Nothing was looked up."
-    icao = matches[0]["icao"]
+        return None, _miss(query, resolved)
+    return str(matches[0]["icao"]), ""
+
+
+def airport_brief(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Resolve an airport, read its weather, and say what is not known."""
+    icao, miss = yield from _resolve(params["airport"])
+    if icao is None:
+        return miss
     (weather,) = yield [("airport_weather", {"airport": icao})]
     if not weather.ok:
         return f"Weather for {icao} is unavailable ({weather.code}). Conditions are unknown."
@@ -110,9 +129,163 @@ def airport_brief(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observ
     return f"{icao}: {len(flags)} weather impact flag(s) reported."
 
 
+def airport_lookup(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Resolve an airport and name it. The reference data is the whole answer."""
+    query = params["airport"]
+    (resolved,) = yield [("resolve_airport", {"query": query, "limit": 1})]
+    matches = resolved.payload.get("matches") if resolved.ok else None
+    if not matches:
+        return _miss(query, resolved)
+    found = matches[0]
+    return f"{found['icao']} (IATA {found['iata'] or 'none'}): {found['name']}."
+
+
+def airport_traffic(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Resolve an airport and count the aircraft heard around it."""
+    icao, miss = yield from _resolve(params["airport"])
+    if icao is None:
+        return miss
+    arguments: dict[str, Any] = {"airport": icao}
+    if "radius_nm" in params:
+        arguments["radius_nm"] = params["radius_nm"]
+    (traffic,) = yield [("airport_live_traffic", arguments)]
+    if not traffic.ok:
+        return (
+            f"Live traffic around {icao} is unavailable ({traffic.code}). "
+            "What is flying there is unknown."
+        )
+    unknowns = traffic.payload.get("unknowns") or []
+    if unknowns:
+        return (
+            f"Traffic around {icao} is unknown: {len(unknowns)} gap(s) in the traffic data. "
+            "That is not evidence that the airspace is empty or the airport closed."
+        )
+    counts = traffic.payload.get("counts") or {}
+    return (
+        f"{icao}: {counts.get('returned')} aircraft heard, {counts.get('airborne')} airborne "
+        f"and {counts.get('on_ground')} on the ground."
+    )
+
+
+def airport_movements(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Resolve an airport and count its estimated arrivals and departures."""
+    icao, miss = yield from _resolve(params["airport"])
+    if icao is None:
+        return miss
+    arguments: dict[str, Any] = {"airport": icao, "direction": params.get("direction", "both")}
+    if "window_minutes" in params:
+        arguments["window_minutes"] = params["window_minutes"]
+    (movements,) = yield [("airport_movements", arguments)]
+    if not movements.ok:
+        return (
+            f"Movements at {icao} are unavailable ({movements.code}). "
+            "Arrivals and departures are unknown."
+        )
+    unknowns = movements.payload.get("unknowns") or []
+    if unknowns:
+        return (
+            f"Movements at {icao} are unknown: {len(unknowns)} gap(s) in the movement data. "
+            "That is not evidence that nothing is flying."
+        )
+    counts = movements.payload.get("counts") or {}
+    counted = ", ".join(f"{count} {which}(s)" for which, count in sorted(counts.items()))
+    return f"{icao}: {counted} estimated from ADS-B. These are estimates, not a schedule."
+
+
+def airport_triage(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Resolve an airport and run the composite triage. Severity is quoted, never upgraded."""
+    icao, miss = yield from _resolve(params["airport"])
+    if icao is None:
+        return miss
+    arguments: dict[str, Any] = {"airport": icao}
+    if "radius_nm" in params:
+        arguments["radius_nm"] = params["radius_nm"]
+    (triage,) = yield [("disruption_triage", arguments)]
+    if not triage.ok:
+        return (
+            f"Triage for {icao} is unavailable ({triage.code}). "
+            "Whether the airport is disrupted is unknown."
+        )
+    assessment = triage.payload.get("assessment") or {}
+    severity = assessment.get("severity")
+    reasons = assessment.get("reasons") or []
+    unknowns = assessment.get("unknowns") or []
+    degraded = triage.payload.get("degraded") or []
+    if unknowns or degraded:
+        return (
+            f"{icao}: severity {severity}, with {len(reasons)} reason(s), {len(unknowns)} "
+            f"unknown(s) and {len(degraded)} data source(s) unavailable. That is not evidence "
+            "that operations are normal."
+        )
+    return (
+        f"{icao}: severity {severity} on {len(reasons)} reason(s), with no gaps reported in "
+        "the data behind it. Advisory only."
+    )
+
+
+def passenger_impact(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Count who a flight affects. Counts only; nobody is named and nothing is proposed."""
+    flight = params["flight"]
+    (impact,) = yield [("flight_passenger_impact", {"flight": flight})]
+    if not impact.ok:
+        return (
+            f"Passenger impact for {flight} could not be read ({impact.code}). "
+            "Who is affected is unknown."
+        )
+    unknowns = impact.payload.get("unknowns") or []
+    if unknowns:
+        return (
+            f"{flight} has no passengers on file ({len(unknowns)} unknown(s) reported). "
+            "That is not evidence that nobody is affected."
+        )
+    counts = impact.payload.get("passengers") or {}
+    return (
+        f"{flight}: {counts.get('booked')} booked, {counts.get('connecting')} connecting, "
+        f"{counts.get('tight_connections')} with tight connections, "
+        f"{counts.get('needing_assistance')} needing assistance."
+    )
+
+
+def upstream_check(_params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Ask the server what state its upstreams and credentials are in."""
+    (status,) = yield [("upstream_status", {})]
+    if not status.ok:
+        return (
+            f"Upstream status is unavailable ({status.code}). "
+            "The state of the upstreams is unknown."
+        )
+    budget = status.payload.get("budget") or {}
+    configured = (status.payload.get("credentials") or {}).get("opensky_configured")
+    open_circuits = sum(
+        1 for circuit in status.payload.get("circuits") or [] if circuit.get("state") == "open"
+    )
+    return (
+        f"OpenSky client {'configured' if configured else 'absent'}; "
+        f"{budget.get('credits_spent_this_hour')} of {budget.get('local_budget_per_hour')} "
+        f"credits spent this hour; {open_circuits} circuit(s) open."
+    )
+
+
+def decline(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Call nothing. For a request no tool on this server may serve."""
+    # No calls are yielded: the refusal is the whole plan.
+    yield from ()
+    return (
+        f"That is not something this server can do: {params['reason']} "
+        "No tool was called and nothing was changed."
+    )
+
+
 POLICIES: Final[dict[str, Policy]] = {
     "rebook_cohort": rebook_cohort,
     "airport_brief": airport_brief,
+    "airport_lookup": airport_lookup,
+    "airport_traffic": airport_traffic,
+    "airport_movements": airport_movements,
+    "airport_triage": airport_triage,
+    "passenger_impact": passenger_impact,
+    "upstream_check": upstream_check,
+    "decline": decline,
 }
 
 

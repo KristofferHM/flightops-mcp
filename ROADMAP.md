@@ -191,10 +191,27 @@ portfolio piece and an engineering claim.
 
 ### Acceptance criteria
 
-- [ ] Harness runs offline in CI in under 60 s
-- [ ] Baseline committed; a regression of >2 points fails the build
-- [ ] At least 8 scenarios specifically target the failure mode this project exists to prevent:
+- [x] Harness runs offline in CI in under 60 s
+      — CI run [44092100736](https://github.com/KristofferHM/flightops-mcp/actions/runs/44092100736) on
+      `feat/phase-4-evals`: the `evals (offline)` job completed in **30 s** including checkout and setup, all
+      eight jobs green. The harness itself reports 9.84 s for 54 scenarios, and the limit is enforced twice in
+      the job (`--max-seconds 60` in the harness, and a check after it), so a slow run fails rather than
+      quietly becoming the slowest job and getting removed.
+- [x] Baseline committed; a regression of >2 points fails the build
+      — `evals/baseline.json`, 54 of 54, recorded 2026-11-17 (`69d43a5`), README table generated from it.
+      The regression rule is counted two ways, and the stricter decides: more than 2 points on any line,
+      **or** more than 0 scenarios failing a check they passed in the baseline. With 54 scenarios one is
+      1.85 points, so points alone would miss a single regression on the wide lines. Shown failing on the
+      CI command (`de1f6c9`): one expected answer broken → outcome and overall 100.00 → 98.15, exit 1,
+      caught by the scenario rule (points: inside the limit, a note); one server check loosened with no
+      scenario touched → no hallucination 100.00 → 95.00, exit 1, caught by both rules. Restored → 100.00,
+      exit 0. CI's own "broken scenarios" step checks both rules on every push.
+- [x] At least 8 scenarios specifically target the failure mode this project exists to prevent:
       answering confidently when evidence is absent
+      — 20 `absent-*` scenarios over 9 kinds: `empty_result` 3, `malformed_payload` 3, `partial_coverage` 2,
+      `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 2, `unknown_airport` 2, `unknown_flight` 1,
+      `upstream_error` 3. All 20 pass no hallucination. Three of them failed in the first baseline because
+      the server stayed silent about stale and unreadable data; that was fixed in the server (`69d43a5`).
 
 ---
 

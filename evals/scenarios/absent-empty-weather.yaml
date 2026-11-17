@@ -1,0 +1,31 @@
+id: absent-empty-weather
+group: absent-evidence
+why: 'NOAA answers 204: a valid question with no report. That is not good weather.'
+question: What are conditions at Gothenburg Landvetter right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 204
+    taf:
+      status: 204
+offline:
+  policy: airport_brief
+  params:
+    airport: Landvetter
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_weather
+  arguments:
+    airport_weather:
+      airport: ESGG
+  answer: unknown
+  absent_evidence: empty_result

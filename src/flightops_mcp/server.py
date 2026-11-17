@@ -66,7 +66,7 @@ from .errors import (
     not_found,
     reference_data_missing,
 )
-from .opensky import MAX_HISTORY_S, TIME_RESOLUTION_S, BBox
+from .opensky import MAX_HISTORY_S, STATES_STALE_AFTER_S, TIME_RESOLUTION_S, BBox
 from .ops import TIGHT_CONNECTION_MINUTES, DownstreamTokenRejected, normalise_flight, summarise
 from .otel import configure_tracing, tracer, tracing_kind
 from .rebooking import Proposal, approved_digest, build_proposal
@@ -75,6 +75,11 @@ from .runtime import Runtime, get_runtime
 from .telemetry import REGISTRY as METRICS_REGISTRY
 from .telemetry import TOOL_CALLS, configure_logging, get_logger
 from .weather import fleet_impact_flags
+
+# METARs are issued at least hourly, half-hourly at most European airports. One
+# more than 90 minutes old means at least one routine report is missing, and the
+# observation is no longer "conditions now".
+METAR_STALE_AFTER_S: Final = 90 * 60
 
 INSTRUCTIONS = """\
 Use this server for questions about the operational state of an airport and the \
@@ -217,6 +222,26 @@ def _iso_now(clock: Any) -> str:
     return datetime.fromtimestamp(clock(), tz=UTC).isoformat()
 
 
+def _epoch(value: object) -> float | None:
+    """An upstream timestamp as epoch seconds: NOAA sends ISO strings, OpenSky integers."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.strip())
+        except ValueError:
+            return None
+        return (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).timestamp()
+    return None
+
+
+def _age(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    return f"{minutes} min" if minutes < 120 else f"{minutes // 60} h {minutes % 60} min"
+
+
 def _require_airport(runtime: Runtime, ident: str) -> dict[str, Any]:
     if not runtime.airports.exists:
         raise reference_data_missing(str(runtime.airports.path))
@@ -301,9 +326,34 @@ async def airport_live_traffic(
 
     airborne = sum(1 for vector in snapshot.vectors if not vector.on_ground)
     on_ground = len(snapshot.vectors) - airborne
+
+    unknowns: list[str] = []
+    if not snapshot.vectors:
+        unknowns.append(
+            "No aircraft heard in this box. That can mean quiet airspace, or a gap in "
+            "receiver coverage; it is not evidence that the airport is closed."
+        )
+    if snapshot.unreadable:
+        unknowns.append(
+            f"{snapshot.unreadable} of {snapshot.received} rows in OpenSky's answer were not "
+            "readable state vectors. The counts cover only the readable ones, so they are a "
+            "lower bound, not the number of aircraft."
+        )
+    now = runtime.data_clock()
+    if snapshot.time is None or snapshot.time <= 0:
+        if snapshot.vectors:
+            unknowns.append(
+                "OpenSky's answer carries no snapshot time, so how current these positions "
+                "are is unknown."
+            )
+    elif now - snapshot.time > STATES_STALE_AFTER_S:
+        unknowns.append(
+            f"The snapshot is {_age(now - snapshot.time)} old. These positions are not where "
+            "the aircraft are now."
+        )
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.clock),
+        "as_of": _iso_now(runtime.data_clock),
         "snapshot_time_epoch": snapshot.time,
         "airport": {"icao": record["ident"], "name": record["name"]},
         "search": {
@@ -319,12 +369,7 @@ async def airport_live_traffic(
             "truncated": snapshot.truncated,
             "notes": snapshot.notes,
         },
-        "unknowns": []
-        if snapshot.vectors
-        else [
-            "No aircraft heard in this box. That can mean quiet airspace, or a gap in "
-            "receiver coverage; it is not evidence that the airport is closed."
-        ],
+        "unknowns": unknowns,
         "source": {
             "name": "OpenSky Network",
             "endpoint": "/states/all",
@@ -363,26 +408,29 @@ async def airport_movements(
             hint="Use 'both' if you are unsure; it costs twice the credits of one direction.",
         )
     window = max(5, min(window_minutes, MAX_HISTORY_S // 60))
-    end = int(runtime.clock())
+    end = int(runtime.data_clock())
     end -= end % TIME_RESOLUTION_S
     begin = end - window * 60
 
     directions = ["arrival", "departure"] if wanted == "both" else [wanted]
     results: dict[str, list[dict[str, Any]]] = {}
     missing: list[str] = []
+    unknowns: list[str] = []
     for which in directions:
         try:
-            movements = await runtime.opensky.movements(
-                record["ident"], which, begin=begin, end=end
-            )
+            page = await runtime.opensky.movements(record["ident"], which, begin=begin, end=end)
         except ToolFailure as exc:
             if exc.code == "credentials_missing":
                 missing.append(which)
                 continue
             raise
-        results[which] = [movement.to_payload() for movement in movements]
+        results[which] = [movement.to_payload() for movement in page.movements]
+        if page.unreadable:
+            unknowns.append(
+                f"{page.unreadable} of {page.received} {which} rows in OpenSky's answer were "
+                "not readable flights. The count covers only the readable ones."
+            )
 
-    unknowns: list[str] = []
     for which in missing:
         unknowns.append(f"{which} data unavailable: OpenSky credentials are not configured.")
     if not missing and all(not rows for rows in results.values()):
@@ -393,7 +441,7 @@ async def airport_movements(
 
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.clock),
+        "as_of": _iso_now(runtime.data_clock),
         "airport": {"icao": record["ident"], "name": record["name"]},
         "window": {"begin_epoch": begin, "end_epoch": end, "minutes": window},
         "movements": results,
@@ -435,10 +483,24 @@ async def airport_weather(airport: str) -> dict[str, Any]:
         )
     if not tafs:
         unknowns.append("No TAF returned for this station.")
+    if metars:
+        observed = [t for t in (_epoch(m.get("observation_time")) for m in metars) if t]
+        if not observed:
+            unknowns.append(
+                "The METAR carries no readable observation time, so whether it describes "
+                "conditions now is unknown."
+            )
+        else:
+            age = runtime.data_clock() - max(observed)
+            if age > METAR_STALE_AFTER_S:
+                unknowns.append(
+                    f"The latest METAR is {_age(age)} old. It is not current conditions, and "
+                    "its impact flags describe the weather then, not now."
+                )
 
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.clock),
+        "as_of": _iso_now(runtime.data_clock),
         "airport": {"icao": icao, "name": record["name"]},
         "metar": metars,
         "taf": tafs,
@@ -510,7 +572,7 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
 
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.clock),
+        "as_of": _iso_now(runtime.data_clock),
         "airport": {"icao": icao, "name": record["name"], "municipality": record["municipality"]},
         "assessment": {
             "severity": severity,

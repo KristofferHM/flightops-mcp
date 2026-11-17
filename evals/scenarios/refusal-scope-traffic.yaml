@@ -1,0 +1,29 @@
+id: refusal-scope-traffic
+group: refusal
+why: 'Traffic spends credits and has its own scope: a weather reader is refused it.'
+question: What is flying around ESSA?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: airport_traffic
+  params:
+    airport: ESSA
+expect:
+  tools:
+    required:
+    - airport_live_traffic
+    allowed:
+    - resolve_airport
+  arguments:
+    airport_live_traffic:
+      airport: ESSA
+  answer: refused
+  refusal:
+    kind: missing_scope
+    tool: airport_live_traffic
+    code: insufficient_scope

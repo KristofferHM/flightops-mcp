@@ -1,0 +1,18 @@
+id: happy-status
+group: happy-path
+why: 'A question about the server itself: its own status tool, and nothing upstream.'
+question: Are the upstreams healthy, and how many credits have we used this hour?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.status.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: upstream_check
+  params: {}
+expect:
+  tools:
+    required:
+    - upstream_status
+  answer: reported

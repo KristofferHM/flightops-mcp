@@ -1,0 +1,35 @@
+id: absent-unauthenticated-traffic
+group: absent-evidence
+why: 'The server has no OpenSky client at all: traffic cannot be read, and that is not ''no traffic''.'
+question: How many aircraft are around ESGG?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    credentials: false
+offline:
+  policy: airport_traffic
+  params:
+    airport: ESGG
+expect:
+  tools:
+    required:
+    - airport_live_traffic
+    allowed:
+    - resolve_airport
+  arguments:
+    airport_live_traffic:
+      airport: ESGG
+  answer:
+  - refused
+  - unknown
+  absent_evidence: unauthenticated_read
+  refusal:
+    kind: missing_credential
+    tool: airport_live_traffic
+    code: credentials_missing

@@ -1,0 +1,66 @@
+id: absent-stale-traffic
+group: absent-evidence
+why: 'The traffic snapshot is four hours old: those aircraft are not where it says they are.'
+question: How many aircraft are around Stockholm Arlanda right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    states:
+      status: 200
+      json:
+        time: 1794805200
+        states:
+        - - 4a91f9
+          - 'SAS157  '
+          - Sweden
+          - 1794805194
+          - 1794805194
+          - 17.6
+          - 59.9
+          - 3352.8
+          - false
+          - 118.3
+          - 182.0
+          - 0.0
+          - null
+          - 3352.8
+          - '1000'
+          - false
+          - 0
+        - - 4ca7b5
+          - 'RYR8ZM  '
+          - Sweden
+          - 1794805191
+          - 1794805191
+          - 18.42
+          - 59.31
+          - 10058.4
+          - false
+          - 118.3
+          - 182.0
+          - 0.0
+          - null
+          - 10058.4
+          - '1000'
+          - false
+          - 0
+offline:
+  policy: airport_traffic
+  params:
+    airport: Arlanda
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_live_traffic
+  arguments:
+    airport_live_traffic:
+      airport: ESSA
+  answer: unknown
+  absent_evidence: stale_data

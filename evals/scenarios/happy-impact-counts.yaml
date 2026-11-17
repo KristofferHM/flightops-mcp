@@ -1,0 +1,22 @@
+id: happy-impact-counts
+group: happy-path
+why: 'A flight with passengers on file: counts by cohort, nobody named.'
+question: How many passengers on SK1429 have tight connections?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.passengers.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: passenger_impact
+  params:
+    flight: SK1429
+expect:
+  tools:
+    required:
+    - flight_passenger_impact
+  arguments:
+    flight_passenger_impact:
+      flight: SK1429
+  answer: reported

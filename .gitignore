@@ -30,5 +30,9 @@ probe_*.py
 # Agent run transcripts (uv run python -m agent run ...)
 agent-runs/
 
+# Evaluation run output (uv run python -m evals.run --out ...). The baseline is
+# evals/baseline.json and is committed; a run's results are not.
+eval-runs/
+
 # Local Claude Code overrides (the committed .claude/settings.json is the shared one)
 .claude/settings.local.json

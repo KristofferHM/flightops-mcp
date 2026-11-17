@@ -1,0 +1,67 @@
+id: happy-movements-arrivals
+group: happy-path
+why: 'Arrivals in the last hour, in the shape OpenSky documents: a JSON array of flights.'
+question: How many arrivals has Copenhagen had in the last hour?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    arrival:
+      status: 200
+      json:
+      - icao24: 45ac52
+        firstSeen: 1794813900
+        estDepartureAirport: ESSA
+        lastSeen: 1794817200
+        estArrivalAirport: EKCH
+        callsign: 'SAS1420 '
+        estDepartureAirportHorizDistance: 1180
+        estDepartureAirportVertDistance: 46
+        estArrivalAirportHorizDistance: 2210
+        estArrivalAirportVertDistance: 61
+        departureAirportCandidatesCount: 1
+        arrivalAirportCandidatesCount: 1
+      - icao24: 4ca2d1
+        firstSeen: 1794814800
+        estDepartureAirport: EGSS
+        lastSeen: 1794818100
+        estArrivalAirport: EKCH
+        callsign: 'RYR5HX  '
+        estDepartureAirportHorizDistance: 1180
+        estDepartureAirportVertDistance: 46
+        estArrivalAirportHorizDistance: 2210
+        estArrivalAirportVertDistance: 61
+        departureAirportCandidatesCount: 1
+        arrivalAirportCandidatesCount: 1
+      - icao24: 471f8a
+        firstSeen: 1794815700
+        estDepartureAirport: ENGM
+        lastSeen: 1794819000
+        estArrivalAirport: EKCH
+        callsign: 'NOZ3204 '
+        estDepartureAirportHorizDistance: 1180
+        estDepartureAirportVertDistance: 46
+        estArrivalAirportHorizDistance: 2210
+        estArrivalAirportVertDistance: 61
+        departureAirportCandidatesCount: 1
+        arrivalAirportCandidatesCount: 1
+offline:
+  policy: airport_movements
+  params:
+    airport: Copenhagen
+    direction: arrival
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_movements
+  arguments:
+    airport_movements:
+      airport: EKCH
+      direction: arrival
+  answer: reported

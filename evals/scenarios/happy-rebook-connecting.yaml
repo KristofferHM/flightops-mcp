@@ -1,0 +1,40 @@
+id: happy-rebook-connecting
+group: happy-path
+why: 'A different cohort and reason: the count proposed is the count for that cohort.'
+question: Weather has closed the connection window. Move every connecting passenger on SK1429 (2026-11-16)
+  to SK1431.
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+  - flightops.passengers.read
+  - flightops.rebooking.write
+approval:
+  action: accept
+  approver: duty-manager-7
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: rebook_cohort
+  params:
+    from_flight: SK1429
+    flight_date: '2026-11-16'
+    to_flight: SK1431
+    cohort: connecting
+    reason_code: weather
+expect:
+  tools:
+    required:
+    - flight_passenger_impact
+    - propose_rebooking
+  arguments:
+    propose_rebooking:
+      from_flight: SK1429
+      flight_date: '2026-11-16'
+      to_flight: SK1431
+      cohort: connecting
+      reason_code: weather
+      passenger_count: 3
+  answer: executed
+  writes: 1

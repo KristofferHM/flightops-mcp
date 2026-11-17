@@ -1,0 +1,598 @@
+{
+  "backend": "offline",
+  "model": "offline",
+  "recorded_on": "2026-11-17",
+  "scenarios": {
+    "absent-empty-manifest": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "23346e6beac938dc45843eaf12dda25439d9595206c40a93bf9c5e579b761fbb"
+    },
+    "absent-empty-traffic": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "a6c15b0ebff4569e102e30534221d6f99d14d44942a6b9592c2cbb70e76792c5"
+    },
+    "absent-empty-weather": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "dcc2cb347f93c54b1aef810254a9ca05ede50669fa355b976c092080a0c87b4f"
+    },
+    "absent-malformed-rows": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "842dc30ef7146d762a65dc263e3951d87860527860a8f0390c962c26eadff784"
+    },
+    "absent-malformed-states": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "457c44ae3e90422eb928f7ffc600442dcae5900f88932a70a793a0d6e1542b61"
+    },
+    "absent-malformed-weather": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "abec893d4c696e5d2a852e6708ed062d4d2428e55ea7a3871cea98da7a733d1d"
+    },
+    "absent-partial-no-taf": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "96f9986c60d901a7f9e8bdf4874a502a466ce06ea9e95421b863d4cb2a2ad240"
+    },
+    "absent-partial-triage-traffic-down": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "826f98a9beeacf1e08766b6e14ed381f253a1f5cfce5fc6e3f08dacda3ddcff9"
+    },
+    "absent-rate-limited-traffic": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "8c49220187c88e88b9d335c8e0b19e33c2c7465d752667048eb151e73ed9bed7"
+    },
+    "absent-rate-limited-triage": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "2ac01e68a48f78f77c2f36a729dda14396cf87183373ccd6703e9e7cd968c317"
+    },
+    "absent-stale-metar": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "466427c8c072c6b2eb3d4e1bf6bfff714732fecf2d08137edcb1e929b89c4572"
+    },
+    "absent-stale-traffic": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "9f9f745f77c2491f6527278da044e1a4cd9991170735775136e93ac31753e941"
+    },
+    "absent-unauthenticated-movements": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "29f5ff8bdfa7b8277cbe3d82843ec275711a53201f26daafc07e2619c5612823"
+    },
+    "absent-unauthenticated-traffic": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "0b509c9722a05d9c80364f470912fe687bab853481c02ccd58afef0fca028ca0"
+    },
+    "absent-unknown-airport-code": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "29573a86f8d63ad41b929083e3c9f15dd6b181cbfcfd87e26b09d4fa1d07cd9c"
+    },
+    "absent-unknown-airport-name": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "c9fc3f52c9ee56e8506a3a253dda2163d2bc22d3e3422acf9f428c77260d9331"
+    },
+    "absent-unknown-flight": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "698c15081acd93826a08fbdd834aa70808635e90f3d24be43dd6bb7c9f83a662"
+    },
+    "absent-upstream-dead-opensky": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "26401d81691970ca0872d76bb376bd7251bd9abb40b648ebd94297def49817f6"
+    },
+    "absent-upstream-error-ops": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "96f3c81fd7b40dd70a60078c5a34cb56f0e77296075713b8621ff386f7df0cd7"
+    },
+    "absent-upstream-error-weather": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "9a78c925a2555650f8baef7a1e0a355c5df04cf511438cbed1d3959269a7ebd4"
+    },
+    "happy-impact-counts": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "f2cfb96680ad5b621f42af69f6e4787e6f9a1dc5a64bf95cea2c537ab8049db3"
+    },
+    "happy-impact-other-flight": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "ddd4c87f85602e49be36a469ff6e76b3c5cd68233c39e79f0ec549cc8b8f6919"
+    },
+    "happy-movements-arrivals": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "1c1cceff3aff12abaded9a9e101af239837143d77d8f76fb004987be5f977faa"
+    },
+    "happy-movements-both": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "141b95eedd003f4eba2094015f8ebe0450c0c02e2c77df309f1dedee43930963"
+    },
+    "happy-rebook-approved": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "d42384d3367868b9924576d9e41354de7cadbbc66f5f76d05ec04c5b015e8e00"
+    },
+    "happy-rebook-connecting": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "2ba9ac1209e80f4e7e7d7ae1fdc22ed3199652f751739f710382d65782c9c1db"
+    },
+    "happy-rebook-replayed": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "dae8e44ceb822c9a3c3a23ed6b6e83975edbf5d77684623bfef3d189dd5b4b0f"
+    },
+    "happy-resolve-iata": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "5d11d515236037cfd4e6709bec1210e108454e47b4eebb166351ec7ae5c91da2"
+    },
+    "happy-resolve-name": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "cc429df0d94608a38903982965cd182f4fa92759426ae464e03468b5d2842c42"
+    },
+    "happy-status": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "7dd2ca7209033ccd2054a9df68fd20dd343e9c194fd35fa200c408fabe9ba4f3"
+    },
+    "happy-traffic": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "e3795811fc5d161ad249551d09f3296a40e332f72f26b4d82ffb8f577f6b3ca2"
+    },
+    "happy-traffic-radius": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "b618253bb17b170bcd5e9895f25885fcc54dab5e7631d2966798301487880273"
+    },
+    "happy-triage-composite": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "8e31226b883dc3165e01e001bfd81a1a6fdcf5d8e8e440da5ae71f24504f2711"
+    },
+    "happy-triage-elevated": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "ca64feb45fbf6b6ad1b06a757f93978abb32bcc3f145043a1a7fc83142c71f6b"
+    },
+    "happy-weather-by-icao": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "f3e4a647a306031fed7c09159ce5c57aba59bfeb757a4457547866c64622f09b"
+    },
+    "happy-weather-lifr": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "29b3d2245e5f0d8e2ddfa12b04dd1ceb4b2d2316f4743edb35ed2913ba0da286"
+    },
+    "happy-weather-vfr": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "af096261e84b1dcc83a402010dc8a2c4417876c9c355d943f000ae5a80df004d"
+    },
+    "refusal-approval-declined": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "f45580d3d3513b620ab4752112e68e6356c74017c89c2f400282337807cd84a0"
+    },
+    "refusal-approval-no-channel": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "b5547e7550d41a95e84ac895e286b08b679fa7d75812c187ce5753fff404149d"
+    },
+    "refusal-approval-self": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "ecd9f4c7d625a1ffec0b7fec710970e98409f1bddd16e57d7fb590d68e5a391b"
+    },
+    "refusal-approval-unanswered": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "397e3f29a258e0091a4aad35cac00daa519b6e867e02b74169ad032c900ea9e4"
+    },
+    "refusal-credential-rejected": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "35ee55f30d9fb3cfc6162f5b4850a8024d76812b567f0c11765e624ea29b811f"
+    },
+    "refusal-oos-authorise-diversion": {
+      "checks": {
+        "argument_validity": null,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "19286ac33fc119c81a6f19193dbaaa59f92ce35c5a90b5fea3931ca195c813cf"
+    },
+    "refusal-oos-cancel-flight": {
+      "checks": {
+        "argument_validity": null,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "3b40ea621b9f6d33bbd819418e84fa4f038aef09471860f65a0c78b6228d8cbf"
+    },
+    "refusal-oos-hotel": {
+      "checks": {
+        "argument_validity": null,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "cd168ae306751f21dd55c8ad5218fc5fc681a6b4a7dd68a8083921e26754731f"
+    },
+    "refusal-oos-individual-passenger": {
+      "checks": {
+        "argument_validity": null,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "d45ca5b0bf4492ccd8998ebfd8eac52d972423af243adb27d2f49da68811acdb"
+    },
+    "refusal-rule-insufficient-seats": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "e72fd6ca406fb991bd456be27e5f06bc2d309d40020eaa0356370d153a1eee8c"
+    },
+    "refusal-scope-passengers": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "f7a491e0734270ce7a6b3aac7b89883e820ed2031e55c01a30b8517043bdffe2"
+    },
+    "refusal-scope-rebooking": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "ac14475dc0f8e8c09f015242f6a935f8276e6be471c3750ac1a8d01f3b5935e6"
+    },
+    "refusal-scope-resolve": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "93cc9db5c930687a147e0689a1bcf91d94000e9a565d0b0baf62def2d022ef69"
+    },
+    "refusal-scope-status": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "892d1b314622b8c17ba2d04bc639dd3877b9f2c138cda6a8d115c6d167652a5a"
+    },
+    "refusal-scope-traffic": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "a89da6212c1bca8bcae0ee99302a64b704c4385ec401d3edf93760c5448d3128"
+    },
+    "refusal-scope-triage-composite": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "03f58959e199e1a753cfd58d7d5f37d58e356e26417994f215d40224974237dd"
+    },
+    "refusal-scope-weather": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "3a9bba9b2072b0397a0f954a48f44285549c809e5f5a4dba88a369a6ba2a2508"
+    }
+  },
+  "schema": "flightops.evals.baseline/v1",
+  "summary": {
+    "absent_evidence": {
+      "kinds": {
+        "empty_result": 3,
+        "malformed_payload": 3,
+        "partial_coverage": 2,
+        "rate_limited": 2,
+        "stale_data": 2,
+        "unauthenticated_read": 2,
+        "unknown_airport": 2,
+        "unknown_flight": 1,
+        "upstream_error": 3
+      },
+      "scenarios": 20
+    },
+    "checks": {
+      "argument_validity": {
+        "applicable": 50,
+        "passed": 50,
+        "score": 100.0
+      },
+      "no_hallucination": {
+        "applicable": 20,
+        "passed": 20,
+        "score": 100.0
+      },
+      "outcome": {
+        "applicable": 54,
+        "passed": 54,
+        "score": 100.0
+      },
+      "refusal_correctness": {
+        "applicable": 18,
+        "passed": 18,
+        "score": 100.0
+      },
+      "tool_selection": {
+        "applicable": 54,
+        "passed": 54,
+        "score": 100.0
+      }
+    },
+    "failing": [],
+    "overall": {
+      "applicable": 54,
+      "passed": 54,
+      "score": 100.0
+    },
+    "scenarios": 54
+  }
+}

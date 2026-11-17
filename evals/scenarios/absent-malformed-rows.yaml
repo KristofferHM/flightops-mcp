@@ -1,0 +1,70 @@
+id: absent-malformed-rows
+group: absent-evidence
+why: 'Five aircraft in the payload, three of them unreadable: a count of two is not the count.'
+question: How many aircraft are around Stockholm Bromma?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    states:
+      status: 200
+      json:
+        time: 1794819595
+        states:
+        - - 4a91f9
+          - 'SAS157  '
+          - Sweden
+          - 1794819592
+          - 1794819592
+          - 17.9
+          - 59.4
+          - 914.4
+          - false
+          - 118.3
+          - 182.0
+          - 0.0
+          - null
+          - 914.4
+          - '1000'
+          - false
+          - 0
+        - - 4ac9e1
+          - 'SAS431  '
+          - Sweden
+          - 1794819592
+          - 1794819592
+          - 17.95
+          - 59.35
+          - null
+          - true
+          - 0.0
+          - 182.0
+          - 0.0
+          - null
+          - null
+          - '1000'
+          - false
+          - 0
+        - icao24: 4ca7b5
+          callsign: RYR8ZM
+        - 478a3c,NOZ614
+        - null
+offline:
+  policy: airport_traffic
+  params:
+    airport: Bromma
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_live_traffic
+  arguments:
+    airport_live_traffic:
+      airport: ESSB
+  answer: unknown
+  absent_evidence: malformed_payload

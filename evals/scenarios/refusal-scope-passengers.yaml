@@ -1,0 +1,27 @@
+id: refusal-scope-passengers
+group: refusal
+why: 'Passenger counts need their own scope: an operations reader without it is refused.'
+question: How many passengers are booked on SK1429?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: passenger_impact
+  params:
+    flight: SK1429
+expect:
+  tools:
+    required:
+    - flight_passenger_impact
+  arguments:
+    flight_passenger_impact:
+      flight: SK1429
+  answer: refused
+  refusal:
+    kind: missing_scope
+    tool: flight_passenger_impact
+    code: insufficient_scope

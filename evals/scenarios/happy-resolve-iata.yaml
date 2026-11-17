@@ -1,0 +1,22 @@
+id: happy-resolve-iata
+group: happy-path
+why: 'An IATA code resolves from the bundled reference data: one free, offline call.'
+question: Which airport has the IATA code GOT?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: airport_lookup
+  params:
+    airport: GOT
+expect:
+  tools:
+    required:
+    - resolve_airport
+  arguments:
+    resolve_airport:
+      query: GOT
+  answer: reported

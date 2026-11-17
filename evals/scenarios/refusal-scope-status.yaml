@@ -1,0 +1,22 @@
+id: refusal-scope-status
+group: refusal
+why: 'Even the status tool has a scope: a user without it is told so.'
+question: Is OpenSky configured on this server?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: upstream_check
+  params: {}
+expect:
+  tools:
+    required:
+    - upstream_status
+  answer: refused
+  refusal:
+    kind: missing_scope
+    tool: upstream_status
+    code: insufficient_scope

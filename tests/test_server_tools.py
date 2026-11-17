@@ -9,6 +9,7 @@ their real code; only the HTTP transport is mocked.
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -33,7 +34,9 @@ EXPECTED_TOOLS = {
     "propose_rebooking",
 }
 
-EMPTY_STATES = {"time": 1_700_000_000, "states": []}
+# The instant the fixtures below describe: ten minutes after their METAR.
+FIXTURE_NOW = int(datetime(2026, 11, 14, 23, 30, tzinfo=UTC).timestamp())
+EMPTY_STATES = {"time": FIXTURE_NOW, "states": []}
 VFR_METAR = [
     {
         "icaoId": "ESGG",
@@ -61,9 +64,10 @@ def install(
     settings: Settings,
     *,
     states: dict[str, Any] | None = None,
-    movements: dict[str, Any] | None = None,
+    movements: list[dict[str, Any]] | None = None,
     metar: list[dict[str, Any]] | None = None,
     credentials: bool = True,
+    data_clock: Any = None,
 ) -> Runtime:
     """Build a runtime with mocked upstreams and install it for the tools."""
     if not settings.airports_db.is_file():
@@ -78,7 +82,8 @@ def install(
         if "/states/" in path:
             return httpx.Response(200, json=states or EMPTY_STATES)
         if "/flights/" in path:
-            payload = movements or {"begin": 1, "end": 2, "arrival": [], "departure": []}
+            # OpenSky documents a JSON array of flights.
+            payload = movements or []
             return httpx.Response(200, json=payload)
         return httpx.Response(404, json={})
 
@@ -99,6 +104,7 @@ def install(
         weather_transport=httpx.MockTransport(weather_handler),
         sleep=SleepRecorder(),
         clock=time.time,
+        data_clock=data_clock or (lambda: float(FIXTURE_NOW)),
     )
     set_runtime(runtime)
     return runtime
@@ -219,14 +225,14 @@ async def test_quiet_airport_at_night_is_not_reported_as_a_disruption(settings: 
 
 async def test_aircraft_flying_with_no_movements_escalates(settings: Settings) -> None:
     busy = {
-        "time": 1_700_000_000,
+        "time": FIXTURE_NOW,
         "states": [
             [
                 f"aa{i:02d}",
                 f"FLT{i}",
                 "SE",
                 None,
-                1_700_000_000,
+                FIXTURE_NOW,
                 12.3,
                 57.7,
                 1000.0,
@@ -283,6 +289,96 @@ async def test_live_traffic_reports_counts_and_unknowns(settings: Settings) -> N
     assert payload["bookkeeping"]["credits_spent"] == 1
     assert payload["unknowns"], "empty airspace must not read as 'all normal'"
     assert payload["search"]["bbox_area_sq_deg"] <= 25
+
+
+def _state(icao24: str, contact: int) -> list[Any]:
+    return [icao24, "SAS1", "SE", contact, contact, 12.3, 57.7, 900.0, False, 120.0, 90.0, 0.0]
+
+
+async def traffic(settings: Settings, states: dict[str, Any]) -> dict[str, Any]:
+    install(settings, states=states)
+    async with Client(srv.mcp) as client:
+        return await call(client, "airport_live_traffic", {"airport": "ESGG"})
+
+
+async def test_a_fresh_snapshot_with_aircraft_has_no_unknowns(settings: Settings) -> None:
+    """The control for the three below: nothing is flagged when nothing is missing."""
+    payload = await traffic(
+        settings, {"time": FIXTURE_NOW - 5, "states": [_state("a1", FIXTURE_NOW - 6)]}
+    )
+
+    assert payload["counts"]["returned"] == 1
+    assert payload["unknowns"] == []
+
+
+async def test_a_stale_snapshot_is_reported_as_not_current(settings: Settings) -> None:
+    four_hours = FIXTURE_NOW - 4 * 3600
+    payload = await traffic(settings, {"time": four_hours, "states": [_state("a1", four_hours)]})
+
+    assert payload["counts"]["returned"] == 1, "the aircraft are still shown"
+    assert any("4 h 0 min old" in item for item in payload["unknowns"])
+
+
+async def test_a_snapshot_without_a_time_cannot_be_called_current(settings: Settings) -> None:
+    payload = await traffic(settings, {"states": [_state("a1", FIXTURE_NOW)]})
+
+    assert any("no snapshot time" in item for item in payload["unknowns"])
+
+
+async def test_unreadable_rows_make_the_count_a_lower_bound(settings: Settings) -> None:
+    rows = [_state("a1", FIXTURE_NOW), _state("a2", FIXTURE_NOW), {"icao24": "a3"}, "a4", None]
+    payload = await traffic(settings, {"time": FIXTURE_NOW, "states": rows})
+
+    assert payload["counts"]["returned"] == 2
+    assert any("3 of 5 rows" in item and "lower bound" in item for item in payload["unknowns"])
+
+
+async def weather(settings: Settings, metar: list[dict[str, Any]]) -> dict[str, Any]:
+    install(settings, metar=metar)
+    async with Client(srv.mcp) as client:
+        return await call(client, "airport_weather", {"airport": "ESGG"})
+
+
+async def test_a_current_metar_has_no_unknowns(settings: Settings) -> None:
+    payload = await weather(settings, VFR_METAR)
+
+    assert payload["unknowns"] == []
+
+
+async def test_a_metar_older_than_ninety_minutes_is_not_current_conditions(
+    settings: Settings,
+) -> None:
+    # The fixture clock is 23:30; 21:59 is 91 minutes before it.
+    old = [{**VFR_METAR[0], "reportTime": "2026-11-14T21:59:00Z"}]
+    payload = await weather(settings, old)
+
+    assert payload["metar"], "the observation is still shown"
+    assert any("91 min old" in item for item in payload["unknowns"])
+
+
+async def test_a_metar_at_ninety_minutes_is_still_current(settings: Settings) -> None:
+    edge = [{**VFR_METAR[0], "reportTime": "2026-11-14T22:00:00Z"}]
+
+    assert (await weather(settings, edge))["unknowns"] == []
+
+
+async def test_a_metar_without_an_observation_time_is_not_current(settings: Settings) -> None:
+    untimed = [{key: value for key, value in VFR_METAR[0].items() if key != "reportTime"}]
+    payload = await weather(settings, untimed)
+
+    assert any("no readable observation time" in item for item in payload["unknowns"])
+
+
+async def test_movements_in_the_documented_shape_are_counted(settings: Settings) -> None:
+    flight = {"icao24": "4ca1fa", "callsign": "SAS1  ", "estArrivalAirport": "ESGG"}
+    install(settings, movements=[flight, {**flight, "icao24": "4ca1fb"}])
+    async with Client(srv.mcp) as client:
+        payload = await call(client, "airport_movements", {"airport": "ESGG"})
+
+    assert payload["ok"] is True
+    assert payload["counts"] == {"arrival": 2, "departure": 2}
+    assert payload["unknowns"] == []
+    assert payload["window"]["end_epoch"] == FIXTURE_NOW, "the window ends at the data clock"
 
 
 async def test_upstream_status_explains_the_environment(settings: Settings) -> None:

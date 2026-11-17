@@ -5,6 +5,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-17
+
+Phase 4 of [ROADMAP.md](ROADMAP.md): the credibility gate — an eval harness that publishes how often the
+thing is right, including when it is not.
+
+### Added
+- `evals/`: 54 golden scenarios as data, scored on four axes reported **separately** (tool selection,
+  argument validity, refusal correctness, no hallucination) plus the answer class and writes, never
+  averaged into one number that hides the weak axis. `answer_class` (`confirmed` / `unknowns` / `refused` /
+  `error`) is what makes a fluent wrong answer scoreable as wrong.
+- A committed baseline (`evals/baseline.json`) and a regression rule counted two ways, stricter decides:
+  more than 2 points on any line, **or** more than 0 scenarios failing a check they passed in the baseline.
+  With 54 scenarios one scenario is 1.85 points, so points alone would miss a single regression.
+- `evals (offline)` CI job: no model, no network, 30 s including setup, with the 60 s cap enforced twice.
+- The README results table is generated from the baseline between markers; CI fails if the two disagree.
+- `docs/EVALS.md`: what is measured, what is deliberately not, and how to add a scenario.
+
+### Changed
+- `Runtime.data_clock`: a second clock for judging **data** staleness, distinct from the wall clock that
+  token expiry must use. Fixtures set it to the scenario's start.
+- Movement windows now end at the data clock rather than the wall clock.
+
+### Fixed
+- A METAR older than 90 minutes, or one with no readable time, is reported in `unknowns` instead of being
+  presented as current.
+- A states snapshot older than 5 minutes, or one with aircraft but no time, is reported in `unknowns`.
+- Unreadable rows in a states or movements payload are counted and the count is labelled a lower bound,
+  instead of being silently dropped and the readable remainder presented as the total.
+- `airport_movements` no longer returns `upstream_unavailable` on a documented array body; this had made
+  `disruption_triage` report severity unknown with one source down.
+
+## [0.4.0] - 2026-11-16
+
+Phase 3 of [ROADMAP.md](ROADMAP.md): an agent that proposes, never commits.
+
+### Added
+- `agent/`: a thin plan → tool calls → reflect loop over a provider interface, with `anthropic`,
+  `openai-compatible` and a deterministic `offline` backend. The offline policy runs the real code path —
+  real dispatch, real approval gate, real transcript — and is what CI runs.
+- `propose_rebooking`, a write gated by a **signed approval grant for one payload** (`docs/adr/0003`): an
+  approval for one proposal cannot authorise a different one later.
+- An idempotency key on the write, so a retry returns the original result and cannot double-book; counted
+  at the mock, and still true when a different person approves the replay or the clock moves on.
+- Agent budget accounting, separate from the server's upstream credit ledger; a run over budget stops with a
+  stated reason.
+- JSON transcripts with a content hash, shaped for the Phase 4 eval harness.
+- Eight scenarios as data, including self-approved, no-approval-channel, unanswered, declined, replayed and
+  over-budget.
+- A CI job asserting offline determinism: one scenario twice with equal hashes, then a different scenario
+  whose hash differs.
+
 ## [0.3.0] - 2026-11-16
 
 Phase 2 of [ROADMAP.md](ROADMAP.md): the server becomes something an operator can run.

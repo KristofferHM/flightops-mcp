@@ -1,0 +1,73 @@
+id: happy-movements-both
+group: happy-path
+why: 'Both directions over a shorter window: direction and window are the tool''s arguments.'
+question: Arrivals and departures at ESGG over the last 30 minutes?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    arrival:
+      status: 200
+      json:
+      - icao24: 4a91f9
+        firstSeen: 1794815400
+        estDepartureAirport: ESSA
+        lastSeen: 1794818700
+        estArrivalAirport: ESGG
+        callsign: 'SAS157  '
+        estDepartureAirportHorizDistance: 1180
+        estDepartureAirportVertDistance: 46
+        estArrivalAirportHorizDistance: 2210
+        estArrivalAirportVertDistance: 61
+        departureAirportCandidatesCount: 1
+        arrivalAirportCandidatesCount: 1
+      - icao24: 3c6dd3
+        firstSeen: 1794816000
+        estDepartureAirport: EDDF
+        lastSeen: 1794819300
+        estArrivalAirport: ESGG
+        callsign: 'DLH3VP  '
+        estDepartureAirportHorizDistance: 1180
+        estDepartureAirportVertDistance: 46
+        estArrivalAirportHorizDistance: 2210
+        estArrivalAirportVertDistance: 61
+        departureAirportCandidatesCount: 1
+        arrivalAirportCandidatesCount: 1
+    departure:
+      status: 200
+      json:
+      - icao24: 4ac9e1
+        firstSeen: 1794815100
+        estDepartureAirport: ESGG
+        lastSeen: 1794818400
+        estArrivalAirport: EKCH
+        callsign: 'SAS431  '
+        estDepartureAirportHorizDistance: 1180
+        estDepartureAirportVertDistance: 46
+        estArrivalAirportHorizDistance: 2210
+        estArrivalAirportVertDistance: 61
+        departureAirportCandidatesCount: 1
+        arrivalAirportCandidatesCount: 1
+offline:
+  policy: airport_movements
+  params:
+    airport: ESGG
+    direction: both
+    window_minutes: 30
+expect:
+  tools:
+    required:
+    - airport_movements
+    allowed:
+    - resolve_airport
+  arguments:
+    airport_movements:
+      airport: ESGG
+      direction: both
+      window_minutes: 30
+  answer: reported

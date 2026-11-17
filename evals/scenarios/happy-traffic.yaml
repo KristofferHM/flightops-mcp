@@ -1,0 +1,82 @@
+id: happy-traffic
+group: happy-path
+why: 'Aircraft are heard around the airport: a count, split airborne and on the ground.'
+question: How many aircraft are around Oslo Gardermoen right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    states:
+      status: 200
+      json:
+        time: 1794819595
+        states:
+        - - 478a3c
+          - 'NOZ614  '
+          - Sweden
+          - 1794819592
+          - 1794819592
+          - 11.31
+          - 60.42
+          - 2895.6
+          - false
+          - 118.3
+          - 182.0
+          - 0.0
+          - null
+          - 2895.6
+          - '1000'
+          - false
+          - 0
+        - - 4ac9e1
+          - 'SAS4047 '
+          - Sweden
+          - 1794819592
+          - 1794819592
+          - 10.87
+          - 60.01
+          - 1524.0
+          - false
+          - 118.3
+          - 182.0
+          - 0.0
+          - null
+          - 1524.0
+          - '1000'
+          - false
+          - 0
+        - - 47c1d2
+          - 'WIF8K   '
+          - Sweden
+          - 1794819592
+          - 1794819592
+          - 11.1
+          - 60.19
+          - null
+          - true
+          - 0.0
+          - 182.0
+          - 0.0
+          - null
+          - null
+          - '1000'
+          - false
+          - 0
+offline:
+  policy: airport_traffic
+  params:
+    airport: Gardermoen
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_live_traffic
+  arguments:
+    airport_live_traffic:
+      airport: ENGM
+  answer: reported

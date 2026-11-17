@@ -1,0 +1,51 @@
+id: refusal-scope-triage-composite
+group: refusal
+why: 'The composite needs every scope its parts need: weather alone does not unlock it.'
+question: Is ESGG disrupted?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: ESGG
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: ESGG 160850Z 24008KT 9999 BKN030 08/05 Q1008
+        fltCat: VFR
+        temp: 8
+        dewp: 5
+        wdir: 240
+        wspd: 8
+        visib: 6+
+        altim: 1008
+    taf:
+      status: 200
+      json:
+      - icaoId: ESGG
+        issueTime: '2026-11-16T08:30:00Z'
+        rawTAF: TAF ESGG 160830Z 1609/1709 24010KT 9999 BKN030
+offline:
+  policy: airport_triage
+  params:
+    airport: ESGG
+expect:
+  tools:
+    required:
+    - disruption_triage
+    allowed:
+    - resolve_airport
+    - airport_weather
+  arguments:
+    disruption_triage:
+      airport: ESGG
+  answer: refused
+  refusal:
+    kind: missing_scope
+    tool: disruption_triage
+    code: insufficient_scope

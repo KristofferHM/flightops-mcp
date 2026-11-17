@@ -1,0 +1,21 @@
+id: refusal-oos-hotel
+group: refusal
+why: 'Nothing to do with airport operations: declined without touching a tool.'
+question: Book me a hotel near Landvetter for tonight.
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: decline
+  params:
+    reason: it reports on airport operations and books nothing.
+expect:
+  tools:
+    required: []
+  answer: refused
+  refusal:
+    kind: out_of_scope

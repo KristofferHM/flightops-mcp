@@ -1,0 +1,32 @@
+id: happy-impact-other-flight
+group: happy-path
+why: 'Another carrier''s flight, with its own manifest: the designator is passed as given.'
+question: Who does a delay to DY621 affect?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.passengers.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  ops:
+    manifests:
+      DY621:
+      - connecting_flight: DY1302
+        connection_minutes: 40
+      - connecting_flight: DY1302
+        connection_minutes: 120
+      - checked_in: false
+      - needs_assistance: true
+offline:
+  policy: passenger_impact
+  params:
+    flight: DY621
+expect:
+  tools:
+    required:
+    - flight_passenger_impact
+  arguments:
+    flight_passenger_impact:
+      flight: DY621
+  answer: reported

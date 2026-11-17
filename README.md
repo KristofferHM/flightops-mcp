@@ -40,6 +40,49 @@ credential or a passenger identifier.
 
 ---
 
+## Evaluation
+
+A demo shows it working once. This shows how often it works: the golden scenarios in
+[`evals/scenarios/`](evals/scenarios) are run end to end against the real server, and each run is scored on
+four axes that are reported separately, because they fail for different reasons. The table is the committed
+baseline (`evals/baseline.json`). CI re-runs the scenarios on every push and fails on a regression of more
+than 2 points on any line of it, or on any one scenario that fails a check it passed in the baseline.
+
+<!-- evals:begin -->
+<!-- Written by the harness from evals/baseline.json. Do not edit: CI fails if this block and the baseline disagree. -->
+
+**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-17; **Scenarios:** 54
+
+| Axis | Passed | Applies to | Score |
+|---|---:|---:|---:|
+| Tool selection | 54 | 54 | 100.00 % |
+| Argument validity | 50 | 50 | 100.00 % |
+| Refusal correctness | 18 | 18 | 100.00 % |
+| No hallucination | 20 | 20 | 100.00 % |
+| Outcome (answer class, writes) | 54 | 54 | 100.00 % |
+| **Scenarios passing every check that applies** | 54 | 54 | 100.00 % |
+
+Absent-evidence group (answering confidently when the evidence is not there): **20 scenarios** over 9 kinds: `empty_result` 3, `malformed_payload` 3, `partial_coverage` 2, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 2, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
+
+No scenario fails in this run.
+
+Regenerate: `uv run python -m evals.run --offline --update-baseline`. What these numbers measure, and what they do not: [`docs/EVALS.md`](docs/EVALS.md).
+<!-- evals:end -->
+
+Read this table with one thing in mind. The model is `offline`: a scripted policy that is told which
+plan to follow, so 100 % here means the server's contract holds on every scenario, not that an agent
+planned well. The first baseline scored 47 of 54. All seven failures were server defects (stale data passed
+as current, unreadable rows dropped silently, OpenSky's movements response unreadable), fixed with no
+expectation edited. The causes and fixes are in
+[`docs/EVALS.md`](docs/EVALS.md#what-failed-in-the-first-baseline-and-what-was-done).
+
+```bash
+uv run python -m evals.run --offline                     # the CI gate: no model, no network
+uv run python -m evals.run --offline --update-baseline   # record a new baseline, deliberately
+```
+
+---
+
 ## Architecture
 
 ```

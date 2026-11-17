@@ -1,0 +1,32 @@
+id: absent-empty-traffic
+group: absent-evidence
+why: 'OpenSky hears no aircraft (`states: null`): quiet airspace or no receiver, not a closure.'
+question: Is anything flying around Visby?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    states:
+      status: 200
+      json:
+        time: 1794819595
+        states: null
+offline:
+  policy: airport_traffic
+  params:
+    airport: Visby
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - airport_live_traffic
+  arguments:
+    airport_live_traffic:
+      airport: ESSV
+  answer: unknown
+  absent_evidence: empty_result

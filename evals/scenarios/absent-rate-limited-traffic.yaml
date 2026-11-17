@@ -1,0 +1,33 @@
+id: absent-rate-limited-traffic
+group: absent-evidence
+why: 'OpenSky says come back in fifteen minutes: the answer is ''not now'', not ''nothing there''.'
+question: How many aircraft are around ESGG?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    states:
+      status: 429
+      headers:
+        x-rate-limit-retry-after-seconds: '900'
+        x-rate-limit-remaining: '0'
+offline:
+  policy: airport_traffic
+  params:
+    airport: ESGG
+expect:
+  tools:
+    required:
+    - airport_live_traffic
+    allowed:
+    - resolve_airport
+  arguments:
+    airport_live_traffic:
+      airport: ESGG
+  answer: unknown
+  absent_evidence: rate_limited

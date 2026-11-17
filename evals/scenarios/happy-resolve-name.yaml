@@ -1,0 +1,22 @@
+id: happy-resolve-name
+group: happy-path
+why: A name fragment resolves to one airport; the answer is the reference record.
+question: What is the ICAO code for Arlanda?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: airport_lookup
+  params:
+    airport: Arlanda
+expect:
+  tools:
+    required:
+    - resolve_airport
+  arguments:
+    resolve_airport:
+      query: Arlanda
+  answer: reported
