@@ -9,13 +9,17 @@ on:
 env:
   UV_VERSION: "0.11.19"
 
+# Every third-party action is pinned to a commit, not a tag. A tag can be moved: in March 2026
+# 76 of trivy-action's 77 tags were force-pushed to a credential stealer (CVE-2026-33634).
+# The comment names the tag the commit was resolved from (git ls-remote, 2026-11-17).
+
 jobs:
   quality:
     name: lint and types
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -36,8 +40,8 @@ jobs:
       matrix:
         python: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -75,8 +79,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -133,7 +137,7 @@ jobs:
 
       - name: Keep the transcripts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: agent-offline-transcripts
           path: runs/
@@ -149,8 +153,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -203,7 +207,7 @@ jobs:
 
       - name: Keep the table, the results and the transcripts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: evals-offline
           path: eval-runs/
@@ -218,8 +222,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -261,7 +265,7 @@ jobs:
 
       - name: Keep the survivor report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mutation-report
           path: |
@@ -281,7 +285,7 @@ jobs:
       # From the release's gitleaks_8.30.1_checksums.txt.
       GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # The whole history, not the default single commit: a secret removed in a later
           # commit is still in the repository.
@@ -309,7 +313,7 @@ jobs:
             grep -E "commits scanned|leaks found|no leaks" history.out
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -326,8 +330,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
@@ -353,10 +357,16 @@ jobs:
           PY
 
   container:
-    name: container build and smoke
+    name: container build, smoke and image scan
     runs-on: ubuntu-latest
+    env:
+      # The binary, not trivy-action or setup-trivy, whose tags were rewritten in March 2026.
+      # v0.69.3 is a version NVD names as known safe (CVE-2026-33634; v0.69.4 was the malicious
+      # one). The download is checked against the release's own checksum file and its hash is
+      # printed; pinning that hash here is listed as open in docs/SECURITY.md.
+      TRIVY_VERSION: "0.69.3"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build the image
         run: docker build --tag flightops-mcp:ci .
       - name: Smoke test the image
@@ -378,6 +388,60 @@ jobs:
           echo "user: $user"
           test "$user" = "flightops"
 
+      - name: Install trivy
+        run: |
+          set -euo pipefail
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfL -o "$archive" "$base/$archive"
+          curl -sSfL -o trivy-checksums.txt "$base/trivy_${TRIVY_VERSION}_checksums.txt"
+          grep " ${archive}\$" trivy-checksums.txt | sha256sum -c -
+          echo "sha256 of ${archive}: $(sha256sum "$archive" | cut -d' ' -f1)"
+          tar -xzf "$archive" trivy
+          ./trivy --version
+
+      - name: Scan the shipped image
+        # One scan, every severity, kept as the record. The gate below reads it.
+        run: |
+          set -euo pipefail
+          ./trivy image --scanners vuln --format json --output trivy.json flightops-mcp:ci
+          ./trivy convert --format table --output trivy.txt trivy.json
+          tail -n 40 trivy.txt
+
+      - name: Gate on fixable HIGH and CRITICAL
+        # Unfixed findings are reported, not gated: nothing in this repository can act on
+        # them, and a gate that is always red is a gate nobody reads.
+        run: |
+          set -euo pipefail
+          gate() {
+            jq '[.Results[]?.Vulnerabilities[]?
+                 | select((.Severity == "HIGH" or .Severity == "CRITICAL") and ((.FixedVersion // "") != ""))]
+                | length' "$1"
+          }
+          counts="$(jq -r '[.Results[]?.Vulnerabilities[]?.Severity] | group_by(.) | map("\(.[0]) \(length)") | join(", ")' trivy.json)"
+          fixable="$(gate trivy.json)"
+          {
+            echo '### Image scan (trivy, flightops-mcp:ci)'
+            echo "All findings by severity: ${counts:-none}"
+            echo
+            echo "Fixable HIGH or CRITICAL: ${fixable}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "all findings: ${counts:-none}; fixable HIGH/CRITICAL: ${fixable}"
+          test "$fixable" -eq 0
+          # The check above cannot fail if the gate cannot. One planted fixable HIGH must trip it.
+          jq '.Results = [{"Vulnerabilities": [{"Severity": "HIGH", "FixedVersion": "1.0.1"}]}]' trivy.json > planted.json
+          test "$(gate planted.json)" -eq 1
+
+      - name: Keep the scan
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-scan
+          path: |
+            trivy.json
+            trivy.txt
+          if-no-files-found: warn
+
   # A separate job rather than more steps in `container`: that job needs no Python and answers in
   # about a minute ("does the image build and run as non-root"). This one builds three images,
   # starts a network and runs a 12-line matrix, so a failure here should name itself.
@@ -389,8 +453,8 @@ jobs:
       # The shipped stack plus the two things only the matrix needs, see the override's header.
       COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
