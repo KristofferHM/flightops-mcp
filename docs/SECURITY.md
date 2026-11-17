@@ -18,16 +18,23 @@ gate itself is shown able to fail.
 **How trivy is installed.** As the release binary, not through `aquasecurity/trivy-action` or
 `setup-trivy`. On 2026-03-19 a compromised maintainer credential was used to publish a malicious
 Trivy v0.69.4 and to force-push 76 of trivy-action's 77 tags to a credential stealer
-(CVE-2026-33634, GHSA-69fq-xp46-6x23). The job pins **v0.69.3**, which NVD names as known safe, and
-checks the download against the release's checksum file before it runs.
+(CVE-2026-33634, GHSA-69fq-xp46-6x23). The job pins **v0.69.3**, which NVD names as known safe,
+**by sha256** (`1816b632…c88b75`), as gitleaks is pinned. Where that hash came from, plainly: fetching
+the checksum file from this host was refused, so the first CI run (44162966637) verified the download
+against the release's own checksum file and printed the hash, and the hash was pinned from that log.
+That is trust on first use from one source, not a second, independent source. A replaced release
+would now fail the job instead of running.
 
-**Open.** The checksum file comes from the same release as the binary, so it protects against a
-corrupt download, not against a replaced release. The hash should be pinned in the workflow, as
-gitleaks' already is. It was not pinned in this pass because the fetch from this host was refused;
-the job prints the hash on every run, so pinning it is one line once a run has been read.
+**Result of the first scan** (run 44162966637, image `flightops-mcp:ci` on Debian 13.7): 226 findings,
+HIGH 48, MEDIUM 98, LOW 66, UNKNOWN 14, no CRITICAL. Of the 48 HIGH, 47 have no fixed version in Debian
+(util-linux, sqlite, systemd, ncurses, perl-base and others: status `affected` or `fix_deferred`).
+**One was fixable, and the gate failed on it**: `zlib1g` CVE-2026-85091, a heap overflow in `gz_write`,
+fixed in `1:1.3.dfsg+really1.3.1-1+deb13u1` by DSA-6613-1 in `trixie-security`. The image had
+`1:1.3.dfsg+really1.3.1-1+b1`, the version in the base tag.
 
-**Result.** Stated in `ROADMAP.md` with the CI run that produced it (the scan cannot run on this
-host: no Docker).
+The cause was ours: the `apt-get upgrade` described below had been written but did not reach that
+commit (an edit that did not apply, found by reading the build log, which has no apt step). It is in
+the next commit. The result of the scan after it is stated in `ROADMAP.md` with its run.
 
 **Base image.** The runtime stage now runs `apt-get upgrade` before anything else, so a Debian
 security fix published after `python:3.12-slim` was last rebuilt is in the image. Without it, the
@@ -45,7 +52,7 @@ gate would fail on findings that are fixed in Debian but not yet in the base tag
 | Base image | `python:3.12-slim`, by tag | **Floating by design.** A digest pin is reproducible and also never receives a security fix unless something bumps it, and this repository has no bot to do that. The tag plus `apt-get upgrade` plus a gated scan on every push is the trade made. Revisit when Renovate or Dependabot is added. |
 | Observability images | `jaegertracing/all-in-one:1.62`, `prom/prometheus:v3.0.1`, `grafana/grafana:11.3.0`, overridable | Pinned by tag, and **old**: these were current a long time ago and are not scanned. They run only under the `observability` profile, bound to 127.0.0.1, and are never part of a deployment. Recorded as debt, not fixed here. |
 | GitHub Actions | **Now pinned to commit SHAs** (`actions/checkout`, `astral-sh/setup-uv`, `actions/upload-artifact`), the tag in a comment | Changed in this pass. Before, all three were by major tag, which is what the trivy-action attack used. Resolved with `git ls-remote` on 2026-11-17; `setup-uv`'s `v5` is an annotated tag, so the peeled commit is used. |
-| CI tools fetched at run time | gitleaks 8.30.1 by version **and sha256**; trivy 0.69.3 by version and the release's checksum file | gitleaks fully pinned; trivy as above (open item). |
+| CI tools fetched at run time | gitleaks 8.30.1 and trivy 0.69.3, each by version **and sha256** | Pinned. trivy's hash is trust-on-first-use from CI (above). |
 
 `pip-audit` over every locked dependency in every group, run locally on 2026-11-17:
 **No known vulnerabilities found.** CI runs the same command on every push (`scans` job).

@@ -362,9 +362,10 @@ jobs:
     env:
       # The binary, not trivy-action or setup-trivy, whose tags were rewritten in March 2026.
       # v0.69.3 is a version NVD names as known safe (CVE-2026-33634; v0.69.4 was the malicious
-      # one). The download is checked against the release's own checksum file and its hash is
-      # printed; pinning that hash here is listed as open in docs/SECURITY.md.
+      # one). Pinned by hash, as gitleaks is. The hash was first observed by run 44162966637,
+      # where it matched the release's own checksum file: trust on first use, not a second source.
       TRIVY_VERSION: "0.69.3"
+      TRIVY_SHA256: "1816b632dfe529869c740c0913e36bd1629cb7688bd5634f4a858c1d57c88b75"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build the image
@@ -394,9 +395,7 @@ jobs:
           base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
           archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
           curl -sSfL -o "$archive" "$base/$archive"
-          curl -sSfL -o trivy-checksums.txt "$base/trivy_${TRIVY_VERSION}_checksums.txt"
-          grep " ${archive}\$" trivy-checksums.txt | sha256sum -c -
-          echo "sha256 of ${archive}: $(sha256sum "$archive" | cut -d' ' -f1)"
+          echo "${TRIVY_SHA256}  ${archive}" | sha256sum -c -
           tar -xzf "$archive" trivy
           ./trivy --version
 
