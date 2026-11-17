@@ -149,10 +149,27 @@ The agent is deliberately thin: the server is the product, the agent is the proo
 
 ### Acceptance criteria
 
-- [ ] Offline mode runs the same scenario deterministically in CI, byte-identical transcript
-- [ ] The write tool refuses without an approval response, and the refusal is testable
-- [ ] Replaying the same idempotency key returns the original result, not a second write
-- [ ] Agent run writes a JSON transcript that the eval harness consumes
+- [x] Offline mode runs the same scenario deterministically in CI, byte-identical transcript
+      (CI run [44028182429](https://github.com/KristofferHM/flightops-mcp/actions/runs/44028182429), job
+      `agent offline determinism (phase 3 acceptance)`, green on `feat/phase-3-agent-loop`: an approved scenario
+      run twice with equal hashes, then a declined scenario whose hash differs. Locally the same property is
+      `tests/test_agent_offline.py`, including `test_the_transcript_carries_no_wall_clock_time` and
+      `test_the_loop_reads_no_clock_and_no_entropy_of_its_own`)
+- [x] The write tool refuses without an approval response, and the refusal is testable
+      (`tests/test_agent_offline.py::test_without_a_valid_approval_the_write_is_refused_and_the_api_is_never_asked`
+      — the refusal is a payload, and the mock is asserted never to have been asked; the approval itself is a
+      signed grant for one payload, `docs/adr/0003`)
+- [x] Replaying the same idempotency key returns the original result, not a second write
+      (`tests/test_ops_rebookings.py`: replayed key returns the original bytes and writes nothing, still does so
+      when a different person approves the replay, and survives the clock moving on — counted at the mock, not
+      the client)
+- [x] Agent run writes a JSON transcript that the eval harness consumes
+      (`tests/test_agent_transcript.py`: a sealed transcript reads back as itself, one edited after writing is
+      refused, a document that is not a transcript is refused — the loader Phase 4 builds on)
+
+**Verified 2026-11-16:** 637 tests pass locally, ruff and mypy clean over `src`, `services` and `agent`
+(46 files). The CI run above is green on the branch. Not yet done: the branch is not merged and `v0.4.0` is not
+tagged — those are the owner's decisions.
 
 ---
 
