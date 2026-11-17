@@ -4,8 +4,8 @@ The mock serves OpenSky, AviationWeather and Schiphol in their documented shapes
 the real server's clients decode it, so a mock that drifted from what the clients
 read would fail here before it made a load test or a compose run meaningless.
 
-Then the script itself: `scripts/second_upstream.py`
-runs against the same stack through one routing transport (IdP, mock, server, each
+Then the scripts themselves: `scripts/second_upstream.py` and `scripts/load_test.py`
+run against the same stack through one routing transport (IdP, mock, server, each
 an ASGI app), so CI runs a small load test on every push and the numbers in the
 README come from code that is under test. The rate here is tiny; the measured run
 is `scripts/load_test.sh` (docs/LOAD-TEST.md).
@@ -13,6 +13,7 @@ is `scripts/load_test.sh` (docs/LOAD-TEST.md).
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import sys
 from collections.abc import AsyncIterator
@@ -213,3 +214,55 @@ async def test_the_second_upstream_check_passes_against_the_stack(
     assert status == 0, out
     assert "4/4 passed" in out
     assert "FAIL" not in out
+
+
+async def test_the_load_test_runs_the_mix_and_reports_from_the_servers_own_counters(
+    stack: Stack,
+) -> None:
+    script = load_script("load_test")
+    args = argparse.Namespace(
+        server=BASE_URL,
+        idp=ISSUER,
+        mock=MOCK,
+        rps=400.0,
+        duration=0.1,
+        connections=20,
+        timeout=30.0,
+        mock_latency_ms=0.0,
+    )
+
+    result = await script.run(args, transport=stack.router)
+
+    assert result["requests"]["completed"] == 40
+    assert result["requests"]["outcomes"] == {"ok": 40}
+    assert result["requests"]["error_rate"] == 0.0
+    assert set(result["latency_ms_by_tool"]) == {name for name, _ in script._MIX}
+    assert result["spend"]["opensky_credits"] > 0
+    assert result["spend"]["upstream_requests_served_by_mock"]["schiphol.flight_requests"] == 2
+    for key in ("p50", "p95", "p99"):
+        assert result["latency_ms_from_schedule"][key] >= 0
+
+
+def test_load_test_helpers() -> None:
+    script = load_script("load_test")
+    assert script.percentile([5.0, 1.0, 3.0, 2.0, 4.0], 0.5) == 3.0
+    assert script.percentile([1.0, 2.0], 0.99) == 2.0
+    assert script.percentile(list(map(float, range(1, 101))), 0.95) == 95.0
+    assert script.operation(0) == ("resolve_airport", {"query": "ESGG"})
+    assert script.operation(10) == ("resolve_airport", {"query": "ESSA"})
+    assert script.operation(5)[0] == "schiphol_flights"
+    scraped = script.scrape('# HELP x\nx_total{a="b"} 3.0\ny 1\n')
+    assert scraped == {'x_total{a="b"}': 3.0, "y": 1.0}
+    assert script.delta({"x_a": 5.0, "x_b": 1.0, "y": 9.0}, {"x_a": 2.0, "x_b": 1.0}, "x_") == {
+        "x_a": 3.0
+    }
+
+    def response(status: int, body: Any) -> httpx.Response:
+        return httpx.Response(status, json=body)
+
+    assert script.classify(response(500, {})) == "http_500"
+    assert script.classify(httpx.Response(200, text="<html>")) == "unreadable_response"
+    assert script.classify(response(200, {"error": {"code": -32602}})) == "rpc_error_-32602"
+    failed = {"result": {"structuredContent": {"ok": False, "error": {"code": "x"}}}}
+    assert script.classify(response(200, failed)) == "tool_error:x"
+    assert script.classify(response(200, {"result": {"structuredContent": {"ok": True}}})) == "ok"
