@@ -160,8 +160,14 @@ def scopes_from_claims(claims: dict[str, Any]) -> list[str]:
             granted.extend(value.split())
     roles = claims.get("roles")
     if isinstance(roles, list):
-        granted.extend(str(role) for role in roles)
+        # One scope name per entry. `str(role)` used to turn `1`, `None` and "" into
+        # grants; none matches a real scope, but a grant nobody issued is still a lie.
+        granted.extend(role for role in roles if _is_scope_name(role))
     return list(dict.fromkeys(granted))
+
+
+def _is_scope_name(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and not any(c.isspace() for c in value)
 
 
 def _canonical(audience: str) -> str:

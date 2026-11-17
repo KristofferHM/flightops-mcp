@@ -288,6 +288,10 @@ async def test_an_attempt_to_forward_the_token_is_blocked_and_the_reason_is_logg
     assert blocked["reason"] == "outbound request carried the caller's access token"
     assert blocked["found_in"] == found_in
     assert blocked["upstream_host"] == "partner.example"
+    # Which call tried it, so the operator can find the code. Unasserted until mutation
+    # testing showed either field could be dropped without a test noticing.
+    assert blocked["method"] == "POST"
+    assert blocked["path"] == "/bookings"
     assert blocked["level"] == "error"
     assert token not in logs.text, "the log names where the token was, never the token"
 

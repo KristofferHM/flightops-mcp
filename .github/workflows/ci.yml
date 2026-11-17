@@ -45,15 +45,21 @@ jobs:
         run: uv sync --frozen
         env:
           UV_PYTHON: ${{ matrix.python }}
-      - name: Run the suite
-        run: uv run pytest -q
+      - name: Run the suite, with the coverage ratchet
+        # `fail_under` in pyproject.toml is the floor; pytest-cov fails the step below it.
+        run: |
+          set -o pipefail
+          uv run pytest -q -rs --cov --cov-report=term | tee pytest.out
         env:
           UV_PYTHON: ${{ matrix.python }}
+          # 500 examples per property, derandomized (tests/conftest.py).
+          HYPOTHESIS_PROFILE: ci
       - name: Fail on skipped tests
         # A skipped test is an untested path. Nothing here may skip silently.
         run: |
-          uv run pytest -q -rs | tee pytest.out
-          if grep -q "skipped" pytest.out; then
+          # pytest says "N skipped"; coverage says "N files skipped due to complete coverage",
+          # which is not a skipped test.
+          if grep -qE "[0-9]+ skipped" pytest.out; then
             echo "::error::tests were skipped; account for them or remove them"
             exit 1
           fi
@@ -202,6 +208,116 @@ jobs:
           name: evals-offline
           path: eval-runs/
           if-no-files-found: error
+
+  # Phase 4b, gate 3 (docs/QUALITY.md). Mutants of auth/, the credit ledger and the agent's
+  # approval types, each run against the tests that exercise it. Linux only: mutmut forks per
+  # mutant. The budget is the `timeout` below; a run it cuts short leaves mutants unchecked,
+  # and the gate script fails on that rather than reporting a flattering lower bound.
+  mutation:
+    name: mutation (auth, credit ledger, approval)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Mutate (budget 35 minutes)
+        env:
+          HYPOTHESIS_PROFILE: mutation
+        run: |
+          set +e
+          timeout 35m uv run mutmut run --max-children 4 > mutmut.out 2>&1
+          status=$?
+          tail -n 20 mutmut.out
+          echo "mutmut exited $status"
+
+      - name: Survivors against the ceiling
+        run: |
+          set -o pipefail
+          uv run python scripts/mutation_gate.py --report mutation-report.md | tee mutation-gate.out
+          {
+            echo '### Mutation testing'
+            echo '```'
+            cat mutation-gate.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: A ceiling one lower fails the gate
+        # The step above cannot fail if the gate cannot. Same results, ceiling minus one.
+        run: |
+          set -euo pipefail
+          ceiling="$(sed -n 's/^ceiling = \([0-9]*\)$/\1/p' pyproject.toml)"
+          sed "s/^ceiling = .*/ceiling = $((ceiling - 1))/" pyproject.toml > lower.toml
+          if uv run python scripts/mutation_gate.py --pyproject lower.toml --report lower.md > lower.out; then
+            echo "::error::the gate passed with the ceiling at $((ceiling - 1))"
+            exit 1
+          fi
+          grep -E "^FAIL: [0-9]+ mutants survived; the ceiling is $((ceiling - 1))$" lower.out
+
+      - name: Keep the survivor report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: |
+            mutation-report.md
+            mutmut.out
+          if-no-files-found: warn
+
+  # Phase 4b, gate 4. Secrets in the tree and in every commit on every ref, then known
+  # vulnerabilities in the locked dependencies. A finding fails the job. The only allowlist is
+  # .gitleaksignore, which names each verified false positive and why.
+  scans:
+    name: secret and dependency scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      # From the release's gitleaks_8.30.1_checksums.txt.
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history, not the default single commit: a secret removed in a later
+          # commit is still in the repository.
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" gitleaks
+          ./gitleaks version
+      - name: gitleaks, working tree
+        # Before `uv sync`, so the scan sees the checkout and not a virtualenv.
+        run: ./gitleaks dir . --redact --no-banner --exit-code 1
+      - name: gitleaks, every commit on every ref
+        run: |
+          set -euo pipefail
+          ./gitleaks git . --log-opts=--all --redact --no-banner --exit-code 1 2>&1 | tee history.out
+          echo "commits in the repository: $(git rev-list --all --count)"
+          {
+            echo '### gitleaks history'
+            echo '```'
+            grep -E "commits scanned|leaks found|no leaks" history.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: pip-audit, every locked dependency in every group
+        run: |
+          set -euo pipefail
+          uv export --frozen --format requirements-txt --no-emit-project --all-groups > requirements.lock
+          uv run --frozen pip-audit -r requirements.lock --disable-pip --progress-spinner off
 
   contract:
     name: live upstream contract (advisory)

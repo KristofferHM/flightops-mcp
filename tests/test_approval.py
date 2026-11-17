@@ -293,6 +293,9 @@ async def test_a_rejection_logs_its_reason_and_never_the_grant(
     assert reasons == ["payload_mismatch", "wrong_audience"]
     (mismatch, _) = logs.events("approval_rejected")
     assert mismatch["proposed_sha256"] == PROPOSAL.sha256
+    # Equal to the digest of what the grant showed, not merely "not the proposal's": the
+    # weaker check also passed when the field was logged as None (mutation run 3).
+    assert mismatch["approved_sha256"] == approved_digest(detail({**SHOWN, "passenger_count": 9}))
     assert mismatch["approved_sha256"] != PROPOSAL.sha256
     assert mismatched not in logs.text
     assert wrong_audience not in logs.text

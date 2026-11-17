@@ -47,7 +47,8 @@ uv run flightops-mcp                                                 # stdio ser
 | `src/flightops_mcp/server.py` | MCP tools, the `guarded` wrapper, triage logic |
 | `src/flightops_mcp/auth/` | inbound auth: JWKS cache, RS256 verifier, `Scopes.for_tool`, the 403 scope challenge, the passthrough guard; the only code that touches the SDK auth API |
 | `src/flightops_mcp/opensky_token.py` | OAuth2 client credentials, single-flight refresh |
-| `src/flightops_mcp/opensky.py` | credit ledger, `429` policy, response decoding |
+| `src/flightops_mcp/opensky.py` | `429` policy, response decoding (`decode_states`, `decode_movements`) |
+| `src/flightops_mcp/credits.py` | the per-hour credit ledger; mutation-tested (`docs/QUALITY.md`) |
 | `src/flightops_mcp/http.py` | retry/backoff/`Retry-After` plumbing |
 | `src/flightops_mcp/telemetry.py` | redaction pipeline, Prometheus metrics |
 | `services/idp/` | local IdP for tests and compose; a fixture, never deployed. Differences from Entra: `docs/adr/0001` |

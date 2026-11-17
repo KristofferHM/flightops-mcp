@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import email.utils
+import math
+import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import cast
@@ -29,41 +31,86 @@ SleepFn = Callable[[float], Awaitable[None]]
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
-def retry_after_seconds(response: httpx.Response) -> float | None:
+# Delta-seconds as RFC 9110 writes it, plus a fraction because OpenSky's own header
+# is documented as seconds without saying "integer". `float()` alone is too kind: it
+# reads "inf", "nan", "1_000" and "-5", none of which is a wait an upstream meant.
+_SECONDS = re.compile(r"[0-9]+(?:\.[0-9]+)?")
+_DIGITS = re.compile(r"[0-9]+")
+# OpenSky's header first: when both are present it is the more specific answer.
+RETRY_AFTER_HEADERS = ("x-rate-limit-retry-after-seconds", "retry-after")
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def parse_retry_after(raw: str | None, *, now: datetime) -> float | None:
+    """One header value as seconds to wait, or None when it does not say.
+
+    `now` is a parameter so the HTTP-date form can be tested without a clock.
+    An unreadable value is absent rather than zero: waiting 0 s is a retry storm
+    dressed up as backoff. A date in the past is zero: "you may retry now".
+    """
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    if _SECONDS.fullmatch(raw):
+        seconds = float(raw)
+        # A thousand digits is a well-formed number and an infinite float.
+        return seconds if math.isfinite(seconds) else None
+    try:
+        when = email.utils.parsedate_to_datetime(raw)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - now).total_seconds())
+
+
+def retry_after_from_headers(
+    headers: Mapping[str, str], *, now: Callable[[], datetime] = _utcnow
+) -> float | None:
+    """The wait from whichever rate-limit header is present and readable.
+
+    `headers` may be an `httpx.Headers` or the plain dict an `HttpResponse` keeps;
+    names are compared without case either way.
+    """
+    lowered = {name.lower(): value for name, value in headers.items()}
+    for header in RETRY_AFTER_HEADERS:
+        seconds = parse_retry_after(lowered.get(header), now=now())
+        if seconds is not None:
+            return seconds
+    return None
+
+
+def retry_after_seconds(
+    response: httpx.Response, *, now: Callable[[], datetime] = _utcnow
+) -> float | None:
     """Read the wait time from either the standard or the upstream-specific header.
 
     OpenSky returns `X-Rate-Limit-Retry-After-Seconds`; the OAuth/REST standard
     is `Retry-After` in either delta-seconds or HTTP-date form. We honour both.
     """
-    for header in ("x-rate-limit-retry-after-seconds", "retry-after"):
-        raw = response.headers.get(header)
-        if not raw:
-            continue
-        raw = raw.strip()
-        try:
-            return max(0.0, float(raw))
-        except ValueError:
-            pass
-        # RFC 7231 also allows an HTTP-date. Treat an unparseable value as absent
-        # rather than as zero: waiting 0s is a retry storm dressed up as backoff.
-        try:
-            when = email.utils.parsedate_to_datetime(raw)
-        except (TypeError, ValueError):
-            continue
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=UTC)
-        return max(0.0, (when - datetime.now(UTC)).total_seconds())
-    return None
+    return retry_after_from_headers(response.headers, now=now)
+
+
+def parse_credits_remaining(raw: str | None) -> int | None:
+    """A credit balance is a non-negative integer. Anything else is unknown, not zero."""
+    if raw is None:
+        return None
+    raw = raw.strip()
+    return int(raw) if _DIGITS.fullmatch(raw) else None
+
+
+def credits_remaining_from_headers(headers: Mapping[str, str]) -> int | None:
+    lowered = {name.lower(): value for name, value in headers.items()}
+    return parse_credits_remaining(lowered.get("x-rate-limit-remaining"))
 
 
 def credits_remaining(response: httpx.Response) -> int | None:
-    raw = response.headers.get("x-rate-limit-remaining")
-    if raw is None:
-        return None
-    try:
-        return int(raw.strip())
-    except ValueError:
-        return None
+    return credits_remaining_from_headers(response.headers)
 
 
 @dataclass(slots=True)
@@ -238,9 +285,26 @@ class UpstreamHttp:
         )  # pragma: no cover
 
     def _backoff(self, attempt: int) -> float:
-        # Exponential with jitter, capped so a test run never stalls.
-        base = float(self._settings.backoff_base_s) * float(2 ** (attempt - 1))
-        return min(base + (base * 0.1), float(self._settings.max_rate_limit_wait_s))
+        return backoff_delay(
+            attempt,
+            base_s=self._settings.backoff_base_s,
+            cap_s=self._settings.max_rate_limit_wait_s,
+        )
+
+
+def backoff_delay(attempt: int, *, base_s: float, cap_s: float) -> float:
+    """Seconds to wait before retry `attempt` (1-based): doubling, plus 10 %, capped.
+
+    There is no random jitter, so a test can assert the exact sleeps. The cap is
+    the same ceiling a `Retry-After` may ask for, so a retry never waits longer
+    than an upstream would be allowed to make it wait.
+    """
+    if attempt < 1:
+        raise ValueError(f"attempts are counted from 1, not {attempt}")
+    # Capping the exponent first keeps a large attempt from overflowing a float.
+    doubling = 2.0 ** min(attempt - 1, 64)
+    base = base_s * doubling
+    return max(0.0, min(base + base * 0.1, cap_s))
 
 
 def _safe_json(response: httpx.Response) -> object | None:
