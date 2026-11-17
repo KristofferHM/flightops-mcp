@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     # This is a *local* ceiling so one runaway agent loop cannot drain the day.
     credit_budget_per_hour: int = 400
 
+    # --- Tool-result cache (src/flightops_mcp/cache.py) -----------------------
+    # The TTL and scope of each tool are policy, in code. These two only say
+    # whether the cache runs at all and how many results it may hold.
+    cache_enabled: bool = True
+    cache_max_entries: int = 1024
+
     # --- Resilience ----------------------------------------------------------
     # Consecutive upstream failures before the breaker opens. The retry policy
     # counts attempts, so three attempts per call means a dead provider opens the

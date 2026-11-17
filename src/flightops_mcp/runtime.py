@@ -18,6 +18,7 @@ import httpx
 from .airports import AirportDB
 from .auth import ApprovalVerifier, build_approval_verifier
 from .auth.obo import OboExchanger
+from .cache import ToolCache
 from .config import Settings
 from .opensky import OpenSkyClient
 from .ops import OpsApiClient
@@ -33,6 +34,9 @@ class Runtime:
     obo: OboExchanger
     ops: OpsApiClient
     approvals: ApprovalVerifier
+    # Tool results under their ttlMs/cacheScope hints. One per runtime, so a test or
+    # an eval scenario never sees another world's answers.
+    cache: ToolCache
     clock: Callable[[], float]
     # The instant upstream data is judged against: how old a METAR or a traffic
     # snapshot is, and which movement window to ask for. Separate from `clock`,
@@ -74,6 +78,11 @@ class Runtime:
             ops=OpsApiClient(resolved, transport=ops_transport, sleep=sleep),
             # The grants are signed by the issuer the exchange already talks to.
             approvals=build_approval_verifier(resolved, jwks_transport=idp_transport, clock=clock),
+            cache=ToolCache(
+                max_entries=resolved.cache_max_entries,
+                enabled=resolved.cache_enabled,
+                clock=clock,
+            ),
             clock=clock,
             data_clock=data_clock or clock,
         )

@@ -54,6 +54,17 @@ TOKEN_REFRESHES = Counter(
     ["outcome"],
     registry=REGISTRY,
 )
+CACHE_REQUESTS = Counter(
+    "flightops_cache_requests_total",
+    "Tool-result cache lookups by tool and outcome (hit, miss, coalesced, bypass).",
+    ["tool", "outcome"],
+    registry=REGISTRY,
+)
+CACHE_ENTRIES = Gauge(
+    "flightops_cache_entries",
+    "Tool results currently held in the cache.",
+    registry=REGISTRY,
+)
 CIRCUIT_STATE = Gauge(
     "flightops_circuit_open",
     "1 when the upstream circuit breaker is open.",

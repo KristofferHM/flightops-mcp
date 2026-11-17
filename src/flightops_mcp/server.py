@@ -58,6 +58,7 @@ from .auth.approval import (
     approval_invalid,
     approval_required,
 )
+from .cache import LIST_CACHE_HINTS, cached
 from .config import Settings
 from .errors import (
     ToolFailure,
@@ -104,6 +105,8 @@ complete on your say-so. It answers with a request for a human approval; a perso
 other than the user you act for must approve the exact proposal. If the approval \
 is refused, missing or declined, report that and stop. Never try to supply, guess \
 or work around an approval.
+8. A payload with `cache.hit: true` was served from this server's cache. Its \
+`as_of` is when the data was fetched; a repeat inside the TTL costs no credits.
 """
 
 _log = get_logger(__name__)
@@ -183,10 +186,14 @@ def tool(fn: Any) -> Any:
     """Guard a tool function and add it to the registry every server is built from.
 
     Registration fails for a tool with no entry in the scope table, so a new tool
-    cannot ship unprotected by omission.
+    cannot ship unprotected by omission, and likewise for the cache hint table, so
+    a new tool is never cached (or left uncached) by default.
+
+    The cache sits inside `guarded` and, on the HTTP server, inside `scoped`: the
+    scope is checked before the cache is consulted, every time.
     """
     Scopes.for_tool(fn.__name__)
-    wrapped: ToolFn = guarded(fn)
+    wrapped: ToolFn = guarded(cached(fn, cache=lambda: get_runtime().cache))
     _TOOLS.append(wrapped)
     return wrapped
 
@@ -620,6 +627,10 @@ async def upstream_status() -> dict[str, Any]:
             "local_budget_per_hour": runtime.settings.credit_budget_per_hour,
             "upstream_remaining_last_seen": runtime.opensky.last_credits_remaining,
         },
+        "cache": {
+            "enabled": runtime.settings.cache_enabled,
+            "entries": len(runtime.cache),
+        },
         "token": {
             "cached": runtime.opensky.token_cached,
             "refreshes_this_process": runtime.opensky._tokens.refresh_count,  # noqa: SLF001
@@ -1019,8 +1030,12 @@ def create_server(
         auth=auth,
         token_verifier=token_verifier,
         request_state_security=request_state_security,
+        cache_hints=LIST_CACHE_HINTS,
     )
-    for fn in _TOOLS:
+    # Sorted by name, not registration order. A host puts the tool list near the top
+    # of a model's prompt, and a prompt cache only hits on an identical prefix: an
+    # order that followed import order would change when a module was reorganised.
+    for fn in sorted(_TOOLS, key=lambda tool_fn: tool_fn.__name__):
         server.add_tool(scoped(fn) if authenticated else fn)
     return server
 
