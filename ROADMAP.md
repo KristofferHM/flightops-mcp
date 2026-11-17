@@ -275,12 +275,17 @@ On `feat/phase-5-hardening`, 2026-11-17. Ticked only where shown; the evidence i
       ADRs 0004, 0005, 0006. docs/DEMO.md: every command run on this machine with its output pasted; a fresh
       clone to an approved rebooking in 24 s on a warm uv cache. **No recording**: no reliable terminal
       recorder on this host, and none was faked.
-- [ ] Image scan in CI, pinning review written, history secrets audit result stated
-      — Pinning review and history audit: docs/SECURITY.md (no findings in 45 commits; pip-audit clean). The
-      image scan runs in CI and **failed on its first run** (44162966637) on a fixable zlib HIGH; result after
-      the fix: pending.
-- [ ] All jobs green in CI on the branch, run linked in the roadmap
-      — pending.
+- [x] Image scan in CI, pinning review written, history secrets audit result stated
+      — trivy v0.69.3 (binary pinned by sha256) in the `container` job. First run (44162966637) **failed** on a
+      fixable HIGH, zlib CVE-2026-85091, because the `apt-get upgrade` had not reached that commit. Run [44166077191](https://github.com/KristofferHM/flightops-mcp/actions/runs/44166077191)
+      after the fix: apt installed `zlib1g 1:1.3.dfsg+really1.3.1-1+deb13u1` from trixie-security, and the scan
+      found **HIGH 47, MEDIUM 97, LOW 66, UNKNOWN 14, no CRITICAL, 0 fixable HIGH/CRITICAL**; the planted
+      finding tripped the gate. Pinning review and the history audit (45 commits, every ref, **no findings**;
+      pip-audit clean) in docs/SECURITY.md. All Actions pinned to commit SHAs.
+- [x] All jobs green in CI on the branch, run linked in the roadmap
+      — [44166077191](https://github.com/KristofferHM/flightops-mcp/actions/runs/44166077191) on `feat/phase-5-hardening` at `d1491a7`: ten jobs, all green, including mutation (1234 killed,
+      **90 survivors, ceiling 90**), coverage (floor 89), gitleaks (no leaks), the compose matrix (12/12 plus the
+      second adapter 4/4) and the image scan.
 
 Not done in this phase: the `v1.0.0` tag and generated release notes (the owner's decision), a live Schiphol run
 (needs a key), a recording of the demo.
@@ -343,13 +348,13 @@ Numbers and method in [docs/QUALITY.md](docs/QUALITY.md).
 ### `v1.0` Definition of Done
 
 - [ ] All five phases' acceptance criteria green in CI
-- [ ] Coverage ratchet enforced with `fail_under`, branch coverage, no new exclusions
-- [ ] Mutation ceiling met on `auth/` and the credit ledger, report committed
-- [ ] `gitleaks` and `pip-audit` green in CI
-- [ ] Eval table in the README with a date and a model name
-- [ ] `docker compose up` gives a working stack with no external account
-- [ ] Runbook, ADRs, changelog present
-- [ ] One honest "what this still does not do" section, longer than the feature list
+- [x] Coverage ratchet enforced with `fail_under`, branch coverage, no new exclusions (run [44166077191](https://github.com/KristofferHM/flightops-mcp/actions/runs/44166077191); 89.18 % locally)
+- [x] Mutation ceiling met on `auth/` and the credit ledger, report committed (90 of ceiling 90, run [44166077191](https://github.com/KristofferHM/flightops-mcp/actions/runs/44166077191))
+- [x] `gitleaks` and `pip-audit` green in CI (run [44166077191](https://github.com/KristofferHM/flightops-mcp/actions/runs/44166077191))
+- [x] Eval table in the README with a date and a model name (generated: `offline`, 2026-11-17, 58 scenarios)
+- [x] `docker compose up` gives a working stack with no external account (compose matrix, run [44166077191](https://github.com/KristofferHM/flightops-mcp/actions/runs/44166077191))
+- [x] Runbook, ADRs, changelog present (ADRs 0001-0006; runbook and CHANGELOG updated for Phase 5)
+- [x] One honest "what this still does not do" section, longer than the feature list (README: 19 against 17)
 
 ---
 

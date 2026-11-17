@@ -34,7 +34,9 @@ fixed in `1:1.3.dfsg+really1.3.1-1+deb13u1` by DSA-6613-1 in `trixie-security`. 
 
 The cause was ours: the `apt-get upgrade` described below had been written but did not reach that
 commit (an edit that did not apply, found by reading the build log, which has no apt step). It is in
-the next commit. The result of the scan after it is stated in `ROADMAP.md` with its run.
+the next commit. **Result after it** (run 44166077191): apt installed the fixed `zlib1g` from
+trixie-security; HIGH 47, MEDIUM 97, LOW 66, UNKNOWN 14, no CRITICAL, **0 fixable HIGH or CRITICAL**;
+the gate passed, and the planted finding still tripped it.
 
 **Base image.** The runtime stage now runs `apt-get upgrade` before anything else, so a Debian
 security fix published after `python:3.12-slim` was last rebuilt is in the image. Without it, the
