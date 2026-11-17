@@ -33,9 +33,11 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.170.15",
     "mypy>=2.4.1",
     "pytest>=9.2.0",
     "pytest-asyncio>=1.5.0",
+    "pytest-cov>=7.1.0",
     "respx>=0.23.1",
     "ruff>=0.17.5",
     { include-group = "services" },
@@ -89,3 +91,22 @@ python_version = "3.12"
 strict = true
 warn_unused_ignores = true
 ignore_missing_imports = true
+
+# The ratchet (docs/QUALITY.md). Branch coverage over everything that ships or
+# runs, scripts included. The floor is today's number rounded down and only ever
+# goes up, in the same commit as the tests that raise it, never by excluding code.
+[tool.coverage.run]
+branch = true
+source = ["src/flightops_mcp", "agent", "evals", "services", "scripts"]
+
+[tool.coverage.report]
+fail_under = 88
+precision = 2
+show_missing = true
+skip_covered = true
+# The whole exclusion list. Keep it this short: anything added here needs a line
+# in docs/QUALITY.md saying why it cannot be tested.
+exclude_also = [
+    'if __name__ == "__main__":',
+    "if TYPE_CHECKING:",
+]

@@ -45,14 +45,16 @@ jobs:
         run: uv sync --frozen
         env:
           UV_PYTHON: ${{ matrix.python }}
-      - name: Run the suite
-        run: uv run pytest -q
+      - name: Run the suite, with the coverage ratchet
+        # `fail_under` in pyproject.toml is the floor; pytest-cov fails the step below it.
+        run: |
+          set -o pipefail
+          uv run pytest -q -rs --cov --cov-report=term | tee pytest.out
         env:
           UV_PYTHON: ${{ matrix.python }}
       - name: Fail on skipped tests
         # A skipped test is an untested path. Nothing here may skip silently.
         run: |
-          uv run pytest -q -rs | tee pytest.out
           if grep -q "skipped" pytest.out; then
             echo "::error::tests were skipped; account for them or remove them"
             exit 1
