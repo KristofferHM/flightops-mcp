@@ -80,3 +80,21 @@ functions under test did not exist there in a testable form.
 Two refactors made the properties possible without an HTTP stack: the credit ledger moved out of `OpenSkyClient`
 into `credits.py`, and response decoding into `decode_states` / `decode_movements`. Behaviour is unchanged
 except as listed above.
+
+## 4. Secret and dependency scans
+
+The `scans` job. Each step fails the build on a finding.
+
+| Scan | What it covers | Result on this branch |
+|---|---|---|
+| `gitleaks dir .` (8.30.1, checksum-verified) | the checked-out tree, before any install | clean |
+| `gitleaks git . --log-opts=--all` | every commit on every ref (`fetch-depth: 0`) | clean: 28 commits scanned (the 32 in `git rev-list --all` less 4 merges, which add no content), one verified false positive, named below |
+| `pip-audit` | every package in `uv.lock`, all dependency groups, hashes required | no known vulnerabilities |
+
+`.gitleaksignore` is the allowlist, and every entry in it names the line and why it is not a secret. There is
+one: `tests/test_rebooking_proposal.py:45`, which asserts the idempotency key `rbk_` + the first 32 hex digits
+of the SHA-256 of a public test proposal. The full digest is asserted on line 37 of the same file. It is
+listed twice, once for the tree and once for the commit that introduced it.
+
+Run locally, the tree scan also reports `.env` (gitignored, never committed: the developer's generated
+compose secrets) and `.venv`. Neither is in a checkout, which is what CI scans.

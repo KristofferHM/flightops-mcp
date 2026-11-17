@@ -1,0 +1,7 @@
+# Verified false positives only, each named. A real finding is fixed and rotated, never listed here.
+#
+# tests/test_rebooking_proposal.py:45 asserts the idempotency key "rbk_" + sha256(canonical
+# proposal)[:32]. It is a content hash of a public test fixture (the full digest is asserted on
+# line 37 of the same file), not a credential. Matched by the generic-api-key rule for its entropy.
+tests/test_rebooking_proposal.py:generic-api-key:45
+eac450646ab8a08ddeaff67add8317e5f61fdd63:tests/test_rebooking_proposal.py:generic-api-key:45
