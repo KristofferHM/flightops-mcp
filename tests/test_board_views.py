@@ -132,6 +132,12 @@ def test_an_answer_with_nothing_in_it_claims_nothing() -> None:
     }
 
 
+def test_a_report_from_the_future_says_so_exactly() -> None:
+    view = board.weather_view(metar(-9000, current=False))
+
+    assert view["summary"] == "Unknown: METAR 2 h 30 min in the future"
+
+
 def test_a_current_report_without_a_category_is_not_reported() -> None:
     view = board.weather_view(metar(60, category="GREEN"))
 
@@ -372,6 +378,15 @@ def test_a_failed_triage_in_full() -> None:
         "unknowns": ["Refused."],
         "legs_without_evidence": [],
         "movements": {"arrivals": "not available", "departures": "not available"},
+    }
+
+
+def test_a_triage_reports_departures_as_counted() -> None:
+    payload = {"ok": True, "evidence": {"movements_summary": {"arrivals": 0, "departures": 5}}}
+
+    assert board.triage_view(payload)["movements"] == {
+        "arrivals": board.MOVEMENTS_NOT_AVAILABLE,
+        "departures": "5",
     }
 
 

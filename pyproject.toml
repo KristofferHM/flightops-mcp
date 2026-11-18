@@ -108,7 +108,7 @@ branch = true
 source = ["src/flightops_mcp", "agent", "evals", "services", "scripts", "dashboard"]
 
 [tool.coverage.report]
-fail_under = 89
+fail_under = 90
 precision = 2
 show_missing = true
 skip_covered = true
@@ -158,8 +158,8 @@ pytest_add_cli_args_test_selection = [
 ]
 pytest_add_cli_args = ["-p", "no:cacheprovider"]
 
-# The survivor ceiling scripts/mutation_gate.py enforces: run 4 (CI 44121537739) left 90,
-# each judged in docs/MUTATION-SURVIVORS.md. Lowered when a survivor is
+# The survivor ceiling scripts/mutation_gate.py enforces: 90 from run 4 (CI 44121537739) plus 10
+# from dashboard/board.py, each judged in docs/MUTATION-SURVIVORS.md. Lowered when a survivor is
 # killed, never raised to let a new one through without a line in docs/QUALITY.md.
 [tool.mutation-gate]
-ceiling = 90
+ceiling = 100

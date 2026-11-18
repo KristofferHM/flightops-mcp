@@ -280,7 +280,9 @@ jobs:
 
   # The board's accessibility claim, enforced. A browser is the price: contrast, focus order and
   # sideways overflow only exist once a page is laid out, so no static check can see them.
-  # Playwright and axe-core are pinned by scripts/package-lock.json, hashes included.
+  # Playwright and axe-core are pinned by scripts/package-lock.json, hashes included. No
+  # --with-deps: its apt step took 5 min 18 s of a 6 min 47 s job (run 44395175602), and the
+  # runner image already has what the headless shell needs. If that changes, launch fails loudly.
   a11y:
     name: accessibility (axe-core, two viewports)
     runs-on: ubuntu-latest
@@ -300,7 +302,7 @@ jobs:
         working-directory: scripts
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          npx playwright install --with-deps chromium
+          npx playwright install --only-shell chromium
       - name: Walk the board's states
         run: |
           set -o pipefail
