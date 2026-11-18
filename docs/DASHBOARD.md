@@ -132,8 +132,14 @@ The page only displays them, and it does no date arithmetic.
 On 2026-11-18, axe-core 4.14.1 in Microsoft Edge ran against the real app, at 1440 x 900 and 390 x 844, over map,
 globe, airport selected, no data, traffic on, stale and recorded. It found 0 violations of any impact. No state
 scrolled sideways at 390 px, and the badge did not touch the legend or, on a phone, the map. The lowest text contrast
-axe measured was 6.69:1, `--muted` on `--amber-tint`. These checks are not part of `pytest` or CI. The colour
-floors are: `tests/test_dashboard.py` holds markers at 6:1 and text at 4.5:1 on every surface.
+axe measured was 6.69:1, `--muted` on `--amber-tint`. The colour floors are: `tests/test_dashboard.py` holds
+markers at 6:1 and text at 4.5:1 on every surface.
+
+The CI job `a11y` now enforces this. `node scripts/a11y.mjs` (setup in its header) starts the real app over
+synthetic tool answers, signs in, and walks map, globe, airport selected and no data yet at both sizes, plus the
+sign-in page. It fails on a `serious` or `critical` axe-core violation, on sideways scroll or an element wider than
+the viewport at 390 px, on a page error, and on any request that leaves the machine. axe-core and Playwright are
+pinned in `scripts/package-lock.json`. The traffic, stale and recorded states above are not part of the walk.
 
 ## Exposure
 

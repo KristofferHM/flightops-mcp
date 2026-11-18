@@ -1,0 +1,9 @@
+{
+  "name": "flightops-a11y-gate",
+  "private": true,
+  "description": "Pinned tools for scripts/a11y.mjs. Nothing here ships.",
+  "devDependencies": {
+    "axe-core": "4.14.1",
+    "playwright": "1.65.1"
+  }
+}

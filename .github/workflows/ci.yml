@@ -278,6 +278,40 @@ jobs:
             mutmut.out
           if-no-files-found: warn
 
+  # The board's accessibility claim, enforced. A browser is the price: contrast, focus order and
+  # sideways overflow only exist once a page is laid out, so no static check can see them.
+  # Playwright and axe-core are pinned by scripts/package-lock.json, hashes included.
+  a11y:
+    name: accessibility (axe-core, two viewports)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - name: Install
+        run: uv sync --frozen
+      - name: Install the pinned tools and their browser
+        working-directory: scripts
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Walk the board's states
+        run: |
+          set -o pipefail
+          node scripts/a11y.mjs | tee a11y.out
+          {
+            echo '### Accessibility'
+            echo '```'
+            cat a11y.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Phase 4b, gate 4. Secrets in the tree and in every commit on every ref, then known
   # vulnerabilities in the locked dependencies. A finding fails the job. The only allowlist is
   # .gitleaksignore, which names each verified false positive and why.
