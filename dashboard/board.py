@@ -8,20 +8,29 @@ The rules are about honesty, so they live where a test can hold them:
 * Zero movements is "not available yet": OpenSky publishes flights late, so an empty
   list says nothing about whether anything moved.
 * The mode banner is computed from the payloads, never from a setting.
+* The last-update badge is computed from payload timestamps, never from the page's clock.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Final
+
+from flightops_mcp.opensky import STATES_STALE_AFTER_S
+from flightops_mcp.server import METAR_STALE_AFTER_S
 
 FLIGHT_CATEGORIES: Final = frozenset({"VFR", "MVFR", "IFR", "LIFR"})
 NONE_HEARD: Final = "none heard, coverage not proven"
 MOVEMENTS_NOT_AVAILABLE: Final = "not available yet today"
+NO_DATA_YET: Final = "no data yet"
+SNAPSHOT_TIME_UNKNOWN: Final = "snapshot time unknown"
 # An aircraft last heard this long ago is drawn at the faintest level. Positions are
 # only ever faded: moving one between polls would invent where it is.
 FADE_AFTER_S: Final = 120.0
 MIN_FADE: Final = 0.2
+# The page echoes a snapshot time back to /api/board. The year 2100 bounds what it may
+# send, so a corrupt upstream time cannot overflow the date formatting.
+MAX_SNAPSHOT_EPOCH: Final = 4_102_444_800
 
 Payload = dict[str, Any]
 
@@ -56,6 +65,7 @@ def weather_view(payload: Payload) -> Payload:
             "state": "unknown",
             "category": None,
             "age_s": None,
+            "answered_at": _answered_at(payload),
             "summary": f"Unknown: weather unavailable ({code})",
             "raw": None,
             "unknowns": [str(_error(payload).get("message", "Weather could not be read."))],
@@ -82,6 +92,7 @@ def weather_view(payload: Payload) -> Payload:
         "state": "reported" if reported else "unknown",
         "category": known if reported else None,
         "age_s": age,
+        "answered_at": _answered_at(payload),
         "summary": summary,
         "raw": (newest or {}).get("raw_text"),
         "unknowns": list(payload.get("unknowns") or []),
@@ -160,6 +171,12 @@ def traffic_view(payload: Payload) -> Payload:
     }
 
 
+def _snapshot_epoch(payload: Payload) -> int:
+    """The snapshot's own time, or 0 when it has none the board can use."""
+    epoch = payload.get("snapshot_time_epoch")
+    return epoch if isinstance(epoch, int) and 0 < epoch <= MAX_SNAPSHOT_EPOCH else 0
+
+
 def airspace_view(payload: Payload) -> Payload:
     """The wide traffic layer, flattened for drawing."""
     if not payload.get("ok"):
@@ -168,6 +185,7 @@ def airspace_view(payload: Payload) -> Payload:
             "state": "unknown",
             "summary": f"Unknown: traffic unavailable ({error.get('code', 'unknown')})",
             "hint": error.get("hint"),
+            "snapshot_epoch": 0,
             "aircraft": [],
             "unknowns": [str(error.get("message", "Traffic could not be read."))],
         }
@@ -191,6 +209,7 @@ def airspace_view(payload: Payload) -> Payload:
         "credentials": payload.get("credentials"),
         "freshness": payload.get("freshness"),
         "truncated": bool(payload.get("truncated")),
+        "snapshot_epoch": _snapshot_epoch(payload),
         "aircraft": aircraft,
         "unknowns": list(payload.get("unknowns") or []),
     }
@@ -262,3 +281,76 @@ def banner(weather: list[Payload], recorded_at: str | None) -> Payload:
     if dated:
         return {"mode": "STALE", "label": f"STALE: no current METAR among {total} airports"}
     return {"mode": "NO DATA", "label": "NO DATA"}
+
+
+def _ago(age_s: float) -> str:
+    return "under 1 min" if age_s < 60 else age_text(age_s)
+
+
+def _utc_text(moment: datetime) -> str:
+    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _recorded_text(recorded_at: str) -> str:
+    """The recording's own time. One that cannot be read is shown as written."""
+    try:
+        moment = datetime.fromisoformat(recorded_at)
+    except ValueError:
+        return recorded_at or "time unknown"
+    return _utc_text(moment) if moment.tzinfo else recorded_at
+
+
+def _line(source: str, label: str, state: str, text: str) -> Payload:
+    return {"source": source, "label": label, "state": state, "text": text}
+
+
+def _age_line(source: str, label: str, age_s: float, limit_s: int) -> Payload:
+    # The limits are the tools' own, so the badge and `current` cannot disagree.
+    if age_s < -limit_s:
+        return _line(source, label, "stale", "stale: dated in the future")
+    if age_s > limit_s:
+        return _line(source, label, "stale", f"stale: last update {_ago(age_s)} ago")
+    return _line(source, label, "live", f"Last update {_ago(age_s)} ago")
+
+
+def _weather_line(weather: list[Payload]) -> Payload:
+    ages = [view["age_s"] for view in weather if view["age_s"] is not None]
+    if not ages:
+        return _line("weather", "Weather", "no_data", NO_DATA_YET)
+    # The freshest report wins, but one dated far ahead of the clock is not fresh.
+    newest = min(ages, key=lambda age: (age < -METAR_STALE_AFTER_S, max(age, 0)))
+    return _age_line("weather", "Weather", newest, METAR_STALE_AFTER_S)
+
+
+def _traffic_line(snapshot: int, now: float | None, recorded: bool) -> Payload:
+    if snapshot and recorded:
+        when = _utc_text(datetime.fromtimestamp(snapshot, UTC))
+        return _line("traffic", "Traffic", "recorded", f"snapshot {when}")
+    if not snapshot or now is None:
+        return _line("traffic", "Traffic", "unknown", SNAPSHOT_TIME_UNKNOWN)
+    return _age_line("traffic", "Traffic", round(now - snapshot), STATES_STALE_AFTER_S)
+
+
+def last_update(
+    weather: list[Payload],
+    status: Payload,
+    recorded_at: str | None,
+    traffic_snapshot: int | None = None,
+) -> Payload:
+    """The map's badge: how old the data on screen is, one line per source.
+
+    Weather and traffic age separately, so neither number can stand in for the other.
+    `traffic_snapshot` is None while no traffic layer is drawn. A recording shows when it
+    was made, because an age measured during playback would describe the playback.
+    """
+    recorded = recorded_at is not None
+    if recorded_at is not None:
+        lines = [_line("recording", "Recorded", "recorded", _recorded_text(recorded_at))]
+    else:
+        lines = [_weather_line(weather)]
+    if traffic_snapshot is not None:
+        answers = [view["answered_at"] for view in weather if view["answered_at"] is not None]
+        now = max(answers, default=_answered_at(status))
+        lines.append(_traffic_line(traffic_snapshot, now, recorded))
+    stale = any(line["state"] == "stale" for line in lines)
+    return {"state": "stale" if stale else lines[0]["state"], "lines": lines}

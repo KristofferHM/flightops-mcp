@@ -30,9 +30,14 @@
         <label class="pick">Region <select id="region"></select></label>
         <span id="traffic-note" class="note" role="status"></span>
       </div>
-      <div class="canvas-wrap">
-        <canvas id="map" role="img" aria-label="Map of the listed airports. The airport list holds the same information as text."></canvas>
-        <div id="tip" class="tip" hidden></div>
+      <div class="stage">
+        <div id="last-update" class="last-update" role="group" aria-label="Age of the data shown" data-state="no_data">
+          <p data-state="no_data"><span class="source">Weather</span> <span>no data yet</span></p>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="map" role="img" aria-label="Map of the listed airports. The airport list holds the same information as text."></canvas>
+          <div id="tip" class="tip" hidden></div>
+        </div>
       </div>
       <div class="legend">
         <span class="key"><i class="mark vfr"></i>VFR</span>

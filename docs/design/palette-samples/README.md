@@ -2,7 +2,8 @@
 
 Four versions of the same screen, for choosing the board's visual identity from pictures. Open any HTML file
 directly. Each one is a single file with its data, coastline and libraries inside, and makes no network requests.
-These are design samples: the buttons and controls do nothing, and the shipping board is unchanged.
+These are design samples: the buttons and controls do nothing. Palette B was chosen, and `docs/DASHBOARD.md` records
+how the shipping board differs from it.
 
 ## The four palettes
 

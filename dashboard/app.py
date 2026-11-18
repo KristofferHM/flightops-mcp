@@ -9,13 +9,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Final
+from typing import Annotated, Any, Final
 from urllib.parse import parse_qs, urlsplit
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from .board import MAX_SNAPSHOT_EPOCH
 from .gate import COOKIE_NAME, LOCAL_HOSTS, SESSION_TTL_S, Gate, host_name
 from .service import BoardService, UnknownBoardItem
 
@@ -152,8 +153,10 @@ def create_app(
         return FileResponse(STATIC / "index.html", media_type="text/html")
 
     @app.get("/api/board")
-    async def api_board() -> dict[str, Any]:
-        return await service.snapshot()
+    async def api_board(
+        traffic_snapshot: Annotated[int | None, Query(ge=0, le=MAX_SNAPSHOT_EPOCH)] = None,
+    ) -> dict[str, Any]:
+        return await service.snapshot(traffic_snapshot)
 
     @app.get("/api/airport/{icao}")
     async def api_airport(icao: str) -> dict[str, Any]:
