@@ -213,12 +213,12 @@ jobs:
           path: eval-runs/
           if-no-files-found: error
 
-  # Phase 4b, gate 3 (docs/QUALITY.md). Mutants of auth/, the credit ledger and the agent's
-  # approval types, each run against the tests that exercise it. Linux only: mutmut forks per
-  # mutant. The budget is the `timeout` below; a run it cuts short leaves mutants unchecked,
+  # Phase 4b, gate 3 (docs/QUALITY.md). Mutants of auth/, the credit ledger, the agent's approval
+  # types and the board's display rules, each run against the tests that exercise it. Linux only:
+  # mutmut forks per mutant. The budget is the `timeout` below; a run it cuts short leaves mutants unchecked,
   # and the gate script fails on that rather than reporting a flattering lower bound.
   mutation:
-    name: mutation (auth, credit ledger, approval)
+    name: mutation (auth, credit ledger, approval, board)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -253,11 +253,16 @@ jobs:
 
       - name: A ceiling one lower fails the gate
         # The step above cannot fail if the gate cannot. Same results, ceiling minus one.
+        # Deliberately not a sample: every mutant of the real run is judged again, so the count
+        # compared is the one that just passed, sitting exactly on the boundary. A re-run over one
+        # module would add mutation time and prove less. Any sample would need at least one
+        # survivor, or `survivors > ceiling - 1` could never be true and a broken gate would pass.
+        # No --report: the verdict needs no diffs, and reading them was this step's whole cost.
         run: |
           set -euo pipefail
           ceiling="$(sed -n 's/^ceiling = \([0-9]*\)$/\1/p' pyproject.toml)"
           sed "s/^ceiling = .*/ceiling = $((ceiling - 1))/" pyproject.toml > lower.toml
-          if uv run python scripts/mutation_gate.py --pyproject lower.toml --report lower.md > lower.out; then
+          if uv run python scripts/mutation_gate.py --pyproject lower.toml > lower.out; then
             echo "::error::the gate passed with the ceiling at $((ceiling - 1))"
             exit 1
           fi

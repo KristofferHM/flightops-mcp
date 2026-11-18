@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.mutation_gate import ceiling_from, judge, parse_results, render
+import pytest
+
+from scripts import mutation_gate
+from scripts.mutation_gate import ceiling_from, judge, main, parse_results, render
 
 RESULTS = """
     flightops_mcp.credits.x_CreditLedger__charge__mutmut_1: killed
@@ -60,3 +63,49 @@ def test_the_ceiling_is_read_from_pyproject(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[tool.mutation-gate]\nceiling = 7\n", encoding="utf-8")
     assert ceiling_from(pyproject) == 7
+
+
+@pytest.fixture
+def mutmut_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    calls: list[tuple[str, ...]] = []
+
+    def fake(*args: str) -> str:
+        calls.append(args)
+        return RESULTS if args[0] == "results" else f"diff of {args[1]}\n"
+
+    monkeypatch.setattr(mutation_gate, "_mutmut", fake)
+    return calls
+
+
+def _pyproject(tmp_path: Path, ceiling: int) -> str:
+    path = tmp_path / "ceiling.toml"
+    path.write_text(f"[tool.mutation-gate]\nceiling = {ceiling}\n", encoding="utf-8")
+    return str(path)
+
+
+def test_the_self_test_reaches_a_verdict_without_reading_a_single_diff(
+    tmp_path: Path, mutmut_calls: list[tuple[str, ...]], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CI self-test runs this form, and greps for the line asserted here."""
+    assert main(["--pyproject", _pyproject(tmp_path, 2)]) == 1
+    assert "FAIL: 3 mutants survived; the ceiling is 2\n" in capsys.readouterr().out
+    assert mutmut_calls == [("results", "--all", "true")]
+
+
+def test_the_gate_passes_at_its_ceiling_without_a_report(
+    tmp_path: Path, mutmut_calls: list[tuple[str, ...]]
+) -> None:
+    assert main(["--pyproject", _pyproject(tmp_path, 3)]) == 0
+
+
+def test_a_report_holds_the_diff_of_every_survivor(
+    tmp_path: Path, mutmut_calls: list[tuple[str, ...]]
+) -> None:
+    report = tmp_path / "report.md"
+
+    assert main(["--pyproject", _pyproject(tmp_path, 3), "--report", str(report)]) == 0
+
+    text = report.read_text(encoding="utf-8")
+    for name in judge(parse_results(RESULTS), ceiling=3).survivors:
+        assert f"diff of {name}" in text
+    assert len(mutmut_calls) == 4
