@@ -5,6 +5,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Tool selection no longer demands an exact set of calls.** The required tools must be called, in their listed
+  order, and extra calls pass. A new optional `expect.forbidden_tools` names calls that must not happen. In a model
+  run on 2026-11-18 (14 of 61 passed), 15 of the 47 failures failed only this check, each having called the required
+  tool. No scenario file changed, so the offline baseline stands.
+
 ## [1.2.0] - 2026-11-18
 
 ### Changed

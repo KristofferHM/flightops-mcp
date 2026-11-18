@@ -73,7 +73,7 @@ _TOP_KEYS: Final = frozenset(
     }
 )
 _EXPECT_KEYS: Final = frozenset(
-    {"tools", "arguments", "answer", "absent_evidence", "refusal", "writes"}
+    {"tools", "forbidden_tools", "arguments", "answer", "absent_evidence", "refusal", "writes"}
 )
 
 
@@ -83,7 +83,7 @@ class Refusal:
 
     kind: str
     # The call the server refuses, and the code it refuses with. Both None for a
-    # request that is out of scope: there, the right number of calls is zero.
+    # request that is out of scope: there, the agent is the one that refuses.
     tool: str | None
     code: str | None
 
@@ -92,8 +92,10 @@ class Refusal:
 class Expectation:
     # Tools that must be called, in this order. Other calls may come between.
     required: tuple[str, ...]
-    # Tools that may also be called. Anything else is a wrong choice.
+    # Tools a right answer may also use. Documentation: the scorer allows any other call.
     allowed: frozenset[str]
+    # Tools that must not be called, whatever else the run did.
+    forbidden: frozenset[str]
     # Per tool, arguments that some call of it must carry.
     arguments: Mapping[str, Mapping[str, Any]]
     # The classes of answer that are acceptable (`answers.py`).
@@ -204,6 +206,11 @@ def _expectation(raw: Any) -> Expectation:
     _only(tools, frozenset({"required", "allowed"}), "expect.tools")
     required = _tool_names(tools.get("required", []), "expect.tools.required")
     allowed = _tool_names(tools.get("allowed", []), "expect.tools.allowed")
+    forbidden = _tool_names(raw.get("forbidden_tools", []), "expect.forbidden_tools")
+    for label, names in (("required", required), ("allowed", allowed)):
+        both = sorted(set(names) & set(forbidden))
+        if both:
+            raise ScenarioInvalid(f"{', '.join(both)} is both {label} and forbidden")
 
     arguments = raw.get("arguments") or {}
     if not isinstance(arguments, dict) or not all(isinstance(v, dict) for v in arguments.values()):
@@ -229,6 +236,7 @@ def _expectation(raw: Any) -> Expectation:
     return Expectation(
         required=required,
         allowed=frozenset(allowed),
+        forbidden=frozenset(forbidden),
         arguments=arguments,
         answer=tuple(classes),
         absent_evidence=absent,

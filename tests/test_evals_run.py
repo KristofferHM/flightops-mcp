@@ -509,4 +509,5 @@ async def test_a_model_that_acts_on_an_out_of_scope_request_fails() -> None:
         Turn(text="There are 6 passengers booked on SK1429."),
     )
 
-    assert set(failed(result)) == {"tool_selection", "refusal_correctness", "outcome"}
+    # The read is not a wrong choice. Answering the request instead of refusing it is.
+    assert set(failed(result)) == {"refusal_correctness", "outcome"}

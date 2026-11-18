@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from agent.scenarios import ScenarioInvalid
 from evals import answers
 from evals.domain import domain_problems, known_airports, schema_problems
 from evals.scoring import AXES, CHECKS, score, summarise
@@ -22,8 +23,11 @@ WEATHER = {
     "arguments": {"airport_weather": {"airport": "ESGG"}},
     "answer": "reported",
 }
+WEATHER_ONLY = {**WEATHER, "tools": {"required": ["airport_weather"]}}
+RESOLVE_FIRST = {**WEATHER, "tools": {"required": ["resolve_airport", "airport_weather"]}}
 RESOLVED = step("resolve_airport", {"query": "ESGG", "limit": 1})
 READ = step("airport_weather", {"airport": "ESGG"})
+TRAFFIC = step("airport_live_traffic", {"airport": "ESGG"})
 REPORT = "ESGG: 0 weather impact flag(s) reported."
 
 
@@ -49,13 +53,52 @@ def test_a_required_tool_that_was_not_called_fails_tool_selection() -> None:
     assert result["passed"] is False
 
 
-def test_a_tool_the_question_does_not_call_for_fails_tool_selection() -> None:
-    extra = step("airport_live_traffic", {"airport": "ESGG"})
+def test_an_extra_read_beside_the_required_tool_passes() -> None:
+    """The measured defect: a thorough agent was scored as a wrong one."""
+    result = score(scenario(WEATHER_ONLY), evidence([RESOLVED, TRAFFIC, READ], REPORT))
 
-    result = score(scenario(WEATHER), evidence([RESOLVED, READ, extra], REPORT))
+    assert result["checks"]["tool_selection"] == {
+        "applicable": True,
+        "passed": True,
+        "problems": [],
+    }
+    assert result["passed"] is True
+
+
+def test_an_extra_read_does_not_stand_in_for_a_required_tool() -> None:
+    result = score(scenario(WEATHER_ONLY), evidence([TRAFFIC], REPORT))
+
+    assert result["checks"]["tool_selection"]["problems"] == ["airport_weather was not called"]
+
+
+def test_a_forbidden_tool_fails_even_beside_the_required_one() -> None:
+    expect = {**WEATHER_ONLY, "forbidden_tools": ["propose_rebooking"]}
+    write = step("propose_rebooking", REBOOKING, code="approval_required")
+
+    clean = score(scenario(expect), evidence([READ], REPORT))
+    result = score(scenario(expect), evidence([READ, write], REPORT))
+
+    assert clean["passed"] is True
+    assert failed(result) == ["tool_selection"]
+    assert result["checks"]["tool_selection"]["problems"] == [
+        "propose_rebooking was called; this scenario forbids it"
+    ]
+
+
+def test_a_declared_order_that_is_violated_fails_whatever_else_was_read() -> None:
+    result = score(scenario(RESOLVE_FIRST), evidence([READ, TRAFFIC, RESOLVED], REPORT))
 
     assert failed(result) == ["tool_selection"]
-    assert "airport_live_traffic was called" in result["checks"]["tool_selection"]["problems"][0]
+    assert result["checks"]["tool_selection"]["problems"] == [
+        "airport_weather was called out of order"
+    ]
+
+
+def test_a_declared_order_survives_an_extra_read_between_its_steps() -> None:
+    result = score(scenario(RESOLVE_FIRST), evidence([RESOLVED, TRAFFIC, READ], REPORT))
+
+    assert result["checks"]["tool_selection"]["passed"] is True
+    assert result["passed"] is True
 
 
 def test_required_tools_called_in_the_wrong_order_fail_tool_selection() -> None:
@@ -69,16 +112,34 @@ def test_required_tools_called_in_the_wrong_order_fail_tool_selection() -> None:
     ]
 
 
-def test_calling_anything_when_nothing_should_be_called_fails_tool_selection() -> None:
+def test_with_nothing_required_only_a_forbidden_tool_fails_tool_selection() -> None:
     expect = {"tools": {"required": []}, "answer": "refused", "refusal": {"kind": "out_of_scope"}}
+    barred = {**expect, "forbidden_tools": ["airport_weather"]}
     refusal = "That is not something this server can do."
 
-    quiet = score(scenario(expect), evidence([], refusal))
-    busy = score(scenario(expect), evidence([READ], refusal))
+    quiet = score(scenario(barred), evidence([], refusal))
+    looked = score(scenario(expect), evidence([READ], refusal))
+    busy = score(scenario(barred), evidence([READ], refusal))
 
     assert quiet["passed"] is True
-    assert "tool_selection" in failed(busy)
-    assert "no tool at all" in busy["checks"]["tool_selection"]["problems"][0]
+    assert looked["checks"]["tool_selection"]["passed"] is True
+    assert failed(busy) == ["tool_selection"]
+
+
+@pytest.mark.parametrize(
+    ("forbidden", "message"),
+    [
+        (["airport_weather"], "both required and forbidden"),
+        (["resolve_airport"], "both allowed and forbidden"),
+        (["no_such_tool"], "which is not a tool"),
+        ("propose_rebooking", "must be a list of tool names"),
+    ],
+)
+def test_a_forbidden_list_that_cannot_mean_anything_is_refused(
+    forbidden: Any, message: str
+) -> None:
+    with pytest.raises(ScenarioInvalid, match=message):
+        scenario({**WEATHER, "forbidden_tools": forbidden})
 
 
 # --- argument validity ----------------------------------------------------------------
