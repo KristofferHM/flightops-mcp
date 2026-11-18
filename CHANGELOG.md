@@ -5,8 +5,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Phase 5 of [ROADMAP.md](ROADMAP.md): product hardening and docs, on `feat/phase-5-hardening`. Not tagged:
-`v1.0.0` is the owner's decision.
+## [1.0.0] - 2026-11-18
+
+Phase 5: product hardening and docs. Everything below was measured on a 2-core laptop, and what each
+run does **not** show is stated in `docs/`.
+
 
 ### Added
 - **Result cache under the protocol's `ttlMs`/`cacheScope`** (`cache.py`, ADR 0004). One hint per tool, required
