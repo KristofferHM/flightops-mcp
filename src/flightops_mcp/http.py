@@ -320,7 +320,7 @@ def _safe_json(response: httpx.Response) -> object | None:
 
 async def authorized_get(
     http: UpstreamHttp,
-    tokens: ClientCredentialsTokenManager,
+    tokens: ClientCredentialsTokenManager | None,
     path: str,
     params: dict[str, object],
     *,
@@ -329,7 +329,11 @@ async def authorized_get(
     sleep: Callable[[float], Awaitable[None]],
     empty_status: frozenset[int] = frozenset(),
 ) -> HttpResponse | None:
-    """GET a bearer-authenticated endpoint under the one policy every upstream shares.
+    """GET an upstream endpoint under the one policy every upstream shares.
+
+    `tokens=None` is an anonymous request: no `Authorization` header, and a `401`
+    is final because there is no token to replace. The rest of the policy is the
+    same, which is why anonymous access is not a second code path.
 
     * A `401` drops the cached token and tries once more with a fresh one. A second
       `401` is `upstream_auth_failed`: the credentials, not the token, are wrong.
@@ -345,12 +349,13 @@ async def authorized_get(
     """
     log = get_logger(__name__).bind(upstream=upstream)
     for auth_attempt in range(2):
-        token = await tokens.token()
-        headers = {"Authorization": f"Bearer {token}"}
+        headers: dict[str, str] = {}
+        if tokens is not None:
+            headers["Authorization"] = f"Bearer {await tokens.token()}"
         response = await http.request_json("GET", path, params=params, headers=headers)
 
         if response.status_code == 401:
-            if auth_attempt == 0:
+            if tokens is not None and auth_attempt == 0:
                 log.info("token_rejected_retrying", path=path)
                 tokens.invalidate()
                 continue

@@ -167,6 +167,25 @@ def airport_traffic(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Obse
     )
 
 
+def airspace_view(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Count the aircraft heard across one of the fixed regions."""
+    region = params["region"]
+    (snapshot,) = yield [("airspace_snapshot", {"region": region})]
+    if not snapshot.ok:
+        return (
+            f"Airspace over {region} is unavailable ({snapshot.code}). "
+            "What is flying there is unknown."
+        )
+    unknowns = snapshot.payload.get("unknowns") or []
+    if unknowns:
+        return (
+            f"Traffic over {region} is unknown in part: {len(unknowns)} gap(s) in the data. "
+            "That is not evidence that the airspace is empty."
+        )
+    counts = snapshot.payload.get("counts") or {}
+    return f"{region}: {counts.get('returned')} aircraft heard."
+
+
 def airport_movements(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
     """Resolve an airport and count its estimated arrivals and departures."""
     icao, miss = yield from _resolve(params["airport"])
@@ -307,6 +326,7 @@ POLICIES: Final[dict[str, Policy]] = {
     "airport_brief": airport_brief,
     "airport_lookup": airport_lookup,
     "airport_traffic": airport_traffic,
+    "airspace_view": airspace_view,
     "airport_movements": airport_movements,
     "airport_triage": airport_triage,
     "schiphol_schedule": schiphol_schedule,

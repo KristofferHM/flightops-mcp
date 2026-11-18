@@ -125,6 +125,19 @@ def budget_exhausted(spent: int, budget: int) -> ToolFailure:
     )
 
 
+def daily_budget_exhausted(spent: int, budget: int) -> ToolFailure:
+    return ToolFailure(
+        code="local_budget_exhausted",
+        message=(
+            f"The daily credit guard stopped this call ({spent}/{budget} credits used in the "
+            "last 24 hours by the dashboard and airspace snapshots)."
+        ),
+        hint="Wait for earlier spend to leave the 24-hour window, or raise "
+        "FLIGHTOPS_DASHBOARD_DAILY_CREDIT_BUDGET deliberately.",
+        details={"credits_spent_24h": spent, "budget": budget},
+    )
+
+
 def upstream_circuit_open(upstream: str, retry_after_s: float) -> ToolFailure:
     """The breaker is open: fail fast, and say how long the window has left."""
     return ToolFailure(

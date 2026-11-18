@@ -67,7 +67,17 @@ from .errors import (
     not_found,
     reference_data_missing,
 )
-from .opensky import MAX_HISTORY_S, STATES_STALE_AFTER_S, TIME_RESOLUTION_S, BBox
+from .opensky import (
+    AIRSPACE_REGIONS,
+    ANONYMOUS_LIMITATION,
+    MAX_HISTORY_S,
+    STATES_STALE_AFTER_S,
+    TIME_RESOLUTION_S,
+    BBox,
+    StatesSnapshot,
+    credentials_mode,
+    daily_metered,
+)
 from .ops import TIGHT_CONNECTION_MINUTES, DownstreamTokenRejected, normalise_flight, summarise
 from .otel import configure_tracing, tracer, tracing_kind
 from .rebooking import Proposal, approved_digest, build_proposal
@@ -86,6 +96,24 @@ METAR_STALE_AFTER_S: Final = 90 * 60
 # The parts of a triage that can observe something, in the order they are reported.
 EVIDENCE_LEGS: Final = ("weather", "traffic", "movements")
 
+# What `airspace_snapshot` returns per aircraft, in order. Columns, because a repeated
+# key per row is most of the size of a wide answer.
+AIRSPACE_COLUMNS: Final = (
+    "icao24",
+    "callsign",
+    "latitude",
+    "longitude",
+    "baro_altitude_m",
+    "on_ground",
+    "velocity_ms",
+    "true_track_deg",
+    "last_contact",
+)
+AIRSPACE_MAX_AIRCRAFT: Final = 10_000
+OPENSKY_LICENCE: Final = (
+    "Free for personal and non-profit use; commercial use needs OpenSky's consent"
+)
+
 INSTRUCTIONS = """\
 Use this server for questions about the operational state of an airport and the \
 traffic around it.
@@ -94,9 +122,9 @@ Rules that the tools will enforce:
 
 1. Resolve identifiers first. `resolve_airport` is offline and free; it returns \
 ICAO (ident), IATA, name and coordinates. Never guess a coordinate.
-2. `airport_live_traffic`, `airport_movements` and `disruption_triage` spend \
-OpenSky API credits. Prefer one `disruption_triage` call over three separate \
-ones.
+2. `airport_live_traffic`, `airport_movements`, `airspace_snapshot` and \
+`disruption_triage` spend OpenSky API credits. Prefer one `disruption_triage` call \
+over three separate ones.
 3. `airport_weather` needs no credentials and no credits.
 4. Absence of data is not evidence. Each payload lists `unknowns`; if it is \
 non-empty, say so instead of concluding that operations are normal.
@@ -256,6 +284,42 @@ def _age(seconds: float) -> str:
     return f"{minutes} min" if minutes < 120 else f"{minutes // 60} h {minutes % 60} min"
 
 
+def _snapshot_unknowns(snapshot: StatesSnapshot, now: float, where: str) -> tuple[list[str], bool]:
+    """What a traffic snapshot cannot show, and whether it describes the present."""
+    unknowns: list[str] = []
+    if not snapshot.vectors:
+        unknowns.append(
+            f"No aircraft heard in {where}. That can mean quiet airspace, or a gap in "
+            "receiver coverage; it is not evidence that the airport is closed."
+        )
+    if snapshot.unreadable:
+        unknowns.append(
+            f"{snapshot.unreadable} of {snapshot.received} rows in OpenSky's answer were not "
+            "readable state vectors. The counts cover only the readable ones, so they are a "
+            "lower bound, not the number of aircraft."
+        )
+    current = False
+    if snapshot.time is None or snapshot.time <= 0:
+        if snapshot.vectors:
+            unknowns.append(
+                "OpenSky's answer carries no snapshot time, so how current these positions "
+                "are is unknown."
+            )
+    elif now - snapshot.time > STATES_STALE_AFTER_S:
+        unknowns.append(
+            f"The snapshot is {_age(now - snapshot.time)} old. These positions are not where "
+            "the aircraft are now."
+        )
+    elif snapshot.time - now > STATES_STALE_AFTER_S:
+        unknowns.append(
+            f"The snapshot is dated {_age(snapshot.time - now)} in the future, so how current "
+            "these positions are is unknown."
+        )
+    else:
+        current = True
+    return unknowns, current
+
+
 def _require_airport(runtime: Runtime, ident: str) -> dict[str, Any]:
     if not runtime.airports.exists:
         raise reference_data_missing(str(runtime.airports.path))
@@ -341,41 +405,14 @@ async def airport_live_traffic(
     airborne = sum(1 for vector in snapshot.vectors if not vector.on_ground)
     on_ground = len(snapshot.vectors) - airborne
 
-    unknowns: list[str] = []
-    if not snapshot.vectors:
-        unknowns.append(
-            "No aircraft heard in this box. That can mean quiet airspace, or a gap in "
-            "receiver coverage; it is not evidence that the airport is closed."
-        )
-    if snapshot.unreadable:
-        unknowns.append(
-            f"{snapshot.unreadable} of {snapshot.received} rows in OpenSky's answer were not "
-            "readable state vectors. The counts cover only the readable ones, so they are a "
-            "lower bound, not the number of aircraft."
-        )
-    now = runtime.data_clock()
-    snapshot_current = False
-    if snapshot.time is None or snapshot.time <= 0:
-        if snapshot.vectors:
-            unknowns.append(
-                "OpenSky's answer carries no snapshot time, so how current these positions "
-                "are is unknown."
-            )
-    elif now - snapshot.time > STATES_STALE_AFTER_S:
-        unknowns.append(
-            f"The snapshot is {_age(now - snapshot.time)} old. These positions are not where "
-            "the aircraft are now."
-        )
-    elif snapshot.time - now > STATES_STALE_AFTER_S:
-        unknowns.append(
-            f"The snapshot is dated {_age(snapshot.time - now)} in the future, so how current "
-            "these positions are is unknown."
-        )
-    else:
-        snapshot_current = True
+    unknowns, snapshot_current = _snapshot_unknowns(snapshot, runtime.data_clock(), "this box")
+    if runtime.opensky.credentials_mode == "anonymous":
+        unknowns.append(ANONYMOUS_LIMITATION)
     return {
         "ok": True,
         "as_of": _iso_now(runtime.data_clock),
+        "credentials": runtime.opensky.credentials_mode,
+        "freshness": runtime.opensky.freshness(),
         "snapshot_time_epoch": snapshot.time,
         "snapshot_current": snapshot_current,
         "airport": {"icao": record["ident"], "name": record["name"]},
@@ -396,9 +433,86 @@ async def airport_live_traffic(
         "source": {
             "name": "OpenSky Network",
             "endpoint": "/states/all",
-            "licence": (
-                "Free for personal and non-profit use; commercial use needs OpenSky's consent"
-            ),
+            "licence": OPENSKY_LICENCE,
+        },
+    }
+
+
+@tool
+async def airspace_snapshot(region: str, max_aircraft: int = 500) -> dict[str, Any]:
+    """Return aircraft across a whole region, as compact columns, for an overview.
+
+    Costs 4 OpenSky credits per uncached call, for every region: each one is in
+    OpenSky's top price tier. A repeat within 60 seconds is served from the cache and
+    costs nothing. Also counts against the daily credit guard. For one airport use
+    `airport_live_traffic`, which costs 1 credit.
+
+    Args:
+        region: "europe", "north_america" or "world". Free-form boxes are not accepted.
+        max_aircraft: Cap on returned aircraft (1-10000), most recently heard first.
+    """
+    runtime = get_runtime()
+    wanted = region.lower().strip()
+    bbox = AIRSPACE_REGIONS.get(wanted)
+    if bbox is None:
+        raise ToolFailure(
+            code="invalid_argument",
+            message=f"region must be one of: {', '.join(AIRSPACE_REGIONS)}",
+            hint="Regions are fixed. For the area around one airport use airport_live_traffic.",
+        )
+    with daily_metered():
+        snapshot = await runtime.opensky.states_in_bbox(
+            bbox, max_vectors=max(1, min(AIRSPACE_MAX_AIRCRAFT, max_aircraft))
+        )
+
+    placed = [v for v in snapshot.vectors if v.latitude is not None and v.longitude is not None]
+    unknowns, current = _snapshot_unknowns(snapshot, runtime.data_clock(), "this region")
+    if runtime.opensky.credentials_mode == "anonymous":
+        unknowns.append(ANONYMOUS_LIMITATION)
+    if snapshot.truncated:
+        unknowns.append(
+            f"Only the {len(snapshot.vectors)} most recently heard aircraft are included. "
+            "More were heard, so this is not the whole picture."
+        )
+    if len(placed) < len(snapshot.vectors):
+        unknowns.append(
+            f"{len(snapshot.vectors) - len(placed)} aircraft had no position and are not listed."
+        )
+    return {
+        "ok": True,
+        "as_of": _iso_now(runtime.data_clock),
+        "region": wanted,
+        "credentials": runtime.opensky.credentials_mode,
+        "freshness": runtime.opensky.freshness(),
+        "snapshot_time_epoch": snapshot.time,
+        "snapshot_current": current,
+        "columns": list(AIRSPACE_COLUMNS),
+        "rows": [
+            [
+                v.icao24,
+                v.callsign,
+                v.latitude,
+                v.longitude,
+                v.baro_altitude_m,
+                v.on_ground,
+                v.velocity_ms,
+                v.true_track_deg,
+                v.last_contact,
+            ]
+            for v in placed
+        ],
+        "counts": {"received": snapshot.received, "returned": len(placed)},
+        "truncated": snapshot.truncated,
+        "bookkeeping": {
+            "credits_spent": snapshot.credits_spent,
+            "credits_remaining_upstream": snapshot.credits_remaining,
+            "spent_with": runtime.opensky.credentials_mode,
+        },
+        "unknowns": unknowns,
+        "source": {
+            "name": "OpenSky Network",
+            "endpoint": "/states/all",
+            "licence": OPENSKY_LICENCE,
         },
     }
 
@@ -465,6 +579,7 @@ async def airport_movements(
     return {
         "ok": True,
         "as_of": _iso_now(runtime.data_clock),
+        "credentials": runtime.opensky.credentials_mode,
         "airport": {"icao": record["ident"], "name": record["name"]},
         "window": {"begin_epoch": begin, "end_epoch": end, "minutes": window},
         "movements": results,
@@ -585,6 +700,16 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
             continue
         unknowns.extend(payload.get("unknowns", []))
 
+    mode = runtime.opensky.credentials_mode
+    if (
+        mode == "anonymous"
+        and movements_payload.get("ok")
+        and not movement_counts_available(movements_payload)
+    ):
+        # Anonymous traffic can succeed where movements are not fetched, and a triage
+        # missing a whole leg must not read as a complete one.
+        degraded.append("movements:not_fetched_anonymously")
+
     flags = weather_payload.get("impact_flags", []) if weather_payload.get("ok") else []
     reasons.extend(flags)
 
@@ -621,6 +746,7 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
     return {
         "ok": True,
         "as_of": _iso_now(runtime.data_clock),
+        "credentials": mode,
         "airport": {"icao": icao, "name": record["name"], "municipality": record["municipality"]},
         "assessment": {
             "severity": severity,
@@ -741,10 +867,12 @@ async def upstream_status() -> dict[str, Any]:
     and "quiet airspace".
     """
     runtime = get_runtime()
+    cache_requests = runtime.cache.hits + runtime.cache.misses
     return {
         "ok": True,
         "as_of": _iso_now(runtime.clock),
         "credentials": {
+            "opensky": runtime.opensky.credentials_mode,
             "opensky_configured": runtime.opensky._tokens.has_credentials(),  # noqa: SLF001
             "schiphol_configured": runtime.schiphol.configured,
             "aviationweather_required": False,
@@ -752,6 +880,10 @@ async def upstream_status() -> dict[str, Any]:
         "budget": {
             "credits_spent_this_hour": runtime.opensky.credits_spent_this_hour,
             "credits_spent_this_process": runtime.opensky.credits_spent_total,
+            "credits_spent_by_mode": dict(runtime.opensky.credits_spent_by_mode),
+            "dashboard_credits_spent_24h": runtime.opensky.credits_spent_24h,
+            "dashboard_budget_per_24h": runtime.opensky.daily_budget,
+            "daily_ledger_survives_restart": False,
             "local_budget_per_hour": runtime.settings.credit_budget_per_hour,
             "upstream_remaining_last_seen": runtime.opensky.last_credits_remaining,
             "schiphol_requests_this_hour": runtime.schiphol.requests_this_hour,
@@ -760,6 +892,9 @@ async def upstream_status() -> dict[str, Any]:
         "cache": {
             "enabled": runtime.settings.cache_enabled,
             "entries": len(runtime.cache),
+            "hits": runtime.cache.hits,
+            "misses": runtime.cache.misses,
+            "hit_rate": (round(runtime.cache.hits / cache_requests, 3) if cache_requests else None),
         },
         "token": {
             "cached": runtime.opensky.token_cached,
@@ -1156,6 +1291,15 @@ def _severity(
     return "low"
 
 
+def log_opensky_mode(settings: Settings) -> None:
+    """Say at startup how this process reaches OpenSky. Names a mode, never a credential."""
+    _log.info(
+        "opensky_mode",
+        credentials=credentials_mode(settings),
+        partly_configured=bool(settings.opensky_client_id) != bool(settings.opensky_client_secret),
+    )
+
+
 def create_server(
     *,
     auth: AuthSettings | None = None,
@@ -1335,6 +1479,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         recovery_timeout_s=settings.breaker_recovery_timeout_s,
     )
     configure_tracing(settings)
+    log_opensky_mode(settings)
     _log.info(
         "observability_configured",
         tracing=tracing_kind() or "none",

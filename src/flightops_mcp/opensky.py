@@ -16,6 +16,9 @@ Deliberate design points, each one visible in the tests:
 * **1 hour of history is the whole world.** Authenticated state vectors only go
   back an hour at 5-second resolution, so time-window arguments are clamped and
   the clamping is reported back to the caller rather than silently applied.
+* **Three credential modes, one code path.** `client_credentials`, `anonymous`
+  (opt-in) and `none` differ only in the header sent and in what the payload admits
+  about precision. Adding credentials is a change to the environment and a restart.
 """
 
 from __future__ import annotations
@@ -23,15 +26,18 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final, Literal
 
 import httpx
 
 from .config import Settings
 from .credits import CreditLedger
-from .errors import ToolFailure, upstream_unavailable
+from .errors import ToolFailure, daily_budget_exhausted, missing_credentials, upstream_unavailable
 from .http import UpstreamHttp, authorized_get, credits_remaining_from_headers
 from .opensky_token import OpenSkyTokenManager
 from .telemetry import CREDITS_REMAINING, CREDITS_SPENT, UPSTREAM_CREDITS_SPENT, get_logger
@@ -43,6 +49,40 @@ TIME_RESOLUTION_S = 5  # authenticated state vectors: 5-second buckets
 # Live state vectors are seconds old. A snapshot five minutes old shows aircraft
 # that have since moved several miles, so it is not "around the airport now".
 STATES_STALE_AFTER_S = 300
+
+CredentialsMode = Literal["client_credentials", "anonymous", "none"]
+
+ANONYMOUS_TIME_RESOLUTION_S: Final = 10
+AUTHENTICATED_DAILY_CREDITS: Final = 4000
+ANONYMOUS_DAILY_CREDITS: Final = 400
+ANONYMOUS_LIMITATION: Final = (
+    "OpenSky anonymous access: positions have 10-second resolution, only the most recent "
+    "state vectors are served and any requested time is ignored. This is less precise than "
+    "an authenticated answer."
+)
+
+DAILY_WINDOW_S: Final = 86_400.0
+
+# Set while the dashboard or a wide snapshot is spending. A context variable, because
+# the board reaches the client through tools whose signatures an agent also sees.
+_daily_metered: ContextVar[bool] = ContextVar("opensky_daily_metered", default=False)
+
+
+@contextmanager
+def daily_metered() -> Iterator[None]:
+    """Charge OpenSky spend made inside this block to the daily ledger as well."""
+    token = _daily_metered.set(True)
+    try:
+        yield
+    finally:
+        _daily_metered.reset(token)
+
+
+def credentials_mode(settings: Settings) -> CredentialsMode:
+    """How this process reaches OpenSky. Real credentials win over the anonymous flag."""
+    if settings.opensky_client_id and settings.opensky_client_secret:
+        return "client_credentials"
+    return "anonymous" if settings.opensky_anonymous else "none"
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +240,15 @@ class Movement:
         }
 
 
+# Fixed, so a caller cannot ask for an antimeridian box or a surprise cost. Every one is
+# over 400 square degrees, which is OpenSky's top tier: 4 credits, however wide.
+AIRSPACE_REGIONS: Final[dict[str, BBox]] = {
+    "europe": BBox(lamin=34.0, lomin=-25.0, lamax=72.0, lomax=45.0),
+    "north_america": BBox(lamin=15.0, lomin=-170.0, lamax=72.0, lomax=-50.0),
+    "world": BBox(lamin=-90.0, lomin=-180.0, lamax=90.0, lomax=180.0),
+}
+
+
 class OpenSkyClient:
     def __init__(
         self,
@@ -221,7 +270,15 @@ class OpenSkyClient:
         )
         self._tokens = OpenSkyTokenManager(settings, transport=token_transport, clock=clock)
         self._ledger = CreditLedger(settings.credit_budget_per_hour, clock=clock)
+        # In memory, like the hourly ledger: it does NOT survive a restart, so a restart
+        # forgets the last 24 hours of spend. OpenSky's own count does not reset with it,
+        # which is why `upstream_remaining_last_seen` is reported next to this one.
+        self._daily = CreditLedger(
+            settings.dashboard_daily_credit_budget, clock=clock, window_s=DAILY_WINDOW_S
+        )
         self._log = get_logger(__name__)
+        self.credentials_mode: CredentialsMode = credentials_mode(settings)
+        self.credits_spent_by_mode: Counter[str] = Counter()
         self.last_credits_remaining: int | None = None
 
     async def aclose(self) -> None:
@@ -235,8 +292,20 @@ class OpenSkyClient:
         await self.aclose()
 
     # --- budget -------------------------------------------------------------
+    def _require_access(self) -> None:
+        """Refuse before anything is charged: a call never sent spends nothing."""
+        if self.credentials_mode == "none":
+            raise missing_credentials()
+
     def _charge(self, credits: int) -> None:
+        metered = _daily_metered.get()
+        # Both limits are checked before either records, so a refusal charges neither.
+        if metered and self._daily.spent() + credits > self._daily.budget:
+            raise daily_budget_exhausted(self._daily.spent(), self._daily.budget)
         self._ledger.charge(credits)
+        if metered:
+            self._daily.charge(credits)
+        self.credits_spent_by_mode[self.credentials_mode] += credits
         CREDITS_SPENT.inc(credits)
         UPSTREAM_CREDITS_SPENT.labels(upstream="opensky").inc(credits)
 
@@ -249,15 +318,37 @@ class OpenSkyClient:
         return self._ledger.total
 
     @property
+    def credits_spent_24h(self) -> int:
+        """Spend by the dashboard and airspace snapshots in the rolling 24 hours."""
+        return self._daily.spent()
+
+    @property
+    def daily_budget(self) -> int:
+        return self._daily.budget
+
+    @property
     def token_cached(self) -> bool:
         return self._tokens.cached()
 
+    def freshness(self) -> dict[str, Any]:
+        """What this credential mode can promise about a traffic answer."""
+        anonymous = self.credentials_mode == "anonymous"
+        return {
+            "credentials": self.credentials_mode,
+            "time_resolution_s": ANONYMOUS_TIME_RESOLUTION_S if anonymous else TIME_RESOLUTION_S,
+            "most_recent_only": anonymous,
+            "time_parameter_honoured": not anonymous,
+            "upstream_daily_credits": (
+                ANONYMOUS_DAILY_CREDITS if anonymous else AUTHENTICATED_DAILY_CREDITS
+            ),
+        }
+
     # --- requests -----------------------------------------------------------
     async def _authorized_get(self, path: str, params: dict[str, Any]) -> Any:
-        """GET an authenticated endpoint under the shared 401/429 policy (http.py)."""
+        """GET under the shared 401/429 policy (http.py), as this credential mode."""
         response = await authorized_get(
             self._http,
-            self._tokens,
+            self._tokens if self.credentials_mode == "client_credentials" else None,
             path,
             params,
             upstream="OpenSky",
@@ -275,6 +366,7 @@ class OpenSkyClient:
         return response.json_body
 
     async def states_in_bbox(self, bbox: BBox, *, max_vectors: int = 200) -> StatesSnapshot:
+        self._require_access()
         cost = bbox.credit_cost
         self._charge(cost)
         body = await self._authorized_get("/states/all", bbox.as_params())
@@ -297,6 +389,11 @@ class OpenSkyClient:
                 message="direction must be 'arrival' or 'departure'",
                 hint="Use 'arrival' for inbound and 'departure' for outbound flights.",
             )
+        # Anonymous mode does not call flights, on purpose. Measured 2026-11-18: OpenSky
+        # answered the last hour anonymously but debited 18 and 30 credits for one
+        # direction each, not the 4 charged here, out of 400 a day; older windows were 403.
+        if self.credentials_mode != "client_credentials":
+            raise missing_credentials()
         cost = 4  # live / < 24h window
         self._charge(cost)
         body = await self._authorized_get(

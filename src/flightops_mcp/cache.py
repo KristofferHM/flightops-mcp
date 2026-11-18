@@ -82,6 +82,9 @@ TOOL_CACHE_HINTS: Final[Mapping[str, CacheHint]] = {
     "airport_movements": CacheHint(ttl_ms=60_000, scope="public"),
     # Schiphol's schedule: published times, updated by the airport as they change.
     "schiphol_flights": CacheHint(ttl_ms=60_000, scope="public"),
+    # A wide box costs the top credit tier, so a board and an agent asking within the
+    # minute share one call. Aircraft move, but this is an overview, not a position fix.
+    "airspace_snapshot": CacheHint(ttl_ms=60_000, scope="public"),
     # Composed from three cached parts. Caching the composite as well would let its
     # severity outlive the evidence it was computed from.
     "disruption_triage": CacheHint(ttl_ms=0),
@@ -138,6 +141,8 @@ class ToolCache:
         self._clock = clock
         self._entries: OrderedDict[str, _Entry] = OrderedDict()
         self._inflight: dict[str, asyncio.Future[Any]] = {}
+        self.hits = 0
+        self.misses = 0
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -162,6 +167,7 @@ class ToolCache:
             if self._clock() < entry.expires_at:
                 self._entries.move_to_end(key)
                 CACHE_REQUESTS.labels(tool=tool, outcome="hit").inc()
+                self.hits += 1
                 return _as_hit(entry.value, hint)
             del self._entries[key]
             CACHE_ENTRIES.set(len(self._entries))
@@ -169,11 +175,13 @@ class ToolCache:
         pending = self._inflight.get(key)
         if pending is not None:
             CACHE_REQUESTS.labels(tool=tool, outcome="coalesced").inc()
+            self.hits += 1  # answered without an upstream call of its own
             # `shield`: a follower that is cancelled must not cancel the leader's call.
             result = await asyncio.shield(pending)
             return _as_hit(result, hint) if _keepable(result) else result
 
         CACHE_REQUESTS.labels(tool=tool, outcome="miss").inc()
+        self.misses += 1
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._inflight[key] = future
         try:
