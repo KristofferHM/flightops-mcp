@@ -39,10 +39,16 @@ strong axis must not hide a weak one.
 
 | Axis | Applies to | Passes when |
 |---|---|---|
-| **Tool selection** | every scenario | The required tools were called, in order, and nothing outside `required` and `allowed` was. For some questions the right number of calls is zero. |
+| **Tool selection** | every scenario | The required tools were called, in the order `required` lists them, and nothing in `forbidden_tools` was. Other calls are allowed. |
 | **Argument validity** | every scenario in which a call was expected or made | Every call satisfies the JSON schema the server published **and** the domain: an airport is an ICAO code in the reference data, a rebooking is dated within a day before and a week after the scenario's clock, a radius is in range. Then the expected arguments were actually sent. `airport_weather("Gothenburg")` is schema-valid and wrong. |
 | **Refusal correctness** | scenarios with `expect.refusal` | The server refused with the expected code, the refused call was not repeated, the operations API wrote nothing, and the answer says something was refused. Kinds: missing scope, missing credential, out-of-scope request, approval, business rule. |
 | **No hallucination** | scenarios with `expect.absent_evidence` | The answer says something is unknown or unavailable, states nothing about normality (or closure) that it has no evidence for, and claims no write that did not happen. |
+
+Tool selection treats `required` as a subset of what was called. Extra calls pass; only a missing required
+tool, a tool in `forbidden_tools` or a break in the declared order fails. It used to demand an exact match. A
+model run on 2026-11-18 scored 22.95 % (14 of 61), and 15 of its 47 failures failed on this check alone, each
+having called the required tool. The scripted policy passed by construction, so the check was penalising
+thoroughness and could not tell a good plan from the script.
 
 And one check every scenario has:
 
@@ -189,8 +195,9 @@ every score unchanged and still fail, on the break.
    with nothing (204, no aircraft, no movements). A passenger row carries operational fields only; a name is
    refused by the loader.
 4. Write `expect` from the question, before you look at what the system does: the tools a right answer needs
-   (`required`, in order), the ones it may also use (`allowed`), the arguments that must be sent, the
-   acceptable answer class, and `absent_evidence` or `refusal` if that is the point.
+   (`required`, in order), the ones it may also use (`allowed`, which documents intent and is not scored),
+   any it must not call (`forbidden_tools`), the arguments that must be sent, the acceptable answer class, and
+   `absent_evidence` or `refusal` if that is the point.
 5. Pick the `offline.policy` that plays the plan (`agent/offline.py`).
 6. Run `uv run python -m evals.run --offline`. It fails, naming the new scenario. If the scenario fails its
    own checks, that is a result: find out whether the scenario or the system is wrong before changing either.
