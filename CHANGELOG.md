@@ -5,6 +5,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The board uses the radar-scope identity.** Colours and typefaces are one commented token block in
+  `dashboard/static/board.css`, which the canvas also reads. The globe gains range rings around the selected airport
+  and a bearing ring, and selection becomes corner brackets with a label plate. Names and sentences are in the system
+  sans and machine facts in the system mono. Unknown is now a hollow dashed ring. Land moved from the sample's
+  `#0D1820` to `#0C181F`, because IFR measured 5.99:1 against it and the floor is 6:1.
+
+### Added
+- **A last-update badge on the map.** `dashboard/board.py` computes it from payload timestamps, with one line each
+  for weather and, when the layer is on, traffic. It reads `no data yet`, `Last update N min ago` or `stale: last
+  update N min ago`, using the tools' 90 minute and 5 minute limits, and a recording shows its own time instead of an
+  age. `/api/board` accepts `traffic_snapshot` so the server can age the layer the page is drawing, at no credit cost.
+
 ## [1.1.0] - 2026-11-18
 
 The dashboard: a visual board over the same tools, and the backend work it needed to exist.
