@@ -126,10 +126,21 @@ is being a correct OAuth 2.1 **resource server** while calling a downstream API 
 
 ### Acceptance criteria
 
-- [ ] One triage call produces one trace with ≥4 spans and correct parent/child ordering, asserted in a test
-- [ ] A forced upstream failure opens the breaker and fails fast (test measures elapsed time)
-- [ ] `/healthz` and `/readyz` distinguish "process alive" from "dependencies usable"
-- [ ] Dashboards: one Grafana JSON committed, not screenshotted
+- [x] One triage call produces one trace with ≥4 spans and correct parent/child ordering, asserted in a test
+      — `tests/test_otel.py::test_one_triage_call_is_one_trace_with_nested_spans`: asserts ≥4 spans, names
+      `tools/call disruption_triage`, `tool.disruption_triage` and `tool.airport_weather` separately, and checks the
+      exact `span_id` of each parent, so a regressed trace fails rather than merely looking shorter.
+- [x] A forced upstream failure opens the breaker and fails fast (test measures elapsed time)
+      — `tests/test_resilience.py::test_the_circuit_fails_fast_rather_than_sleeping` times the call;
+      `::test_a_dead_upstream_opens_the_circuit_and_the_next_call_never_connects` asserts the socket was never used.
+- [x] `/healthz` and `/readyz` distinguish "process alive" from "dependencies usable"
+      — `tests/test_health.py::test_healthz_is_liveness_only`, `::test_readyz_is_ready_when_the_reference_data_loads`,
+      `::test_readyz_fails_when_the_reference_database_is_missing`, `::test_an_empty_database_is_not_ready`.
+- [x] Dashboards: one Grafana JSON committed, not screenshotted
+      — `observability/grafana/dashboards/flightops-mcp.json`, served by the compose `grafana` service.
+
+These four were delivered with `v0.3.0` but left unticked here until 2026-11-18, which made this page read as though
+Phase 2 were incomplete. The tests above are the evidence; the boxes now say so.
 
 ---
 
@@ -347,7 +358,10 @@ Numbers and method in [docs/QUALITY.md](docs/QUALITY.md).
 
 ### `v1.0` Definition of Done
 
-- [ ] All five phases' acceptance criteria green in CI
+- [x] All five phases' acceptance criteria green in CI
+      — every phase's boxes are ticked above with their test or artefact, and the eleven-job matrix on
+      [run 44407871808](https://github.com/KristofferHM/flightops-mcp/actions/runs/44407871808) is green on
+      `feat/gates-tighten`, merged as `v1.4.0`
 - [x] Coverage ratchet enforced with `fail_under`, branch coverage, no new exclusions (run [44166077191](https://github.com/KristofferHM/flightops-mcp/actions/runs/44166077191); 89.18 % locally)
 - [x] Mutation ceiling met on `auth/` and the credit ledger, report committed (90 of ceiling 90, run [44166077191](https://github.com/KristofferHM/flightops-mcp/actions/runs/44166077191))
 - [x] `gitleaks` and `pip-audit` green in CI (run [44166077191](https://github.com/KristofferHM/flightops-mcp/actions/runs/44166077191))
