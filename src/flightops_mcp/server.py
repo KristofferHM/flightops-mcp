@@ -83,6 +83,9 @@ from .weather import fleet_impact_flags
 # observation is no longer "conditions now".
 METAR_STALE_AFTER_S: Final = 90 * 60
 
+# The parts of a triage that can observe something, in the order they are reported.
+EVIDENCE_LEGS: Final = ("weather", "traffic", "movements")
+
 INSTRUCTIONS = """\
 Use this server for questions about the operational state of an airport and the \
 traffic around it.
@@ -351,6 +354,7 @@ async def airport_live_traffic(
             "lower bound, not the number of aircraft."
         )
     now = runtime.data_clock()
+    snapshot_current = False
     if snapshot.time is None or snapshot.time <= 0:
         if snapshot.vectors:
             unknowns.append(
@@ -362,10 +366,18 @@ async def airport_live_traffic(
             f"The snapshot is {_age(now - snapshot.time)} old. These positions are not where "
             "the aircraft are now."
         )
+    elif snapshot.time - now > STATES_STALE_AFTER_S:
+        unknowns.append(
+            f"The snapshot is dated {_age(snapshot.time - now)} in the future, so how current "
+            "these positions are is unknown."
+        )
+    else:
+        snapshot_current = True
     return {
         "ok": True,
         "as_of": _iso_now(runtime.data_clock),
         "snapshot_time_epoch": snapshot.time,
+        "snapshot_current": snapshot_current,
         "airport": {"icao": record["ident"], "name": record["name"]},
         "search": {
             "radius_nm": radius,
@@ -494,6 +506,7 @@ async def airport_weather(airport: str) -> dict[str, Any]:
         )
     if not tafs:
         unknowns.append("No TAF returned for this station.")
+    age: float | None = None
     if metars:
         observed = [t for t in (_epoch(m.get("observation_time")) for m in metars) if t]
         if not observed:
@@ -508,6 +521,11 @@ async def airport_weather(airport: str) -> dict[str, Any]:
                     f"The latest METAR is {_age(age)} old. It is not current conditions, and "
                     "its impact flags describe the weather then, not now."
                 )
+            elif age < -METAR_STALE_AFTER_S:
+                unknowns.append(
+                    f"The latest METAR is dated {_age(-age)} in the future, so whether it "
+                    "describes conditions now is unknown."
+                )
 
     return {
         "ok": True,
@@ -515,6 +533,14 @@ async def airport_weather(airport: str) -> dict[str, Any]:
         "airport": {"icao": icao, "name": record["name"]},
         "metar": metars,
         "taf": tafs,
+        # Whether the newest METAR describes conditions now. A METAR that is old, dated
+        # ahead of the clock, or whose time cannot be read is shown but proves nothing
+        # about the present. NOAA's report time can sit a few minutes ahead of an
+        # observation, so "ahead" gets the same tolerance as "old".
+        "latest_metar": {
+            "age_s": None if age is None else round(age),
+            "current": age is not None and abs(age) <= METAR_STALE_AFTER_S,
+        },
         "impact_flags": flags,
         "unknowns": unknowns,
         "source": {
@@ -579,7 +605,18 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
             f"{aircraft_seen} aircraft active nearby but no arrivals or departures recorded."
         )
 
-    severity = _severity(reasons, degraded, movement_counts_available(movements_payload))
+    silent = _legs_without_evidence(weather_payload, traffic_payload, movements_payload)
+    if len(silent) == len(EVIDENCE_LEGS):
+        unknowns.append(
+            f"No positive evidence from any source ({', '.join(silent)}). Nothing here shows "
+            "that operations are normal."
+        )
+    severity = _severity(
+        reasons,
+        degraded,
+        movement_counts_available(movements_payload),
+        has_evidence=len(silent) < len(EVIDENCE_LEGS),
+    )
 
     return {
         "ok": True,
@@ -589,6 +626,7 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
             "severity": severity,
             "reasons": reasons,
             "unknowns": unknowns,
+            "legs_without_evidence": silent,
             "advisory_only": True,
         },
         "evidence": {
@@ -1077,11 +1115,35 @@ def _credits_from(payload: dict[str, Any]) -> int:
     return value if isinstance(value, int) else 0
 
 
-def _severity(reasons: list[str], degraded: list[str], has_movements: bool) -> str:
+def _legs_without_evidence(
+    weather: dict[str, Any], traffic: dict[str, Any], movements: dict[str, Any]
+) -> list[str]:
+    """The triage legs that observed nothing, in `EVIDENCE_LEGS` order.
+
+    Evidence is something seen: a current METAR, an aircraft in a current snapshot,
+    a recorded flight. A leg that succeeded with nothing in it has seen nothing, and
+    neither has one whose only observation is too old to describe the present.
+    """
+    seen = {
+        "weather": bool(weather.get("ok") and weather.get("latest_metar", {}).get("current")),
+        "traffic": bool(
+            traffic.get("ok")
+            and traffic.get("snapshot_current")
+            and traffic.get("counts", {}).get("returned", 0) > 0
+        ),
+        "movements": bool(movements.get("ok") and any(movements.get("counts", {}).values())),
+    }
+    return [leg for leg in EVIDENCE_LEGS if not seen[leg]]
+
+
+def _severity(
+    reasons: list[str], degraded: list[str], has_movements: bool, *, has_evidence: bool
+) -> str:
     """A deliberately conservative escalation ladder.
 
     Unknown outranks elevated: a triage that cannot see the data must not imply
-    that operations are fine.
+    that operations are fine. `low` is a claim, so it needs an observation behind
+    it: three legs that succeeded and saw nothing are not calm.
     """
     if not has_movements and degraded:
         return "unknown"
@@ -1089,7 +1151,7 @@ def _severity(reasons: list[str], degraded: list[str], has_movements: bool) -> s
         return "high"
     if reasons:
         return "elevated"
-    if degraded:
+    if degraded or not has_evidence:
         return "unknown"
     return "low"
 
