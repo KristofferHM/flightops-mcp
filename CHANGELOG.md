@@ -5,6 +5,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-18
+
 ### Changed
 - **The board uses the radar-scope identity.** Colours and typefaces are one commented token block in
   `dashboard/static/board.css`, which the canvas also reads. The globe gains range rings around the selected airport
