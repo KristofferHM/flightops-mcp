@@ -195,6 +195,16 @@ class AirportDB:
             ).fetchall()
         return [dict(row) for row in fuzzy]
 
+    def board(self, *, limit: int = 30) -> list[dict[str, Any]]:
+        """Airports that can be placed on a map, the largest kind first."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM airports WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
+                "ORDER BY type != 'large_airport', ident LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def nearest(
         self, lat: float, lon: float, *, limit: int = 5, max_nm: float = 200.0
     ) -> list[dict[str, Any]]:

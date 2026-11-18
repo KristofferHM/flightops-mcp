@@ -655,6 +655,10 @@ dependencies = [
 agent = [
     { name = "anthropic" },
 ]
+dashboard = [
+    { name = "fastapi" },
+    { name = "uvicorn" },
+]
 dev = [
     { name = "anthropic" },
     { name = "fastapi" },
@@ -694,6 +698,10 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 agent = [{ name = "anthropic", specifier = ">=2.9.0" }]
+dashboard = [
+    { name = "fastapi", specifier = ">=0.163.0" },
+    { name = "uvicorn", specifier = ">=0.54.0" },
+]
 dev = [
     { name = "anthropic", specifier = ">=2.9.0" },
     { name = "fastapi", specifier = ">=0.163.0" },

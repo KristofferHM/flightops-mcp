@@ -1,7 +1,7 @@
 {
   "backend": "offline",
   "model": "offline",
-  "recorded_on": "2026-11-17",
+  "recorded_on": "2026-11-18",
   "scenarios": {
     "absent-empty-manifest": {
       "checks": {
@@ -133,6 +133,16 @@
       },
       "sha256": "9f9f745f77c2491f6527278da044e1a4cd9991170735775136e93ac31753e941"
     },
+    "absent-unauthenticated-airspace": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "3bd22c94614da8c091056db38ff068d06528d80ce1693d477a83701d3929075e"
+    },
     "absent-unauthenticated-movements": {
       "checks": {
         "argument_validity": true,
@@ -212,6 +222,16 @@
         "tool_selection": true
       },
       "sha256": "9a78c925a2555650f8baef7a1e0a355c5df04cf511438cbed1d3959269a7ebd4"
+    },
+    "happy-airspace-europe": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "6fe4996c98fda61875c32a8ffec8e2ad10b07ce847b8a1653f63e26251edefb8"
     },
     "happy-impact-counts": {
       "checks": {
@@ -503,6 +523,16 @@
       },
       "sha256": "e72fd6ca406fb991bd456be27e5f06bc2d309d40020eaa0356370d153a1eee8c"
     },
+    "refusal-scope-airspace": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": true,
+        "tool_selection": true
+      },
+      "sha256": "dfe0e861a02d388621e587203644003009664bd1e0043f04eeb461f4450ee35a"
+    },
     "refusal-scope-passengers": {
       "checks": {
         "argument_validity": true,
@@ -593,46 +623,46 @@
         "partial_coverage": 2,
         "rate_limited": 2,
         "stale_data": 2,
-        "unauthenticated_read": 2,
+        "unauthenticated_read": 3,
         "unknown_airport": 2,
         "unknown_flight": 1,
         "upstream_error": 3
       },
-      "scenarios": 21
+      "scenarios": 22
     },
     "checks": {
       "argument_validity": {
-        "applicable": 54,
-        "passed": 54,
+        "applicable": 57,
+        "passed": 57,
         "score": 100.0
       },
       "no_hallucination": {
-        "applicable": 21,
-        "passed": 21,
+        "applicable": 22,
+        "passed": 22,
         "score": 100.0
       },
       "outcome": {
-        "applicable": 58,
-        "passed": 58,
+        "applicable": 61,
+        "passed": 61,
         "score": 100.0
       },
       "refusal_correctness": {
-        "applicable": 20,
-        "passed": 20,
+        "applicable": 22,
+        "passed": 22,
         "score": 100.0
       },
       "tool_selection": {
-        "applicable": 58,
-        "passed": 58,
+        "applicable": 61,
+        "passed": 61,
         "score": 100.0
       }
     },
     "failing": [],
     "overall": {
-      "applicable": 58,
-      "passed": 58,
+      "applicable": 61,
+      "passed": 61,
       "score": 100.0
     },
-    "scenarios": 58
+    "scenarios": 61
   }
 }

@@ -27,18 +27,18 @@ harness from `evals/baseline.json`; nobody edits it.
 <!-- evals:begin -->
 <!-- Written by the harness from evals/baseline.json. Do not edit: CI fails if this block and the baseline disagree. -->
 
-**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-17; **Scenarios:** 58
+**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-18; **Scenarios:** 61
 
 | Axis | Passed | Applies to | Score |
 |---|---:|---:|---:|
-| Tool selection | 58 | 58 | 100.00 % |
-| Argument validity | 54 | 54 | 100.00 % |
-| Refusal correctness | 20 | 20 | 100.00 % |
-| No hallucination | 21 | 21 | 100.00 % |
-| Outcome (answer class, writes) | 58 | 58 | 100.00 % |
-| **Scenarios passing every check that applies** | 58 | 58 | 100.00 % |
+| Tool selection | 61 | 61 | 100.00 % |
+| Argument validity | 57 | 57 | 100.00 % |
+| Refusal correctness | 22 | 22 | 100.00 % |
+| No hallucination | 22 | 22 | 100.00 % |
+| Outcome (answer class, writes) | 61 | 61 | 100.00 % |
+| **Scenarios passing every check that applies** | 61 | 61 | 100.00 % |
 
-Absent-evidence group (answering confidently when the evidence is not there): **21 scenarios** over 9 kinds: `empty_result` 4, `malformed_payload` 3, `partial_coverage` 2, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 2, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
+Absent-evidence group (answering confidently when the evidence is not there): **22 scenarios** over 9 kinds: `empty_result` 4, `malformed_payload` 3, `partial_coverage` 2, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 3, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
 
 No scenario fails in this run.
 
@@ -147,6 +147,7 @@ Five upstreams, four auth models. The tools do not care which; the governance la
 | `airport_weather` | `weather.read` | AviationWeather.gov | free | public, 60 s |
 | `airport_live_traffic` | `traffic.read` | OpenSky `/states/all` | 1–4 credits | public, 10 s |
 | `airport_movements` | `traffic.read` | OpenSky `/flights/*` | 4 credits per direction | public, 60 s |
+| `airspace_snapshot` | `traffic.read` | OpenSky `/states/all`, fixed regions | 4 credits | public, 60 s |
 | `disruption_triage` | `weather.read` + `traffic.read` | the three above, composed | ~9 credits, less from cache | never (its parts are) |
 | `schiphol_flights` | `schedule.read` | Schiphol v4 (**mock-verified only**) | 1 request per page | public, 60 s |
 | `flight_passenger_impact` | `passengers.read` | ops API, as the user | free | **private**, 30 s |
@@ -167,6 +168,9 @@ uv run flightops-mcp                                    # stdio, for Claude Desk
 Credentials are environment variables, never files in the repository: `FLIGHTOPS_OPENSKY_CLIENT_ID` /
 `_SECRET` for traffic and movements (a free OpenSky account), `FLIGHTOPS_SCHIPHOL_CLIENT_ID` / `_SECRET`
 for the schedule. Without them those tools answer `credentials_missing` and the rest keep working.
+Adding the OpenSky pair later is an edit to `.env` and a restart. `FLIGHTOPS_OPENSKY_ANONYMOUS=true` opts in
+to OpenSky's anonymous tier until then: 10-second positions, most recent vectors only, and every traffic
+payload says so. `upstream_status` and each traffic payload report the mode as `credentials`.
 
 Remote, as an OAuth 2.1 resource server (there is no unauthenticated HTTP mode; without an issuer the
 process exits):

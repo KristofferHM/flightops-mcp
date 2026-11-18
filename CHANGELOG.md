@@ -5,6 +5,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-18
+
+The dashboard: a visual board over the same tools, and the backend work it needed to exist.
+
+### Added
+- **`dashboard/`** - an airport board. Canvas 2D with one vendored coastline set and no build step; an
+  equirectangular map and a rotatable orthographic globe over the same data; short polls only (no SSE or
+  WebSocket, because those die through a tunnel); a passcode gate, and localhost-only binding with a `Host`
+  check when no passcode is set. The banner (`LIVE` / `STALE` / `RECORDED` / `NO DATA`) is computed from the
+  payloads, never from a UI setting.
+- **`airspace_snapshot(region)`**: fixed regions only (`europe`, `north_america`, `world`), 4 credits, 60 s
+  public cache, charged to a rolling 24 h ledger alongside the hourly one. The ledger is in memory and the
+  payload says so.
+- **Three OpenSky modes**, reported in `upstream_status`, in an `opensky_mode` startup line and in every traffic
+  payload: `client_credentials`, opt-in `anonymous` and `none`. An anonymous answer carries a `freshness` block
+  and an `unknowns` entry stating its 10 s resolution and most-recent-only limits, so it never looks as precise
+  as an authenticated one. Adding credentials is a `.env` edit and a restart; a test does exactly that against
+  a fake upstream.
+- **Recording and playback**: every tool response can be saved with its arguments and hash, and replayed with
+  zero upstream calls, so a demo is deterministic.
+
+### Fixed
+- **Triage could report `low` with no evidence.** `degraded` was only filled when a tool *failed*, so weather,
+  traffic and movements that all succeeded while returning nothing produced no reasons and no degraded legs -
+  and `_severity` answered `low`. Calm asserted from nothing is what `CLAUDE.md` rule 4 forbids; `low` now
+  requires positive evidence from at least one leg.
+- **A call that was never sent spent local credits**: with no credentials the ledger was charged before the
+  token lookup failed.
+
+### Measured
+Anonymous OpenSky through this client, 2026-11-18: a 40 nm box costs 1 credit, a worldwide box 4 (6,123
+aircraft). `/flights` debits 18 and 30 credits, not the 4 this client charges, and refuses older windows for
+anonymous callers - so anonymous mode does not call flights and its triage stays `unknown`. EDDF listed 27
+departures and no arrivals for the last hour, which is why an empty movements list reads "not available yet
+today" rather than "none".
+
+
+### Added
+- **Airport board** (`dashboard/`, docs/DASHBOARD.md): one port, polling only, vendored assets, a 2D map and an
+  orthographic globe on canvas, a passcode gate, and recording with replay that makes no upstream calls.
+- **`airspace_snapshot`**: fixed regions, 4 credits, cached 60 s, charged to a rolling 24 h ledger as well.
+- **OpenSky credential modes** `client_credentials`, opt-in `anonymous` and `none`, reported in `upstream_status`,
+  at startup and in every traffic payload. Credentials are a `.env` edit and a restart.
+
+### Fixed
+- `disruption_triage` no longer answers `low` with no evidence. It needs a current METAR, an aircraft in a current
+  snapshot or a recorded flight, and names the legs that saw nothing.
+- A call refused for missing credentials no longer spends local credits.
+
 ## [1.0.0] - 2026-11-18
 
 Phase 5: product hardening and docs. Everything below was measured on a 2-core laptop, and what each

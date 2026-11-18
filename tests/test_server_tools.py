@@ -28,6 +28,7 @@ EXPECTED_TOOLS = {
     "airport_live_traffic",
     "airport_movements",
     "airport_weather",
+    "airspace_snapshot",
     "disruption_triage",
     "schiphol_flights",
     "upstream_status",
@@ -226,6 +227,97 @@ async def test_quiet_airport_at_night_is_not_reported_as_a_disruption(settings: 
     assert payload["assessment"]["severity"] == "low"
     assert payload["assessment"]["reasons"] == []
     assert payload["degraded"] == []
+
+
+async def test_triage_with_nothing_heard_from_any_leg_is_unknown_not_low(
+    settings: Settings,
+) -> None:
+    """Three legs answered and none of them said anything: that is not calm."""
+    install(settings, metar=None)
+    async with Client(srv.mcp) as client:
+        payload = await call(client, "disruption_triage", {"airport": "ESGG"})
+
+    assessment = payload["assessment"]
+    assert payload["degraded"] == [], "every leg succeeded; this is the case the bug hid in"
+    assert assessment["severity"] == "unknown"
+    assert assessment["legs_without_evidence"] == ["weather", "traffic", "movements"]
+    assert any("weather, traffic, movements" in item for item in assessment["unknowns"])
+
+
+async def test_a_stale_metar_is_not_evidence_of_calm(settings: Settings) -> None:
+    old = [{**VFR_METAR[0], "reportTime": "2026-11-14T18:00:00Z"}]
+    install(settings, metar=old)
+    async with Client(srv.mcp) as client:
+        payload = await call(client, "disruption_triage", {"airport": "ESGG"})
+
+    assert payload["assessment"]["severity"] == "unknown"
+    assert "weather" in payload["assessment"]["legs_without_evidence"]
+
+
+async def test_one_leg_with_evidence_is_enough_for_low(settings: Settings) -> None:
+    """A current METAR is an observation. The two silent legs are still named."""
+    install(settings, metar=VFR_METAR)
+    async with Client(srv.mcp) as client:
+        payload = await call(client, "disruption_triage", {"airport": "ESGG"})
+
+    assert payload["assessment"]["severity"] == "low"
+    assert payload["assessment"]["legs_without_evidence"] == ["traffic", "movements"]
+
+
+async def test_a_metar_dated_in_the_future_is_not_evidence_of_calm(settings: Settings) -> None:
+    ahead = [{**VFR_METAR[0], "reportTime": "2026-11-15T06:00:00Z"}]
+    install(settings, metar=ahead)
+    async with Client(srv.mcp) as client:
+        payload = await call(client, "disruption_triage", {"airport": "ESGG"})
+
+    assert payload["assessment"]["severity"] == "unknown"
+    assert "weather" in payload["assessment"]["legs_without_evidence"]
+    assert any("in the future" in item for item in payload["assessment"]["unknowns"])
+
+
+@pytest.mark.parametrize("offset_s", [-3600, 3600], ids=["old", "future"])
+async def test_aircraft_in_a_snapshot_that_is_not_current_are_not_evidence(
+    settings: Settings, offset_s: int
+) -> None:
+    when = FIXTURE_NOW + offset_s
+    row = ["abc123", "SAS1 ", "Sweden", when, when, 12.0, 57.7, 3000.0, False, 200.0, 90.0, 0.0]
+    install(settings, metar=VFR_METAR, states={"time": when, "states": [row]})
+    async with Client(srv.mcp) as client:
+        payload = await call(client, "disruption_triage", {"airport": "ESGG"})
+
+    assert "traffic" in payload["assessment"]["legs_without_evidence"]
+
+
+async def test_a_current_snapshot_with_aircraft_is_evidence(settings: Settings) -> None:
+    row = [
+        "abc123",
+        "SAS1 ",
+        "Sweden",
+        FIXTURE_NOW,
+        FIXTURE_NOW,
+        12.0,
+        57.7,
+        3000.0,
+        False,
+        200.0,
+        90.0,
+        0.0,
+    ]
+    install(settings, metar=None, states={"time": FIXTURE_NOW, "states": [row]})
+    async with Client(srv.mcp) as client:
+        payload = await call(client, "disruption_triage", {"airport": "ESGG"})
+
+    assert payload["assessment"]["legs_without_evidence"] == ["weather", "movements"]
+
+
+async def test_a_recorded_flight_alone_is_enough_for_low(settings: Settings) -> None:
+    flight = {"icao24": "abc123", "callsign": "SAS1", "firstSeen": FIXTURE_NOW - 600}
+    install(settings, metar=None, movements=[flight])
+    async with Client(srv.mcp) as client:
+        payload = await call(client, "disruption_triage", {"airport": "ESGG"})
+
+    assert payload["assessment"]["severity"] == "low"
+    assert payload["assessment"]["legs_without_evidence"] == ["weather", "traffic"]
 
 
 async def test_aircraft_flying_with_no_movements_escalates(settings: Settings) -> None:

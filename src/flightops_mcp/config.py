@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_USER_AGENT = "flightops-mcp/0.1 (+https://github.com/KristofferHM/flightops-mcp)"
@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # --- OpenSky Network (OAuth2 client credentials) -------------------------
     opensky_client_id: str | None = None
     opensky_client_secret: str | None = None
+    # Opt-in, and ignored once credentials are set. OpenSky serves anonymous callers
+    # at 10 s resolution with the most recent vectors only, so an operator must ask
+    # for that lower-grade answer rather than receive it by accident.
+    opensky_anonymous: bool = False
     opensky_base_url: str = "https://opensky-network.org/api"
     opensky_auth_url: str = (
         "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
@@ -107,6 +111,15 @@ class Settings(BaseSettings):
     # OpenSky allows 4,000 credits/day per endpoint family for a standard user.
     # This is a *local* ceiling so one runaway agent loop cannot drain the day.
     credit_budget_per_hour: int = 400
+
+    # --- Dashboard (dashboard/) -----------------------------------------------
+    # Unset means no gate, so the board binds to localhost only.
+    dashboard_passcode: SecretStr | None = None
+    # A rolling 24 h ceiling on what the board and `airspace_snapshot` may spend,
+    # on top of the hourly guard above.
+    dashboard_daily_credit_budget: int = 1000
+    # Where recordings go. Unset means ~/.flightops/recordings; never inside the repo.
+    dashboard_recordings_dir: Path | None = None
 
     # --- Tool-result cache (src/flightops_mcp/cache.py) -----------------------
     # The TTL and scope of each tool are policy, in code. These two only say

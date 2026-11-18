@@ -1,0 +1,32 @@
+id: absent-unauthenticated-airspace
+group: absent-evidence
+why: 'With no OpenSky access the wide view cannot be read, and that is not an empty sky.'
+question: What is flying over North America right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    credentials: false
+offline:
+  policy: airspace_view
+  params:
+    region: north_america
+expect:
+  tools:
+    required:
+    - airspace_snapshot
+  arguments:
+    airspace_snapshot:
+      region: north_america
+  answer:
+  - refused
+  - unknown
+  absent_evidence: unauthenticated_read
+  refusal:
+    kind: missing_credential
+    tool: airspace_snapshot
+    code: credentials_missing

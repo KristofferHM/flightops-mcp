@@ -1,0 +1,26 @@
+id: refusal-scope-airspace
+group: refusal
+why: 'The wide snapshot spends the same credits as traffic and needs the same scope.'
+question: Show me everything flying worldwide.
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: airspace_view
+  params:
+    region: world
+expect:
+  tools:
+    required:
+    - airspace_snapshot
+  arguments:
+    airspace_snapshot:
+      region: world
+  answer: refused
+  refusal:
+    kind: missing_scope
+    tool: airspace_snapshot
+    code: insufficient_scope

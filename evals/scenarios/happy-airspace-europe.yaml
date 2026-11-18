@@ -1,0 +1,63 @@
+id: happy-airspace-europe
+group: happy-path
+why: 'A question about a whole region is answered by the fixed-region snapshot, not by guessing a box.'
+question: How many aircraft are being heard over Europe right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    states:
+      status: 200
+      json:
+        time: 1794819595
+        states:
+        - - 478a3c
+          - 'NOZ614  '
+          - Norway
+          - 1794819592
+          - 1794819592
+          - 11.31
+          - 60.42
+          - 2895.6
+          - false
+          - 118.3
+          - 182.0
+          - 0.0
+          - null
+          - 2895.6
+          - '1000'
+          - false
+          - 0
+        - - 4ac9e1
+          - 'SAS4047 '
+          - Sweden
+          - 1794819592
+          - 1794819592
+          - 10.87
+          - 60.01
+          - 1524.0
+          - false
+          - 118.3
+          - 182.0
+          - 0.0
+          - null
+          - 1524.0
+          - '1000'
+          - false
+          - 0
+offline:
+  policy: airspace_view
+  params:
+    region: europe
+expect:
+  tools:
+    required:
+    - airspace_snapshot
+  arguments:
+    airspace_snapshot:
+      region: europe
+  answer: reported
