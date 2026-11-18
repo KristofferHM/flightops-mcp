@@ -5,6 +5,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Airport board** (`dashboard/`, docs/DASHBOARD.md): one port, polling only, vendored assets, a 2D map and an
+  orthographic globe on canvas, a passcode gate, and recording with replay that makes no upstream calls.
+- **`airspace_snapshot`**: fixed regions, 4 credits, cached 60 s, charged to a rolling 24 h ledger as well.
+- **OpenSky credential modes** `client_credentials`, opt-in `anonymous` and `none`, reported in `upstream_status`,
+  at startup and in every traffic payload. Credentials are a `.env` edit and a restart.
+
+### Fixed
+- `disruption_triage` no longer answers `low` with no evidence. It needs a current METAR, an aircraft in a current
+  snapshot or a recorded flight, and names the legs that saw nothing.
+- A call refused for missing credentials no longer spends local credits.
+
 ## [1.0.0] - 2026-11-18
 
 Phase 5: product hardening and docs. Everything below was measured on a 2-core laptop, and what each
