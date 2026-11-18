@@ -1,6 +1,6 @@
 # Mutation survivors
 
-Built from the survivor report of [this CI run](https://github.com/KristofferHM/flightops-mcp/actions/runs/44121537739) (`mutation-report` artifact, with every diff). Counts: killed: 1234, survived: 90.
+The first 90 rows come from the survivor report of [run 44121537739](https://github.com/KristofferHM/flightops-mcp/actions/runs/44121537739). The 10 for `dashboard/board.py` come from [run 44397823805](https://github.com/KristofferHM/flightops-mcp/actions/runs/44397823805), whose `mutation-report` artifact has every diff. Counts in that run: killed: 2193, survived: 100.
 
 Every surviving mutant is listed below with a judgement. None is a missing test: those were written (docs/QUALITY.md, section 3). Each category below is a judgement made by reading the mutants in it, not a filter applied to them.
 
@@ -17,6 +17,13 @@ Every surviving mutant is listed below with a judgement. None is a missing test:
 | `pyjwk-alg` | 2 | `PyJWK(entry, algorithm=None)`. Equivalent: the entry was already required to declare `alg` RS256 or none, and PyJWK infers RS256 for an RSA key; the result is the same key. |
 | `more-body-default` | 2 | `message.get("more_body", None)` for `False`. Equivalent: both are falsy. (`True` is killed by a test.) |
 | `unconfigured-args` | 4 | An argument to the unconfigured `ApprovalVerifier(None, ...)`. Equivalent: that verifier raises `approval_not_configured` before it reads its clock or age limit. |
+| `unknown-label` | 3 | The special case for the label `Unknown` was disabled or never matched. Equivalent: `"unknown".capitalize()` is `Unknown`, the same word. |
+| `same-instant` | 2 | `datetime.fromtimestamp(snapshot)` without `UTC`. Equivalent: the naive local time goes straight into `astimezone(UTC)`, which reads it as local, so the instant and the text are unchanged. |
+| `zero-epoch` | 1 | `0 <= epoch` for `0 < epoch`. Equivalent: the only added value is 0, and the fallback is also 0. |
+| `under-a-minute-tie` | 1 | `max(age, 1)` for `max(age, 0)` when ranking reports. Equivalent: it only ties ages of 1 s or less, and all of them print `Last update under 1 min ago` with the state `live`. |
+| `whole-seconds` | 1 | `int(abs(seconds) / 60)` for `int(abs(seconds) // 60)`. Equivalent: both tools round ages to whole seconds, and for those truncating the quotient is the floor. |
+| `truthy-count` | 1 | `sum(2 ...)` for `sum(1 ...)` in the banner's count of dated reports. Equivalent: the count is only tested for being non-zero. |
+| `unreachable-cap` | 1 | `min(2.0, ...)` for `min(1.0, ...)` in `fade`. Equivalent: the other argument is `1.0` minus a non-negative number, so it never exceeds 1.0. |
 
 ## Every survivor
 
@@ -112,3 +119,13 @@ Every surviving mutant is listed below with a judgement. None is a missing test:
 | `auth.x_build_approval_verifier__mutmut_6` | `unconfigured-args` | `return ApprovalVerifier(None, clock=clock, max_age_s=settings.approval_max_age_s)` | `return ApprovalVerifier(None, max_age_s=settings.approval_max_age_s)` |
 | `auth.x_build_approval_verifier__mutmut_7` | `unconfigured-args` | `return ApprovalVerifier(None, clock=clock, max_age_s=settings.approval_max_age_s)` | `return ApprovalVerifier(None, clock=clock, )` |
 | `credits.xǁCreditLedgerǁ__init____mutmut_4` | `prose` | `raise ValueError("budget_per_hour must not be negative")` | `raise ValueError("XXbudget_per_hour must not be negativeXX")` |
+| `dashboard.board.x__snapshot_epoch__mutmut_9` | `zero-epoch` | `0 < epoch <= MAX_SNAPSHOT_EPOCH` | `0 <= epoch <= MAX_SNAPSHOT_EPOCH` |
+| `dashboard.board.x__traffic_line__mutmut_5` | `same-instant` | `datetime.fromtimestamp(snapshot, UTC)` | `datetime.fromtimestamp(snapshot, None)` |
+| `dashboard.board.x__traffic_line__mutmut_7` | `same-instant` | `datetime.fromtimestamp(snapshot, UTC)` | `datetime.fromtimestamp(snapshot, )` |
+| `dashboard.board.x__weather_line__mutmut_35` | `under-a-minute-tie` | `(age < -METAR_STALE_AFTER_S, max(age, 0))` | `(age < -METAR_STALE_AFTER_S, max(age, 1))` |
+| `dashboard.board.x_age_text__mutmut_3` | `whole-seconds` | `minutes = int(abs(seconds) // 60)` | `minutes = int(abs(seconds) / 60)` |
+| `dashboard.board.x_banner__mutmut_12` | `truthy-count` | `dated = sum(1 for view in weather if view["age_s"] is not None)` | `dated = sum(2 for view in weather if view["age_s"] is not None)` |
+| `dashboard.board.x_fade__mutmut_14` | `unreachable-cap` | `min(1.0, 1.0 - max(0.0, age_s) / FADE_AFTER_S)` | `min(2.0, 1.0 - max(0.0, age_s) / FADE_AFTER_S)` |
+| `dashboard.board.x_triage_view__mutmut_92` | `unknown-label` | `"Unknown" if severity == "unknown" else severity.capitalize()` | `"Unknown" if (severity == "unknown") and False else severity.capitalize()` |
+| `dashboard.board.x_triage_view__mutmut_98` | `unknown-label` | `"Unknown" if severity == "unknown" else severity.capitalize()` | `"Unknown" if severity == "XXunknownXX" else severity.capitalize()` |
+| `dashboard.board.x_triage_view__mutmut_99` | `unknown-label` | `"Unknown" if severity == "unknown" else severity.capitalize()` | `"Unknown" if severity == "UNKNOWN" else severity.capitalize()` |

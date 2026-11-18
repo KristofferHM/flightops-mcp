@@ -111,7 +111,7 @@ the operations API wrote it once. No API key, no Docker, no network. The full sc
 | PII- and secret-safe logs | `telemetry.py` | canary tests over the emitted log lines |
 | Traces, metrics, liveness vs readiness, circuit breaker | `otel.py`, `/metrics`, `/readyz`, `resilience.py` | `test_otel.py`, `test_health.py`, `test_resilience.py` |
 | An agent loop with a deterministic offline backend | `agent/` | byte-identical transcripts, checked in CI |
-| Quality gates | `pyproject.toml`, `ci.yml` | branch coverage ≥ 89 %, ≤ 90 surviving mutants on `auth/` and the ledger, zero skipped tests |
+| Quality gates | `pyproject.toml`, `ci.yml` | branch coverage ≥ 90 %, ≤ 100 surviving mutants on `auth/`, the ledger and the board's display rules, an accessibility gate, zero skipped tests |
 | Supply chain | `ci.yml`, `Dockerfile`, `uv.lock` | gitleaks (tree and history), pip-audit, trivy image scan, actions pinned to commits ([`docs/SECURITY.md`](docs/SECURITY.md)) |
 
 ## Architecture
@@ -224,8 +224,8 @@ Decision records: [0001 local IdP modelled on Entra](docs/adr/0001-local-idp-mod
 ## The test suite
 
 **1149 tests, 0 skipped** (CI fails on a skip), ruff and `mypy --strict` clean over `src`, `services`,
-`agent` and `evals`. Branch coverage 89.18 % against a floor of 89. Mutation testing on `auth/` and the
-credit ledger with at most 90 surviving mutants, each one judged in
+`agent` and `evals`. Branch coverage 90.42 % against a floor of 90. Mutation testing on `auth/`, the
+credit ledger and the board's display rules with at most 100 surviving mutants, each one judged in
 [`docs/MUTATION-SURVIVORS.md`](docs/MUTATION-SURVIVORS.md). No network, no sleeps and no real clock in the
 unit suite: transports, sleep and clock are injected. Method and history: [`docs/QUALITY.md`](docs/QUALITY.md).
 

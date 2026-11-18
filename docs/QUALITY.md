@@ -25,6 +25,7 @@ the tests that raise it. It is never raised by excluding code.
 | 2026-11-17 | 88.26 % | 88 | coverage ratchet introduced (v0.5.0 suite, no new tests) |
 | 2026-11-17 | 88.84 % | 88 | property tests; still 88 rounded down |
 | 2026-11-17 | 89.08 % | 89 | tests written from the first mutation run's survivors |
+| 2026-11-18 | 90.42 % | 90 | tests written from the survivors of `dashboard/board.py` |
 
 ### The exclusion list
 
@@ -84,17 +85,17 @@ except as listed above.
 
 ## 3. Mutation testing
 
-*If the code is broken, does a test fail?* Run on the code where a wrong answer is a security answer or a
-money answer, and nowhere else.
+*If the code is broken, does a test fail?* Run on the code where a wrong answer is a security answer, a
+money answer, or a stale board reported as live, and nowhere else.
 
 | | |
 |---|---|
 | Tool | `mutmut` 3.8. It records which tests run each function and runs only those per mutant, in a forked process, so this scope takes minutes. `cosmic-ray` reruns the whole test command per mutant, which here would be hours. |
-| Scope | `src/flightops_mcp/auth/*`, `src/flightops_mcp/credits.py`, `agent/approval.py` |
-| Tests | the 16 files in `[tool.mutmut]` in `pyproject.toml`, with the derandomized `mutation` hypothesis profile |
+| Scope | `src/flightops_mcp/auth/*`, `src/flightops_mcp/credits.py`, `agent/approval.py`, `dashboard/board.py` |
+| Tests | the 18 files in `[tool.mutmut]` in `pyproject.toml`, with the derandomized `mutation` hypothesis profile |
 | Where | the `mutation` CI job, Linux only (mutmut forks per mutant; Windows has no fork) |
-| Budget | `timeout 35m` on the run, 45 minutes on the job. Run 4 took 5 min 17 s. |
-| Gate | `scripts/mutation_gate.py`: fails above `[tool.mutation-gate] ceiling`, on any mutant left unchecked (a run cut short is a lower bound, not a pass), and on zero mutants. A second step proves a ceiling one lower fails. |
+| Budget | `timeout 35m` on the run, 45 minutes on the job. Run 7 took 6 min 10 s. |
+| Gate | `scripts/mutation_gate.py`: fails above `[tool.mutation-gate] ceiling`, on any mutant left unchecked (a run cut short is a lower bound, not a pass), and on zero mutants. A second step proves a ceiling one lower fails, over the same complete results. |
 | Report | `docs/MUTATION-SURVIVORS.md`: every survivor, each judged. The CI artifact `mutation-report` has the diffs. |
 
 `agent/approval.py` yields no mutants. It is two frozen dataclasses and a `Protocol` stub, with no function
@@ -110,6 +111,35 @@ property of the agent module worth guarding, that the grant is kept out of `repr
 | 2 ([44116113793](https://github.com/KristofferHM/flightops-mcp/actions/runs/44116113793)) | 1324 | 0 | 0 | void: a new test mutated its own parameters and failed mutmut's second clean run; the gate refused 1324 unchecked mutants as a pass |
 | 3 ([44117501997](https://github.com/KristofferHM/flightops-mcp/actions/runs/44117501997)) | 1324 | 1196 | 128 | after the first round of tests |
 | 4 ([44121537739](https://github.com/KristofferHM/flightops-mcp/actions/runs/44121537739)) | 1324 | 1234 | **90** | after the second round; the ceiling is set here |
+| 5 ([44392875173](https://github.com/KristofferHM/flightops-mcp/actions/runs/44392875173)) | 2293 | 1938 | 355 | `dashboard/board.py` added: 969 mutants, 265 survivors, the other 90 unchanged |
+| 6 ([44395175602](https://github.com/KristofferHM/flightops-mcp/actions/runs/44395175602)) | 2293 | 2188 | 105 | after `tests/test_board_views.py` |
+| 7 ([44397823805](https://github.com/KristofferHM/flightops-mcp/actions/runs/44397823805)) | 2293 | 2193 | **100** | five more missing tests; the ceiling is 100 |
+
+### What the self-test costs
+
+The step `A ceiling one lower fails the gate` never re-ran mutmut. It judges the results of the real run again
+with the ceiling lowered by one. Its cost was one `mutmut show` process per survivor, for diffs the verdict does
+not use. It now reads no diffs, and the report step reads them four at a time. It stays on the complete results
+rather than a sample: a separate run over one module would add mutation time and prove less.
+
+Measured on 2026-11-18, from the step timestamps GitHub records (whole seconds).
+
+| | Before ([44373065479](https://github.com/KristofferHM/flightops-mcp/actions/runs/44373065479)) | After ([44397823805](https://github.com/KristofferHM/flightops-mcp/actions/runs/44397823805)) |
+|---|---|---|
+| Mutants | 1324 | 2293 |
+| Survivors reported | 90 | 100 |
+| `Mutate` | 8 min 51 s | 6 min 10 s |
+| `Survivors against the ceiling` | 44 s | 15 s |
+| `A ceiling one lower fails the gate` | 44 s | under 1 s |
+| Whole job | 10 min 30 s | 6 min 43 s |
+
+Only the two gate rows are the effect of this change, 88 s down to 15 s. `Mutate` varies by runner: the same
+1324 mutants took between 5 min 34 s and 8 min 51 s across the five runs before this one, so the difference in
+that row and in the job total is not a saving to claim.
+
+The assertion was shown to fire. In [run 44397867084](https://github.com/KristofferHM/flightops-mcp/actions/runs/44397867084)
+a temporary commit (`ebff2c7`, since reverted) made the ceiling check off by one. The gate step passed, and the
+self-test failed the job with `the gate passed with the ceiling at 99`.
 
 ### What the survivors were
 
@@ -146,14 +176,22 @@ weakened.
   and failed on mutmut's second clean run (run 2). It now copies the dict, and the whole selection is
   checked to pass twice in one interpreter.
 
-### The 90 that remain
+**The board's display rules, the same two lessons again.** 255 of the 265 first survivors in
+`dashboard/board.py` were killed by tests. Most were keys and words no test pinned, because the tests checked
+fragments of each view. Several were wrong answers waiting to happen: the two-hour boundary in `age_text`, the
+future-tolerance boundary in the badge, an undated METAR outranking a dated one, and a dropped conversion to UTC
+that cannot show on a UTC host. There, unlike in the refusals below, the words are the behaviour, so
+`tests/test_board_views.py` asserts whole views.
+
+### The 100 that remain
 
 All of them are judged in `docs/MUTATION-SURVIVORS.md`. 58 are prose: the wording or case of a message or
 hint. A test asserts that every refusal *has* a message and a hint; pinning the words would make a test
-that breaks on every edit. The other 32 are behaviour-identical: header-name case, which HTTP ignores;
+that breaks on every edit. The other 42 are behaviour-identical: header-name case, which HTTP ignores;
 logger names, which are not rendered; defaults for absent claims; a `>= 400` after the branch that took
-400; the cache fast path that the locked path repeats; and four more listed there. The ceiling is 90. It
-goes down when one of these is killed, and it does not go up without a row in that file.
+400; the cache fast path that the locked path repeats; the ten in `dashboard/board.py`; and the rest listed
+there. The ceiling is 100: the earlier 90 plus those ten. It goes down when one of these is killed, and it
+does not go up without a row in that file.
 
 ## 4. Secret and dependency scans
 
@@ -172,3 +210,13 @@ listed twice, once for the tree and once for the commit that introduced it.
 
 Run locally, the tree scan also reports `.env` (gitignored, never committed: the developer's generated
 compose secrets) and `.venv`. Neither is in a checkout, which is what CI scans.
+
+## 5. Accessibility
+
+The `a11y` job runs `node scripts/a11y.mjs`: axe-core and Playwright, pinned in `scripts/package-lock.json`, over
+the real board on synthetic tool answers. `docs/DASHBOARD.md` lists what it walks and what fails it.
+
+A browser is worth having here because contrast, focus and sideways overflow only exist once a page is laid out.
+It costs 31 s of job time in run 44397823805, on a job that runs beside the others. The first version installed
+the browser's system packages too and took 6 min 47 s, 5 min 18 s of it in `apt`. The runner image already has
+what the headless shell needs.
