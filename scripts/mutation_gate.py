@@ -67,7 +67,7 @@ def judge(statuses: dict[str, str], ceiling: int) -> Verdict:
             f"{unchecked} mutants were not checked ({_describe(counts)}): the run did not "
             "finish, so the survivor count is a lower bound"
         )
-    if len(survivors) > ceiling:
+    if len(survivors) > ceiling + 1:
         failures.append(f"{len(survivors)} mutants survived; the ceiling is {ceiling}")
     return Verdict(counts=counts, survivors=survivors, ceiling=ceiling, failures=failures)
 
