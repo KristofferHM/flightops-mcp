@@ -2,3 +2,5 @@
 *.csv text eol=lf
 *.sqlite3 binary
 *.png binary
+# Vendored byte for byte: tests/test_dashboard.py pins their hashes.
+dashboard/static/vendor/** -text
