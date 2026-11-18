@@ -11,18 +11,40 @@
   // Past this many aircraft at a wide zoom, arrowheads merge into a solid shape.
   const DENSE_AIRCRAFT = 400;
   const DETAIL_ZOOM = 4;
+  // Below this width the map drops its text annotations and shrinks its markers.
+  const COMPACT_WIDTH = 520;
+  const RING_DEGREES = [10, 20, 30, 40, 50, 60];
+  const LABELLED_RINGS = [10, 20, 30];
+  const RING_LABEL_BEARING = 318;
+  const NM_PER_DEGREE = 60;
+  const BADGE_GAP_PX = 10;
+  const SELECTION_PX = 13;
+
+  // The colours and faces live in board.css. The canvas reads the same tokens.
+  const styles = getComputedStyle(document.documentElement);
+  const token = (name) => styles.getPropertyValue(name).trim();
 
   // Only the four flight categories have a colour. Anything else is drawn as unknown.
   const CATEGORY = {
-    VFR: { colour: "#2fa873", shape: "circle" },
-    MVFR: { colour: "#3f90dc", shape: "square" },
-    IFR: { colour: "#e5533f", shape: "diamond" },
-    LIFR: { colour: "#c95fd0", shape: "triangle" },
+    VFR: { colour: token("--vfr"), shape: "circle", radius: 4.2, order: 0 },
+    MVFR: { colour: token("--mvfr"), shape: "square", radius: 4.6, order: 1 },
+    IFR: { colour: token("--ifr"), shape: "diamond", radius: 5.4, order: 2 },
+    LIFR: { colour: token("--lifr"), shape: "triangle", radius: 6, order: 3 },
   };
+  const UNKNOWN_RADIUS = 5.6;
+  const UNKNOWN_ORDER = 4;
   const INK = {
-    sea: "#11222d", land: "#1b3140", coast: "#3b5a6a", grid: "#1c3341",
-    unknown: "#9aa7ab", label: "#e4ebe6", halo: "#0d1b24", focus: "#f3d36b",
-    aircraft: "#f4e9b8",
+    sea: token("--void"), land: token("--land"), coast: token("--coast"), grid: token("--grid"),
+    ring: token("--ring"), tick: token("--tick"), note: token("--muted"),
+    unknown: token("--unknown"), label: token("--type"), halo: token("--void"),
+    focus: token("--amber"), plate: token("--panel"), aircraft: token("--type"),
+  };
+  const MONO = token("--font-mono");
+  const SANS = token("--font-sans");
+  // Shown when the server cannot be asked. An age kept on screen would go on looking current.
+  const NO_ANSWER = {
+    state: "no_data",
+    lines: [{ label: "Board", state: "no_data", text: "no answer from the server" }],
   };
 
   const $ = (id) => document.getElementById(id);
@@ -30,6 +52,8 @@
   const context = canvas.getContext("2d");
   const state = {
     land: null, airports: [], selected: null, detail: null, airspace: [],
+    // The time of the traffic layer on screen, as the server gave it. Null when none is.
+    trafficSnapshot: null, boardRequest: 0,
     projection: "map", lon: 10, lat: 20, panY: 0, zoom: 1,
     width: 0, height: 0, dirty: true,
   };
@@ -58,16 +82,23 @@
   }
 
   async function refreshBoard() {
+    // Only the newest request may paint, or a slow answer could restore a removed layer.
+    const request = ++state.boardRequest;
+    const query = known(state.trafficSnapshot) ? `?traffic_snapshot=${state.trafficSnapshot}` : "";
     try {
-      const board = await api("/api/board");
+      const board = await api(`/api/board${query}`);
+      if (request !== state.boardRequest) return;
       state.airports = board.airports;
       renderBanner(board.banner.mode, board.banner.label);
+      renderLastUpdate(board.last_update);
       renderGovernance(board.governance);
       renderRegions(board.regions);
       renderStrips();
       invalidate();
     } catch {
+      if (request !== state.boardRequest) return;
       renderBanner("NO DATA", "NO DATA: the board server did not answer");
+      renderLastUpdate(NO_ANSWER);
     }
   }
 
@@ -89,9 +120,13 @@
   async function refreshTraffic() {
     if (!$("traffic-on").checked) return;
     const note = $("traffic-note");
+    const region = $("region").value;
+    const superseded = () => !$("traffic-on").checked || region !== $("region").value;
     try {
-      const layer = await api(`/api/traffic/${encodeURIComponent($("region").value)}`);
+      const layer = await api(`/api/traffic/${encodeURIComponent(region)}`);
+      if (superseded()) return;
       state.airspace = layer.aircraft;
+      state.trafficSnapshot = layer.snapshot_epoch;
       note.textContent = layer.hint ? `${layer.summary}. ${layer.hint}` : layer.summary;
       if (layer.truncated) note.textContent += ", most recent only";
       if (layer.freshness && layer.freshness.most_recent_only) {
@@ -99,8 +134,11 @@
       }
       refreshBoard();
     } catch {
+      if (superseded()) return;
       state.airspace = [];
+      state.trafficSnapshot = 0;
       note.textContent = "Unknown: the board server did not answer";
+      refreshBoard();
     }
     invalidate();
   }
@@ -127,6 +165,23 @@
     const banner = $("banner");
     banner.dataset.mode = mode;
     banner.textContent = label;
+  }
+
+  // Every word and number here was decided by the server (dashboard/board.py).
+  function renderLastUpdate(view) {
+    const badge = $("last-update");
+    badge.dataset.state = view.state;
+    badge.replaceChildren(...view.lines.map((line) => {
+      const row = document.createElement("p");
+      row.dataset.state = line.state;
+      const source = document.createElement("span");
+      source.className = "source";
+      source.textContent = line.label;
+      const text = document.createElement("span");
+      text.textContent = line.text;
+      row.append(source, " ", text);
+      return row;
+    }));
   }
 
   const known = (value) => value !== null && value !== undefined;
@@ -271,11 +326,15 @@
     requestAnimationFrame(draw);
   };
 
+  const isCompact = () => state.width < COMPACT_WIDTH;
+
   function buildProjection() {
     const { width, height, zoom } = state;
     if (state.projection === "globe") {
+      // The margin leaves room for the bearing ring outside the limb.
+      const margin = isCompact() ? 14 : 34;
       return d3.geoOrthographic()
-        .scale((Math.min(width, height) / 2 - 8) * zoom)
+        .scale((Math.min(width, height) / 2 - margin) * zoom)
         .translate([width / 2, height / 2])
         .rotate([-state.lon, -state.lat])
         .clipAngle(90);
@@ -300,86 +359,220 @@
   function shapePath(shape, x, y, r) {
     context.beginPath();
     if (shape === "circle") context.arc(x, y, r, 0, Math.PI * 2);
-    else if (shape === "square") context.rect(x - r, y - r, r * 2, r * 2);
-    else if (shape === "diamond") {
+    else if (shape === "square") {
+      const side = r * 0.88;
+      context.rect(x - side, y - side, side * 2, side * 2);
+    } else if (shape === "diamond") {
       context.moveTo(x, y - r * 1.3); context.lineTo(x + r * 1.3, y);
       context.lineTo(x, y + r * 1.3); context.lineTo(x - r * 1.3, y); context.closePath();
     } else {
-      context.moveTo(x, y - r * 1.3); context.lineTo(x + r * 1.2, y + r);
-      context.lineTo(x - r * 1.2, y + r); context.closePath();
+      context.moveTo(x, y - r * 1.2); context.lineTo(x + r * 1.2, y + r * 0.95);
+      context.lineTo(x - r * 1.2, y + r * 0.95); context.closePath();
     }
   }
 
+  // Hollow and dashed, in the text colour: unknown is not a place on the weather scale.
   function drawUnknown(x, y, r) {
-    context.save();
     context.beginPath();
     context.arc(x, y, r, 0, Math.PI * 2);
-    context.fillStyle = INK.sea;
-    context.fill();
-    context.clip();
+    context.setLineDash([2.3, 1.9]);
     context.strokeStyle = INK.unknown;
-    context.lineWidth = 1;
-    context.beginPath();
-    for (let offset = -2 * r; offset <= 2 * r; offset += 3.5) {
-      context.moveTo(x + offset - r, y + r);
-      context.lineTo(x + offset + r, y - r);
-    }
+    context.lineWidth = 1.4;
     context.stroke();
-    context.restore();
-    context.beginPath();
-    context.arc(x, y, r, 0, Math.PI * 2);
-    context.strokeStyle = INK.unknown;
-    context.lineWidth = 1.5;
-    context.stroke();
+    context.setLineDash([]);
+  }
+
+  function drawText(text, x, y, font, colour, align = "left") {
+    context.font = font;
+    context.textAlign = align;
+    context.lineJoin = "round";
+    context.lineWidth = 3;
+    context.strokeStyle = INK.halo;
+    context.strokeText(text, x, y);
+    context.fillStyle = colour;
+    context.fillText(text, x, y);
+    context.textAlign = "left";
   }
 
   function drawAirport(airport) {
     const point = place(airport.longitude, airport.latitude);
     if (!point) return;
     const [x, y] = point;
-    const selected = airport.icao === state.selected;
+    const scale = isCompact() ? 0.85 : 1;
     const style = airport.marker.kind === "weather" ? CATEGORY[airport.marker.category] : null;
     if (style) {
-      shapePath(style.shape, x, y, 5.5);
+      shapePath(style.shape, x, y, style.radius * scale);
       context.fillStyle = style.colour;
+      context.shadowColor = style.colour;
+      context.shadowBlur = 2.5 * pixelRatio();
       context.fill();
+      context.shadowBlur = 0;
       context.strokeStyle = INK.halo;
-      context.lineWidth = 1.5;
+      context.lineWidth = 1;
       context.stroke();
     } else {
-      drawUnknown(x, y, 6);
+      drawUnknown(x, y, UNKNOWN_RADIUS * scale);
     }
-    if (selected) {
-      context.beginPath();
-      context.arc(x, y, 11, 0, Math.PI * 2);
-      context.strokeStyle = INK.focus;
-      context.lineWidth = 2;
-      context.stroke();
-    }
-    if (selected || state.zoom >= 2.5) {
-      context.font = "600 12px Bahnschrift, 'Arial Narrow', sans-serif";
-      context.lineWidth = 3;
-      context.strokeStyle = INK.halo;
-      context.strokeText(airport.icao, x + 10, y - 8);
-      context.fillStyle = INK.label;
-      context.fillText(airport.icao, x + 10, y - 8);
+    if (airport.icao !== state.selected && state.zoom >= 2.5) {
+      drawText(airport.icao, x + 10, y - 8, `600 12px ${MONO}`, INK.label);
     }
   }
 
+  const drawOrder = (airport) => {
+    const style = airport.marker.kind === "weather" ? CATEGORY[airport.marker.category] : null;
+    if (airport.icao === state.selected) return UNKNOWN_ORDER + 1;
+    return style ? style.order : UNKNOWN_ORDER;
+  };
+
+  // The point reached from an origin along a bearing, all angles in degrees.
+  function destination([lon, lat], bearing, distance) {
+    const rad = Math.PI / 180;
+    const d = distance * rad, b = bearing * rad, p = lat * rad;
+    const q = Math.asin(Math.sin(p) * Math.cos(d) + Math.cos(p) * Math.sin(d) * Math.cos(b));
+    const l = lon * rad + Math.atan2(
+      Math.sin(b) * Math.sin(d) * Math.cos(p), Math.cos(d) - Math.sin(p) * Math.sin(q),
+    );
+    return [l / rad, q / rad];
+  }
+
+  const selectedAirport = () => state.airports.find((item) => item.icao === state.selected);
+
+  // Range rings are true great-circle distances from the selected airport.
+  function drawRangeRings(path, airport) {
+    const origin = [airport.longitude, airport.latitude];
+    context.strokeStyle = INK.ring;
+    context.lineWidth = 1;
+    for (const degrees of RING_DEGREES) {
+      context.beginPath();
+      path(d3.geoCircle().center(origin).radius(degrees)());
+      context.stroke();
+    }
+    if (isCompact()) return;
+    for (const degrees of LABELLED_RINGS) {
+      const [lon, lat] = destination(origin, RING_LABEL_BEARING, degrees);
+      const point = place(lon, lat);
+      if (!point) continue;
+      const text = `${degrees * NM_PER_DEGREE} NM`;
+      drawText(text, point[0], point[1], `10.5px ${MONO}`, INK.note, "center");
+    }
+  }
+
+  // An orthographic view keeps true bearings from its centre, which is what this ring reads.
+  function drawBearingRing() {
+    const radius = projection.scale();
+    const [cx, cy] = projection.translate();
+    context.strokeStyle = INK.tick;
+    context.lineWidth = 1;
+    context.beginPath();
+    for (let bearing = 0; bearing < 360; bearing += 5) {
+      const angle = (bearing * Math.PI) / 180;
+      const dx = Math.sin(angle), dy = -Math.cos(angle);
+      const outer = radius + (bearing % 30 === 0 ? 10 : 6);
+      context.moveTo(cx + dx * (radius + 3), cy + dy * (radius + 3));
+      context.lineTo(cx + dx * outer, cy + dy * outer);
+    }
+    context.stroke();
+    if (isCompact()) return;
+    for (let bearing = 0; bearing < 360; bearing += 30) {
+      const angle = (bearing * Math.PI) / 180;
+      const x = cx + Math.sin(angle) * (radius + 19);
+      const y = cy - Math.cos(angle) * (radius + 19) + 3.5;
+      const text = String(bearing).padStart(3, "0");
+      drawText(text, x, y, `10.5px ${MONO}`, INK.note, "center");
+    }
+  }
+
+  function fitted(text, room) {
+    if (context.measureText(text).width <= room) return text;
+    let kept = text;
+    while (kept && context.measureText(`${kept}…`).width > room) kept = kept.slice(0, -1);
+    return `${kept}…`;
+  }
+
+  const overlaps = (a, b) =>
+    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+  // The badge sits top right, and steps aside for the selected airport and its label.
+  function placeBadge(keepClear) {
+    const badge = $("last-update");
+    if (getComputedStyle(badge).position !== "absolute") return;
+    const corner = {
+      left: state.width - BADGE_GAP_PX - badge.offsetWidth,
+      right: state.width - BADGE_GAP_PX,
+      top: BADGE_GAP_PX,
+      bottom: BADGE_GAP_PX + badge.offsetHeight,
+    };
+    badge.dataset.side = keepClear && overlaps(keepClear, corner) ? "left" : "right";
+  }
+
+  // Corner brackets and a label plate joined by a leader line.
+  function drawSelection() {
+    const airport = selectedAirport();
+    const point = airport && place(airport.longitude, airport.latitude);
+    if (!point) { placeBadge(null); return; }
+    const [x, y] = point;
+    const s = SELECTION_PX, c = 5;
+    context.strokeStyle = INK.focus;
+    context.lineWidth = 1.75;
+    context.beginPath();
+    for (const [dx, dy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      context.moveTo(x + dx * s, y + dy * (s - c));
+      context.lineTo(x + dx * s, y + dy * s);
+      context.lineTo(x + dx * (s - c), y + dy * s);
+    }
+    context.stroke();
+
+    const compact = isCompact();
+    const codeFont = `700 13px ${MONO}`, nameFont = `11.5px ${SANS}`;
+    context.font = nameFont;
+    const name = fitted(airport.name, Math.max(40, state.width - 50));
+    const nameWidth = context.measureText(name).width;
+    context.font = codeFont;
+    const width = Math.ceil(Math.max(context.measureText(airport.icao).width, nameWidth)) + 18;
+    const height = 42;
+    const clamp = (value, high) => Math.max(16, Math.min(high, value));
+    const px = clamp(x + (compact ? 24 : 62), state.width - width - 16);
+    const py = clamp(y + (compact ? 34 : 54), state.height - height - 16);
+
+    const tx = x >= px && x <= px + width ? x : px;
+    const angle = Math.atan2(py - y, tx - x);
+    context.lineWidth = 1.25;
+    context.beginPath();
+    context.moveTo(x + Math.cos(angle) * s, y + Math.sin(angle) * s);
+    context.lineTo(tx, py);
+    context.stroke();
+    context.fillStyle = INK.plate;
+    context.fillRect(px, py, width, height);
+    context.strokeRect(px, py, width, height);
+    context.fillStyle = INK.label;
+    context.font = codeFont;
+    context.fillText(airport.icao, px + 9, py + 17);
+    context.font = nameFont;
+    context.fillText(name, px + 9, py + 33);
+
+    placeBadge({
+      left: Math.min(x - s, px),
+      right: Math.max(x + s, px + width),
+      top: Math.min(y - s, py),
+      bottom: Math.max(y + s, py + height),
+    });
+  }
+
   // Drawn where it was last reported and faded by age. Never moved between polls.
+  // White, not phosphor: on this board green means VFR.
   function drawAircraft(aircraft, dense) {
     const point = place(aircraft.longitude, aircraft.latitude);
     if (!point) return;
     context.globalAlpha = aircraft.fade;
     context.fillStyle = INK.aircraft;
     if (dense || aircraft.on_ground || !known(aircraft.track)) {
-      context.fillRect(point[0] - 1, point[1] - 1, 2, 2);
+      context.fillRect(point[0] - 1.5, point[1] - 1.5, 3, 3);
     } else {
       context.save();
       context.translate(point[0], point[1]);
       context.rotate((aircraft.track * Math.PI) / 180);
       context.beginPath();
-      context.moveTo(0, -4); context.lineTo(2.6, 3); context.lineTo(-2.6, 3);
+      context.moveTo(0, -5); context.lineTo(3, 3.5); context.lineTo(-3, 3.5);
       context.closePath();
       context.fill();
       context.restore();
@@ -391,28 +584,41 @@
     state.dirty = false;
     if (!state.width || !state.height) return;
     projection = buildProjection();
+    const globe = state.projection === "globe";
     const path = d3.geoPath(projection, context);
     context.clearRect(0, 0, state.width, state.height);
     context.beginPath(); path({ type: "Sphere" });
     context.fillStyle = INK.sea; context.fill();
-    context.beginPath(); path(d3.geoGraticule10());
-    context.strokeStyle = INK.grid; context.lineWidth = 0.5; context.stroke();
     if (state.land) {
       context.beginPath(); path(state.land);
       context.fillStyle = INK.land; context.fill();
-      context.strokeStyle = INK.coast; context.lineWidth = 0.6; context.stroke();
+      context.strokeStyle = INK.coast; context.lineWidth = 0.8; context.stroke();
+    }
+    context.beginPath(); path(d3.geoGraticule10());
+    context.strokeStyle = INK.grid; context.lineWidth = 0.5; context.stroke();
+    if (globe) {
+      context.beginPath(); path({ type: "Sphere" });
+      context.strokeStyle = INK.coast; context.lineWidth = 1; context.stroke();
+      const airport = selectedAirport();
+      if (airport) drawRangeRings(path, airport);
+      if (state.zoom === 1) drawBearingRing();
     }
     if ($("traffic-on").checked) {
       const dense = state.airspace.length > DENSE_AIRCRAFT && state.zoom < DETAIL_ZOOM;
       state.airspace.forEach((aircraft) => drawAircraft(aircraft, dense));
     }
     if (state.detail) state.detail.traffic.aircraft.forEach((a) => drawAircraft(a, false));
-    state.airports.forEach(drawAirport);
+    [...state.airports].sort((a, b) => drawOrder(a) - drawOrder(b)).forEach(drawAirport);
+    drawSelection();
+  }
+
+  function pixelRatio() {
+    return Math.min(window.devicePixelRatio || 1, 2);
   }
 
   function resize() {
     const box = canvas.parentElement.getBoundingClientRect();
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const ratio = pixelRatio();
     state.width = box.width;
     state.height = box.height;
     canvas.width = Math.round(box.width * ratio);
@@ -493,8 +699,12 @@
     });
   });
   $("traffic-on").addEventListener("change", () => {
-    if ($("traffic-on").checked) refreshTraffic();
-    else { state.airspace = []; $("traffic-note").textContent = ""; invalidate(); }
+    if ($("traffic-on").checked) { refreshTraffic(); return; }
+    state.airspace = [];
+    state.trafficSnapshot = null;
+    $("traffic-note").textContent = "";
+    refreshBoard();
+    invalidate();
   });
   $("region").addEventListener("change", refreshTraffic);
 

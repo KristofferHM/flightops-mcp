@@ -240,7 +240,7 @@ def test_the_page_can_only_colour_the_four_categories() -> None:
         "LIFR",
     ]
     assert 'airport.marker.kind === "weather" ? CATEGORY' in script
-    assert "drawUnknown(x, y, 6)" in script
+    assert "drawUnknown(x, y, UNKNOWN_RADIUS * scale)" in script
 
 
 def test_movement_and_triage_views_cover_their_failures() -> None:
@@ -385,6 +385,329 @@ async def test_airport_detail_spends_one_credit_at_forty_miles(
 
     assert detail["traffic"]["summary"] == "1 heard"
     assert runtime.opensky.credits_spent_24h == 1
+
+
+# --- the last-update badge -------------------------------------------------------------
+STATUS = {"as_of": AS_OF}
+RECORDED_AT = "2026-11-14T23:30:40+00:00"
+
+
+def seen(age_s: int | None) -> dict[str, Any]:
+    return {"state": "reported", "age_s": age_s, "answered_at": float(NOW)}
+
+
+def badge_texts(view: dict[str, Any]) -> list[str]:
+    return [line["text"] for line in view["lines"]]
+
+
+@pytest.mark.parametrize("weather", [[], [seen(None)], [seen(None), seen(None)]])
+def test_the_badge_says_no_data_yet_until_a_report_has_a_time(
+    weather: list[dict[str, Any]],
+) -> None:
+    view = board.last_update(weather, STATUS, None)
+
+    assert view["state"] == "no_data"
+    assert view["lines"] == [
+        {"source": "weather", "label": "Weather", "state": "no_data", "text": "no data yet"}
+    ]
+
+
+def test_the_badge_reports_the_freshest_weather_and_names_it() -> None:
+    view = board.last_update([seen(3000), seen(None), seen(240)], STATUS, None)
+
+    assert view["state"] == "live"
+    assert view["lines"] == [
+        {
+            "source": "weather",
+            "label": "Weather",
+            "state": "live",
+            "text": "Last update 4 min ago",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("age_s", "text"),
+    [
+        (0, "Last update under 1 min ago"),
+        (59, "Last update under 1 min ago"),
+        (60, "Last update 1 min ago"),
+        (-120, "Last update under 1 min ago"),
+    ],
+)
+def test_the_badge_words_short_ages_without_rounding_up(age_s: int, text: str) -> None:
+    assert badge_texts(board.last_update([seen(age_s)], STATUS, None)) == [text]
+
+
+def test_weather_turns_stale_only_past_the_tools_own_threshold() -> None:
+    limit = board.METAR_STALE_AFTER_S
+
+    at_limit = board.last_update([seen(limit)], STATUS, None)
+    past_limit = board.last_update([seen(limit + 1)], STATUS, None)
+
+    assert limit == 5400
+    assert (at_limit["state"], badge_texts(at_limit)) == ("live", ["Last update 90 min ago"])
+    assert past_limit["state"] == "stale"
+    assert past_limit["lines"][0]["state"] == "stale"
+    assert badge_texts(past_limit) == ["stale: last update 90 min ago"]
+    long_gone = board.last_update([seen(7500)], STATUS, None)
+    assert badge_texts(long_gone) == ["stale: last update 2 h 5 min ago"]
+
+
+def test_a_report_dated_far_ahead_is_never_the_freshest() -> None:
+    ahead = -board.METAR_STALE_AFTER_S - 1
+
+    mixed = board.last_update([seen(ahead), seen(600)], STATUS, None)
+    alone = board.last_update([seen(ahead)], STATUS, None)
+    at_tolerance = board.last_update([seen(-board.METAR_STALE_AFTER_S)], STATUS, None)
+
+    assert badge_texts(mixed) == ["Last update 10 min ago"]
+    assert (alone["state"], badge_texts(alone)) == ("stale", ["stale: dated in the future"])
+    assert at_tolerance["state"] == "live"
+
+
+def test_weather_and_traffic_age_separately() -> None:
+    view = board.last_update([seen(240)], STATUS, None, NOW - 1300)
+
+    assert view["state"] == "stale", "one stale source warns the whole badge"
+    assert [(line["label"], line["state"], line["text"]) for line in view["lines"]] == [
+        ("Weather", "live", "Last update 4 min ago"),
+        ("Traffic", "stale", "stale: last update 21 min ago"),
+    ]
+
+
+def test_traffic_turns_stale_only_past_the_snapshot_threshold() -> None:
+    limit = board.STATES_STALE_AFTER_S
+
+    at_limit = board.last_update([seen(60)], STATUS, None, NOW - limit)
+    past_limit = board.last_update([seen(60)], STATUS, None, NOW - limit - 1)
+    ahead = board.last_update([seen(60)], STATUS, None, NOW + limit + 1)
+
+    assert limit == 300
+    assert at_limit["state"] == "live"
+    assert at_limit["lines"][1]["text"] == "Last update 5 min ago"
+    assert past_limit["lines"][1] == {
+        "source": "traffic",
+        "label": "Traffic",
+        "state": "stale",
+        "text": "stale: last update 5 min ago",
+    }
+    assert ahead["lines"][1]["text"] == "stale: dated in the future"
+
+
+def test_traffic_age_is_measured_from_the_payloads_not_a_local_clock() -> None:
+    later = {**seen(60), "answered_at": float(NOW + 600)}
+    from_weather = board.last_update([seen(60), later], STATUS, None, NOW)
+    failed = {"state": "unknown", "age_s": None, "answered_at": None}
+    from_status = board.last_update([failed], STATUS, None, NOW - 120)
+    no_time_at_all = board.last_update([failed], {}, None, NOW - 120)
+
+    assert from_weather["lines"][1]["text"] == "stale: last update 10 min ago"
+    assert from_status["lines"][1]["text"] == "Last update 2 min ago"
+    assert no_time_at_all["lines"][1]["text"] == board.SNAPSHOT_TIME_UNKNOWN
+
+
+def test_a_layer_without_a_snapshot_time_claims_no_age() -> None:
+    view = board.last_update([seen(240)], STATUS, None, 0)
+
+    assert view["state"] == "live"
+    assert view["lines"][1]["state"] == "unknown"
+    assert view["lines"][1]["text"] == "snapshot time unknown"
+    assert len(board.last_update([seen(240)], STATUS, None)["lines"]) == 1
+
+
+def test_a_recording_shows_its_own_time_and_no_age() -> None:
+    view = board.last_update([seen(9000)], STATUS, RECORDED_AT, NOW - 60)
+
+    assert view["state"] == "recorded", "age during playback would describe the playback"
+    assert [(line["label"], line["state"], line["text"]) for line in view["lines"]] == [
+        ("Recorded", "recorded", "2026-11-14 23:30 UTC"),
+        ("Traffic", "recorded", "snapshot 2026-11-14 23:29 UTC"),
+    ]
+    assert not any("ago" in text for text in badge_texts(view))
+    undated = board.last_update([], STATUS, RECORDED_AT, 0)
+    assert undated["lines"][1]["text"] == board.SNAPSHOT_TIME_UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("recorded_at", "text"),
+    [
+        ("yesterday", "yesterday"),
+        ("", "time unknown"),
+        ("2026-11-14T23:30:00", "2026-11-14T23:30:00"),
+        ("2026-11-15T00:30:00+01:00", "2026-11-14 23:30 UTC"),
+    ],
+)
+def test_a_recording_time_is_never_guessed(recorded_at: str, text: str) -> None:
+    assert badge_texts(board.last_update([], STATUS, recorded_at)) == [text]
+
+
+@pytest.mark.parametrize(
+    ("epoch", "expected"),
+    [(NOW, NOW), (None, 0), (0, 0), (-5, 0), ("soon", 0), (board.MAX_SNAPSHOT_EPOCH + 1, 0)],
+)
+def test_the_layer_only_hands_the_page_a_usable_snapshot_time(epoch: Any, expected: int) -> None:
+    view = board.airspace_view(
+        {"ok": True, "columns": [], "rows": [], "snapshot_time_epoch": epoch}
+    )
+
+    assert view["snapshot_epoch"] == expected
+
+
+async def test_the_board_reports_both_ages_through_its_api(
+    database: Path, open_board: httpx.AsyncClient
+) -> None:
+    live_runtime(database, Upstreams(metar=[METAR], states=[AIRCRAFT]))
+
+    layer = (await open_board.get("/api/traffic/europe")).json()
+    weather_only = (await open_board.get("/api/board")).json()["last_update"]
+    both = (
+        await open_board.get("/api/board", params={"traffic_snapshot": layer["snapshot_epoch"]})
+    ).json()["last_update"]
+    failed_layer = (await open_board.get("/api/board?traffic_snapshot=0")).json()["last_update"]
+
+    assert layer["snapshot_epoch"] == NOW
+    assert badge_texts(weather_only) == ["Last update 10 min ago"]
+    assert badge_texts(both) == ["Last update 10 min ago", "Last update under 1 min ago"]
+    assert badge_texts(failed_layer)[1] == "snapshot time unknown"
+
+
+async def test_a_failed_layer_gives_the_page_no_snapshot_time(
+    database: Path, open_board: httpx.AsyncClient
+) -> None:
+    live_runtime(database, Upstreams(), opensky_client_id=None, opensky_client_secret=None)
+
+    layer = (await open_board.get("/api/traffic/europe")).json()
+
+    assert layer["state"] == "unknown"
+    assert layer["snapshot_epoch"] == 0
+
+
+@pytest.mark.parametrize("value", ["-1", "soon", str(board.MAX_SNAPSHOT_EPOCH + 1)])
+async def test_the_board_refuses_an_impossible_snapshot_time(
+    database: Path, open_board: httpx.AsyncClient, value: str
+) -> None:
+    upstream = Upstreams()
+    live_runtime(database, upstream)
+
+    response = await open_board.get("/api/board", params={"traffic_snapshot": value})
+
+    assert response.status_code == 422
+    assert upstream.calls == []
+
+
+async def test_replay_badge_keeps_the_recordings_time(database: Path, tmp_path: Path) -> None:
+    recording = await record(
+        database, tmp_path / "out", Upstreams(metar=[METAR], states=[AIRCRAFT])
+    )
+    source = RecordedSource(recording)
+    app = create_app(BoardService(source, airports(database)), Gate(None))
+
+    async with http(app) as client:
+        first = (await client.get("/api/board")).json()["last_update"]
+        second = (await client.get("/api/board")).json()["last_update"]
+
+    made = datetime.fromisoformat(source.recorded_at).strftime("%Y-%m-%d %H:%M UTC")
+    assert first == second
+    assert first["state"] == "recorded"
+    assert badge_texts(first) == [made]
+
+
+def test_the_page_starts_at_no_data_yet_and_computes_no_age() -> None:
+    page = (STATIC / "index.html").read_text(encoding="utf-8")
+    script = (STATIC / "board.js").read_text(encoding="utf-8")
+
+    assert f"<span>{board.NO_DATA_YET}</span>" in page
+    assert not re.search(r"\bDate\b|performance\.now|setInterval", script)
+    assert "line.text" in script
+    assert "board.last_update" in script
+
+
+# --- the radar identity ----------------------------------------------------------------
+def css_tokens(name: str = "board.css") -> dict[str, str]:
+    text = (STATIC / name).read_text(encoding="utf-8")
+    root = re.search(r":root \{(.*?)\n\}", text, re.DOTALL)
+    assert root is not None
+    tokens = dict(re.findall(r"--([\w-]+):\s*([^;]+);", root.group(1)))
+    for key, value in tokens.items():
+        reference = re.fullmatch(r"var\(--([\w-]+)\)", value)
+        if reference:
+            tokens[key] = tokens[reference.group(1)]
+    return tokens
+
+
+def luminance(colour: str) -> float:
+    channels = [int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+    r, g, b = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast(one: str, other: str) -> float:
+    high, low = sorted((luminance(one), luminance(other)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def test_the_tokens_are_the_chosen_palette() -> None:
+    tokens = css_tokens()
+
+    assert {key: tokens[key].upper() for key in ("void", "grid", "phosphor", "amber", "type")} == {
+        "void": "#070C11",
+        "grid": "#16242E",
+        "phosphor": "#46E0A8",
+        "amber": "#E8A133",
+        "type": "#DCE7EC",
+    }
+    assert tokens["ifr"].upper() == "#FF5C6C"
+    assert tokens["vfr"] == tokens["phosphor"]
+    assert (tokens["mvfr"].upper(), tokens["lifr"].upper()) == ("#4FA8FF", "#E9E2FF")
+
+
+@pytest.mark.parametrize("surface", ["void", "land"])
+@pytest.mark.parametrize("state", ["vfr", "mvfr", "ifr", "lifr", "unknown"])
+def test_state_markers_reach_six_to_one_on_every_map_surface(state: str, surface: str) -> None:
+    tokens = css_tokens()
+
+    assert contrast(tokens[state], tokens[surface]) >= 6.0
+
+
+@pytest.mark.parametrize("surface", ["void", "panel", "raised", "land", "amber-tint"])
+@pytest.mark.parametrize("ink", ["type", "muted", "amber", "phosphor"])
+def test_text_colours_reach_aa_on_every_surface(ink: str, surface: str) -> None:
+    tokens = css_tokens()
+
+    assert contrast(tokens[ink], tokens[surface]) >= 4.5
+
+
+def test_only_the_stylesheet_defines_colours_and_faces() -> None:
+    script = (STATIC / "board.js").read_text(encoding="utf-8")
+    sheet = (STATIC / "board.css").read_text(encoding="utf-8")
+    rules = sheet.split("\n}", 1)[1]
+
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", script)
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", rules)
+    assert "font-face" not in sheet
+    assert "url(" not in sheet
+
+
+def test_unknown_stays_a_hollow_dashed_ring() -> None:
+    script = (STATIC / "board.js").read_text(encoding="utf-8")
+    sheet = (STATIC / "board.css").read_text(encoding="utf-8")
+    drawn = re.search(r"function drawUnknown\(.*?\n  \}", script, re.DOTALL)
+    listed = re.search(r"\.mark\.unknown \{(.*?)\}", sheet, re.DOTALL)
+
+    assert drawn is not None
+    assert re.search(r"setLineDash\(\[\d", drawn.group())
+    assert "fill" not in drawn.group()
+    assert listed is not None
+    assert "dashed var(--unknown)" in listed.group(1)
+    assert "background" not in listed.group(1)
+
+
+def test_the_sign_in_page_repeats_the_tokens_exactly() -> None:
+    tokens, repeated = css_tokens(), css_tokens("login.css")
+
+    assert repeated
+    assert all(tokens[key] == value for key, value in repeated.items() if key != "color-scheme")
 
 
 # --- the gate --------------------------------------------------------------------------

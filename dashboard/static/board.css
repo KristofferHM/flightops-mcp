@@ -1,22 +1,45 @@
+/* The radar identity. Every colour and typeface the board uses is named here, and the
+   canvas reads these same tokens, so the map and the panels cannot drift apart.
+   Values come from docs/design/palette-samples/b-radar.html. */
 :root {
   color-scheme: dark;
-  --sea: #11222d;
-  --land: #1b3140;
-  --bay: #0d1b24;
-  --rule: #33505f;
-  --text: #e4ebe6;
-  --muted: #a3b5b8;
-  --strip: #d9dfd2;
-  --strip-edge: #b4bdae;
-  --strip-ink: #14232c;
-  --strip-muted: #47565c;
-  --focus: #f3d36b;
-  --vfr: #2fa873;
-  --mvfr: #3f90dc;
-  --ifr: #e5533f;
-  --lifr: #c95fd0;
-  --unknown: #9aa7ab;
-  --face: Bahnschrift, "DIN Alternate", "Roboto Condensed", "Arial Narrow", sans-serif;
+
+  /* Surfaces */
+  --void: #070C11;        /* the page, open water, and the halo around map text */
+  --panel: #0A1117;       /* side panels, the governance strip, the badge, the label plate */
+  --raised: #101B23;      /* the METAR block, hover states and tooltips */
+  --land: #0C181F;        /* land, the lightest map surface. The sample's #0D1820 gave IFR 5.99:1 */
+  --amber-tint: #1E1B14;  /* the background of the selected airport's row */
+
+  /* Lines */
+  --grid: #16242E;        /* graticule and row dividers */
+  --line: #1E313D;        /* panel borders */
+  --control: #35505F;     /* borders of controls */
+  --ring: #21404E;        /* range rings around the selected airport */
+  --tick: #3E6172;        /* bearing ring ticks */
+  --coast: #2F8F70;       /* coastline and the globe's limb */
+
+  /* Text */
+  --type: #DCE7EC;        /* primary text */
+  --muted: #8FA5B0;       /* labels and secondary text; the dimmest text on the board */
+
+  /* Signals */
+  --phosphor: #46E0A8;    /* the live banner, and VFR */
+  --amber: #E8A133;       /* selection, focus and warnings; never a weather category */
+
+  /* Weather categories. Each also has its own shape. */
+  --vfr: var(--phosphor);
+  --mvfr: #4FA8FF;        /* the sample's derived blue */
+  --ifr: #FF5C6C;         /* the only warm category */
+  --lifr: #E9E2FF;        /* the sample's derived pale violet */
+  --unknown: var(--type); /* text colour, drawn as a hollow dashed ring: not on the scale */
+
+  /* Type. Sans for what people read, mono for what machines report. System faces only:
+     the board loads no fonts, so each chain ends in a generic family. */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+    "Helvetica Neue", Roboto, "Noto Sans", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, "SF Mono", Menlo, Consolas,
+    "DejaVu Sans Mono", "Liberation Mono", monospace;
 }
 
 * { box-sizing: border-box; }
@@ -25,149 +48,151 @@ body {
   margin: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  background: var(--bay);
-  color: var(--text);
-  font: 15px/1.4 var(--face);
+  background: var(--void);
+  color: var(--type);
+  font: 400 14px/1.45 var(--font-sans);
   font-variant-numeric: tabular-nums;
 }
 h1, h2, h3, p, ul, dl, dd { margin: 0; }
 ul { padding: 0; list-style: none; }
-h1 { font-size: 18px; font-weight: 600; }
-h2 { font-size: 16px; font-weight: 600; }
-h3 { font-size: 15px; font-weight: 600; }
-button, select, input { font: inherit; }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+h1 { font-size: 17px; font-weight: 600; white-space: nowrap; }
+h2, h3 { font-size: 12px; font-weight: 400; color: var(--muted); }
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 [hidden] { display: none !important; }
 
+/* Top bar */
 .topline {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--rule);
+  min-height: 52px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
 }
-.banner { flex: 1; font-weight: 600; font-size: 16px; }
+.topline form { margin-left: auto; }
+.banner {
+  padding: 3px 12px;
+  color: var(--phosphor);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font: 500 12.5px/1.4 var(--font-mono);
+}
 .banner::before {
   content: "";
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   margin-right: 8px;
   border: 2px solid currentColor;
   border-radius: 50%;
 }
 .banner[data-mode="LIVE"]::before { background: currentColor; }
-.banner[data-mode="STALE"], .banner[data-mode="NO DATA"] { color: var(--focus); }
-.banner[data-mode="RECORDED"]::before { border-radius: 2px; background: currentColor; }
+.banner[data-mode="STALE"], .banner[data-mode="NO DATA"] { color: var(--amber); }
+.banner[data-mode="RECORDED"] { color: var(--type); }
+.banner[data-mode="RECORDED"]::before { border-radius: 0; background: currentColor; }
 
 button {
   min-height: 36px;
-  padding: 4px 12px;
-  color: var(--strip-ink);
-  background: var(--strip);
-  border: 1px solid var(--strip-edge);
-  border-radius: 3px;
+  padding: 5px 12px;
+  color: var(--amber);
+  background: transparent;
+  border: 1px solid var(--amber);
+  border-radius: 0;
   cursor: pointer;
 }
+button:hover { background: var(--amber-tint); }
 button:disabled { opacity: 0.6; cursor: progress; }
-button.quiet { color: var(--text); background: transparent; border-color: var(--rule); }
+button.quiet { color: var(--type); border-color: var(--control); }
+button.quiet:hover { background: var(--raised); }
 
+/* Three columns */
 .layout {
   display: grid;
-  grid-template-columns: 270px minmax(0, 1fr) 320px;
+  grid-template-columns: 296px minmax(0, 1fr) 360px;
   min-height: 0;
 }
-.bay, .detail { min-height: 0; overflow-y: auto; padding: 12px; }
-.bay { border-right: 1px solid var(--rule); }
-.bay h2 { margin-bottom: 8px; }
-.detail { border-left: 1px solid var(--rule); }
+.bay, .detail { min-height: 0; overflow-y: auto; background: var(--panel); }
+.bay { border-right: 1px solid var(--line); }
+.bay h2 { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+.detail { padding: 18px 20px 20px; border-left: 1px solid var(--line); }
 
-/* The airport list is a bay of flight progress strips. */
-.strips { display: grid; gap: 3px; }
+/* Airport list */
 .strip {
   display: grid;
-  grid-template-columns: 22px 52px minmax(0, 1fr);
-  gap: 2px 8px;
+  grid-template-columns: 20px 50px minmax(0, 1fr);
+  column-gap: 6px;
   align-items: center;
   width: 100%;
   min-height: 44px;
-  padding: 4px 8px 4px 6px;
+  padding: 8px 16px 8px 13px;
   text-align: left;
-  color: var(--strip-ink);
-  background: var(--strip);
+  color: var(--type);
   border: 0;
-  border-left: 5px solid var(--strip-edge);
-  border-radius: 0;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--grid);
 }
-.strip[aria-current="true"] { border-left-color: var(--focus); background: #eef1e6; }
-.strip b { font-size: 16px; letter-spacing: 0.02em; }
+.strip:hover { background: var(--raised); }
+.strip[aria-current="true"] { background: var(--amber-tint); border-left-color: var(--amber); }
+.strip b { font: 600 13px/1.3 var(--font-mono); }
 .strip .name, .strip .state {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.strip .name { font-size: 13px; }
-.strip .state { grid-column: 2 / 4; font-size: 13px; color: var(--strip-muted); }
-.strip .chip {
-  grid-row: 1 / 3;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  background: var(--sea);
-  border-radius: 2px;
-}
+.strip .state { grid-column: 2 / 4; font-size: 12.5px; color: var(--muted); }
+.strip .chip { grid-row: 1 / 3; display: grid; place-items: center; }
 
-/* One shape per category, so a marker never depends on colour alone. */
+/* One shape per category, growing with severity, so colour is never the only signal. */
 .mark {
   display: inline-block;
   flex: none;
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+}
+.mark.vfr { background: var(--vfr); clip-path: circle(30%); }
+.mark.mvfr { background: var(--mvfr); clip-path: inset(20%); }
+.mark.ifr { background: var(--ifr); clip-path: polygon(50% 4%, 96% 50%, 50% 96%, 4% 50%); }
+.mark.lifr { background: var(--lifr); clip-path: polygon(50% 2%, 100% 88%, 0 88%); }
+.mark.unknown {
   width: 12px;
   height: 12px;
-  vertical-align: -1px;
-}
-.mark.vfr { background: var(--vfr); border-radius: 50%; }
-.mark.mvfr { background: var(--mvfr); }
-.mark.ifr { background: var(--ifr); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
-.mark.lifr { background: var(--lifr); clip-path: polygon(50% 0, 100% 100%, 0 100%); }
-.mark.unknown {
-  border: 1.5px solid var(--unknown);
+  margin: 1px;
+  border: 1.5px dashed var(--unknown);
   border-radius: 50%;
-  background: repeating-linear-gradient(
-    45deg, var(--unknown) 0 1px, transparent 1px 3px
-  );
 }
 
+/* Centre */
 .chart { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .chart-tools, .legend {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 16px;
-  padding: 8px 12px;
+  gap: 8px 20px;
+  padding: 9px 16px;
 }
-.segmented { display: flex; margin: 0; padding: 0; border: 0; }
+.chart-tools { border-bottom: 1px solid var(--line); }
+.legend { gap: 4px 18px; border-top: 1px solid var(--line); }
+.segmented { display: flex; margin: 0; padding: 0; border: 1px solid var(--control); }
 .segmented legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .segmented input { position: absolute; opacity: 0; }
-.segmented span {
-  display: block;
-  padding: 5px 12px;
-  border: 1px solid var(--rule);
-  cursor: pointer;
-}
-.segmented label + label span { border-left: 0; }
-.segmented input:checked + span { color: var(--strip-ink); background: var(--strip); }
-.segmented input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 2px; }
+.segmented span { display: block; padding: 4px 14px; cursor: pointer; }
+.segmented input:checked + span { color: var(--void); background: var(--amber); font-weight: 600; }
+.segmented input:focus-visible + span { outline: 2px solid var(--amber); outline-offset: 2px; }
 .check, .pick { display: flex; align-items: center; gap: 6px; }
+.check input { accent-color: var(--amber); }
 select {
   min-height: 32px;
-  color: var(--text);
-  background: var(--sea);
-  border: 1px solid var(--rule);
+  padding: 4px 8px;
+  background: var(--panel);
+  border: 1px solid var(--control);
 }
 .note, .legend-note, .sub { color: var(--muted); }
-.note { font-size: 14px; }
-.canvas-wrap { position: relative; min-height: 0; background: var(--bay); }
+.note, .legend-note { font-size: 12.5px; }
+
+.stage { position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--void); }
+.canvas-wrap { position: relative; flex: 1; min-height: 0; }
 canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 canvas.dragging { cursor: grabbing; }
 .tip {
@@ -175,59 +200,106 @@ canvas.dragging { cursor: grabbing; }
   z-index: 2;
   max-width: 260px;
   padding: 5px 8px;
-  color: var(--strip-ink);
-  background: var(--strip);
+  background: var(--raised);
+  border: 1px solid var(--control);
   pointer-events: none;
 }
-.key { display: inline-flex; align-items: center; gap: 5px; }
+.key { display: inline-flex; align-items: center; gap: 6px; font: 12.5px/1.4 var(--font-mono); }
 .legend-note { margin-left: auto; }
 
-.detail h2 { font-size: 26px; line-height: 1.1; }
-.detail #detail-empty h2 { font-size: 16px; }
+/* The last-update badge. An opaque panel, so its contrast does not depend on the map. */
+.last-update {
+  position: absolute;
+  z-index: 1;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--control);
+  font: 12.5px/1.4 var(--font-mono);
+  pointer-events: none;
+}
+.last-update[data-side="left"] { right: auto; left: 10px; }
+.last-update[data-state="no_data"] { border-style: dashed; }
+.last-update[data-state="stale"] { border: 2px solid var(--amber); }
+.last-update p[data-state="stale"] { color: var(--amber); font-weight: 600; }
+.last-update .source { display: inline-block; min-width: 9ch; color: var(--muted); font-weight: 400; }
+
+/* Selected airport */
+.detail #d-title { font: 600 34px/1.05 var(--font-mono); color: var(--type); }
+.detail #detail-empty h2 { font-size: 15px; color: var(--type); }
 .detail #detail-empty p { margin-top: 4px; color: var(--muted); }
+#d-name { margin-top: 3px; font-size: 14.5px; }
 .facts {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 6px 12px;
-  margin: 12px 0;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 14px 0;
 }
-.facts dt { color: var(--muted); }
+.facts dt { padding-top: 2px; font-size: 12px; color: var(--muted); }
 .facts dd .mark { margin-right: 6px; }
 .raw {
-  margin-bottom: 12px;
-  padding: 6px 8px;
+  margin-bottom: 14px;
+  padding: 9px 11px;
   overflow-wrap: anywhere;
-  color: var(--strip-ink);
-  background: var(--strip);
+  background: var(--raised);
+  font: 12.5px/1.5 var(--font-mono);
 }
 .raw:empty { display: none; }
-#triage-result { margin-top: 12px; }
-#triage-result ul, #d-unknowns { margin-top: 6px; display: grid; gap: 6px; }
-#triage-result li, #d-unknowns li { padding-left: 10px; border-left: 2px solid var(--rule); }
+#triage { width: 100%; font-weight: 600; }
+#triage-result { margin-top: 14px; }
+#triage-result h3 { color: var(--type); font-size: 14px; }
+#triage-result ul, #d-unknowns { margin-top: 6px; }
+#triage-result li, #d-unknowns li { padding: 7px 0; border-top: 1px solid var(--grid); font-size: 13px; }
 #triage-result .sub { margin-top: 6px; }
-details { margin-top: 12px; }
-summary { cursor: pointer; }
+details { margin-top: 14px; }
+summary { color: var(--muted); font-size: 12px; cursor: pointer; }
 
+/* Governance strip */
 .governance {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  border-top: 1px solid var(--rule);
+  background: var(--panel);
+  border-top: 1px solid var(--line);
 }
-.governance div { padding: 6px 12px; border-left: 1px solid var(--rule); }
+.governance div { padding: 8px 16px 9px; border-left: 1px solid var(--line); }
 .governance div:first-child { border-left: 0; }
-.governance span { display: block; font-size: 13px; color: var(--muted); }
-.governance b { font-size: 16px; font-weight: 600; }
+.governance span { display: block; font-size: 12px; color: var(--muted); }
+.governance b { font: 500 15px/1.25 var(--font-mono); overflow-wrap: anywhere; }
 
-@media (max-width: 1050px) {
+@media (max-width: 1180px) {
   html, body { height: auto; }
   body { display: block; }
-  .layout { grid-template-columns: minmax(0, 1fr); }
-  .chart { order: -1; }
-  .canvas-wrap { height: 58vh; }
-  .bay, .detail { border: 0; border-top: 1px solid var(--rule); overflow: visible; }
-  .strips { max-height: 300px; overflow-y: auto; }
-  .governance { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .governance div { border-left: 0; border-top: 1px solid var(--rule); }
-  .topline { padding-inline: 16px; }
+  .layout { grid-template-columns: 250px minmax(0, 1fr); }
+  .bay { max-height: 66vh; }
+  .stage { height: 66vh; min-height: 360px; }
+  .detail { grid-column: 1 / 3; overflow: visible; border-left: 0; border-top: 1px solid var(--line); }
   .legend-note { margin-left: 0; }
+}
+
+/* On a phone the badge leaves the map, so it can never cover a marker or a label. */
+@media (max-width: 760px) {
+  .topline { flex-wrap: wrap; gap: 8px 12px; padding: 8px 16px; }
+  .banner { order: 3; flex: 1 1 100%; text-align: center; }
+  .layout { display: flex; flex-direction: column; }
+  .chart { order: 1; display: block; }
+  .detail { order: 2; padding: 16px; }
+  .bay { order: 3; max-height: none; border-right: 0; border-top: 1px solid var(--line); }
+  .strips { max-height: 300px; overflow-y: auto; }
+  .stage { height: auto; min-height: 0; }
+  .canvas-wrap { flex: none; height: min(100vw, 60vh); }
+  .last-update {
+    position: static;
+    padding: 6px 16px;
+    border-width: 0 0 1px;
+    font-size: 13px;
+  }
+  .last-update[data-state="stale"] { border-width: 2px 0; }
+  .governance { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .governance div { border-left: 0; border-top: 1px solid var(--grid); }
+  .governance div:nth-child(even) { border-left: 1px solid var(--line); }
+  .governance div:first-child, .governance div:nth-child(2) { border-top: 0; }
+  .governance div:last-child { grid-column: 1 / 3; }
 }

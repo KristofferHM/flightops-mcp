@@ -1,4 +1,13 @@
-:root { color-scheme: dark; }
+/* Served before sign-in, when board.css is out of reach, so it repeats the few radar
+   tokens it needs. A test holds these values equal to the ones in board.css. */
+:root {
+  color-scheme: dark;
+  --void: #070C11;
+  --panel: #0A1117;
+  --control: #35505F;
+  --type: #DCE7EC;
+  --amber: #E8A133;
+}
 body {
   display: grid;
   min-height: 100vh;
@@ -6,15 +15,16 @@ body {
   place-items: center;
   padding: 16px;
   box-sizing: border-box;
-  color: #e4ebe6;
-  background: #0d1b24;
-  font: 16px/1.4 Bahnschrift, "DIN Alternate", "Roboto Condensed", "Arial Narrow", sans-serif;
+  color: var(--type);
+  background: var(--void);
+  font: 16px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+    "Helvetica Neue", Roboto, "Noto Sans", Arial, sans-serif;
 }
 main { width: min(320px, 100%); }
 h1 { margin: 0 0 16px; font-size: 24px; font-weight: 600; }
 form { display: grid; gap: 8px; }
-input, button { min-height: 42px; padding: 6px 10px; font: inherit; border-radius: 3px; }
-input { color: #e4ebe6; background: #11222d; border: 1px solid #33505f; }
-button { color: #14232c; background: #d9dfd2; border: 1px solid #b4bdae; cursor: pointer; }
-:focus-visible { outline: 2px solid #f3d36b; outline-offset: 2px; }
-p { color: #f3d36b; }
+input, button { min-height: 42px; padding: 6px 10px; font: inherit; border-radius: 0; }
+input { color: var(--type); background: var(--panel); border: 1px solid var(--control); }
+button { color: var(--amber); background: transparent; border: 1px solid var(--amber); cursor: pointer; }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+p { color: var(--amber); }
