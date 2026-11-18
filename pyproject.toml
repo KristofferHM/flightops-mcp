@@ -108,7 +108,7 @@ branch = true
 source = ["src/flightops_mcp", "agent", "evals", "services", "scripts", "dashboard"]
 
 [tool.coverage.report]
-fail_under = 89
+fail_under = 90
 precision = 2
 show_missing = true
 skip_covered = true
@@ -122,11 +122,12 @@ exclude_also = [
 # Mutation testing (docs/QUALITY.md, section 3). CI only, on Linux: mutmut forks per
 # mutant. Scoped to the code where a wrong answer is a security or money answer.
 [tool.mutmut]
-source_paths = ["src/", "agent/"]
+source_paths = ["src/", "agent/", "dashboard/"]
 only_mutate = [
     "src/flightops_mcp/auth/*",
     "src/flightops_mcp/credits.py",
     "agent/approval.py",
+    "dashboard/board.py",
 ]
 also_copy = ["services/", "evals/", "scripts/", "data/"]
 # The tests that exercise those modules, not the whole suite.
@@ -147,6 +148,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_jwks_contract.py",
     "tests/test_obo_contract.py",
     "tests/test_auth_contract.py",
+    "tests/test_dashboard.py",
+    "tests/test_board_views.py",
     # A static scan of the source text for clients without the passthrough guard. mutmut's
     # instrumented copy contains every mutant side by side, including those that drop the
     # guard, so the scan fails before any mutant runs. It still runs in the normal suite.
@@ -155,8 +158,8 @@ pytest_add_cli_args_test_selection = [
 ]
 pytest_add_cli_args = ["-p", "no:cacheprovider"]
 
-# The survivor ceiling scripts/mutation_gate.py enforces: run 4 (CI 44121537739) left 90,
-# each judged in docs/MUTATION-SURVIVORS.md. Lowered when a survivor is
+# The survivor ceiling scripts/mutation_gate.py enforces: 90 from run 4 (CI 44121537739) plus 10
+# from dashboard/board.py, each judged in docs/MUTATION-SURVIVORS.md. Lowered when a survivor is
 # killed, never raised to let a new one through without a line in docs/QUALITY.md.
 [tool.mutation-gate]
-ceiling = 90
+ceiling = 100

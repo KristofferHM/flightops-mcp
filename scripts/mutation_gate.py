@@ -4,8 +4,8 @@
     uv run mutmut run
     uv run python scripts/mutation_gate.py --report mutation-report.md
 
-Reads `mutmut results` and `mutmut show` for every mutant that was not killed, writes
-them to a Markdown report with their diffs, and fails when:
+Reads `mutmut results`, and with `--report` also `mutmut show` for every mutant that was
+not killed, written to a Markdown report with their diffs. Fails when:
 
 * more mutants survived than `[tool.mutation-gate] ceiling` in pyproject.toml allows
   ("no tests" counts as surviving: no test ran the line, so none could fail);
@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tomllib
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,8 @@ KILLED = frozenset({"killed", "timeout", "caught by type check"})
 # Statuses that mean no test failed. `suspicious` is a mutant whose run behaved
 # unlike either outcome; it is counted against the ceiling rather than forgiven.
 SURVIVING = frozenset({"survived", "no tests", "suspicious"})
+# `mutmut show` is one interpreter start per survivor, and that was the gate's whole runtime.
+SHOW_WORKERS = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,15 +110,19 @@ def _mutmut(*args: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--report", type=Path, required=True)
+    # Optional because the verdict does not need the diffs, and they are the slow part.
+    parser.add_argument("--report", type=Path)
     parser.add_argument("--pyproject", type=Path, default=Path("pyproject.toml"))
     args = parser.parse_args(argv)
 
     verdict = judge(
         parse_results(_mutmut("results", "--all", "true")), ceiling_from(args.pyproject)
     )
-    diffs = {name: _mutmut("show", name) for name in verdict.survivors}
-    args.report.write_text(render(verdict, diffs), encoding="utf-8")
+    if args.report is not None:
+        with ThreadPoolExecutor(max_workers=SHOW_WORKERS) as pool:
+            shown = pool.map(lambda name: _mutmut("show", name), verdict.survivors)
+            diffs = dict(zip(verdict.survivors, shown, strict=True))
+        args.report.write_text(render(verdict, diffs), encoding="utf-8")
 
     print(f"counts: {_describe(verdict.counts)}")
     print(f"surviving: {len(verdict.survivors)} (ceiling {verdict.ceiling})")

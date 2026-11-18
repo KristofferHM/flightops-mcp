@@ -38,3 +38,6 @@ eval-runs/
 .claude/settings.local.json
 .hypothesis/
 mutants/
+
+# The accessibility gate's pinned tools (scripts/package-lock.json is committed)
+node_modules/
