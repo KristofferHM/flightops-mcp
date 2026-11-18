@@ -149,6 +149,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_obo_contract.py",
     "tests/test_auth_contract.py",
     "tests/test_dashboard.py",
+    "tests/test_board_views.py",
     # A static scan of the source text for clients without the passthrough guard. mutmut's
     # instrumented copy contains every mutant side by side, including those that drop the
     # guard, so the scan fails before any mutant runs. It still runs in the normal suite.
