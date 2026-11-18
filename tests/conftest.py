@@ -119,6 +119,8 @@ def settings(tmp_path: Path) -> Settings:
         _env_file=None,  # type: ignore[call-arg]
         opensky_client_id="test-client",
         opensky_client_secret="test-secret",
+        schiphol_client_id="test-schiphol-client",
+        schiphol_client_secret="test-schiphol-secret",
         airports_db=tmp_path / "airports.sqlite3",
         backoff_base_s=0.0,
         max_retries=2,

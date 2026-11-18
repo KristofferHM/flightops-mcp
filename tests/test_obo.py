@@ -12,6 +12,7 @@ import base64
 import json
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -110,6 +111,22 @@ class Stack:
 
 @pytest.fixture
 async def stack(settings: Settings) -> AsyncIterator[Stack]:
+    # These tests count exchanges and downstream calls per request. The result
+    # cache would answer repeats without either, which is its job and is tested
+    # below with `cached_stack`; here it would hide what is being counted.
+    async with _stack(settings, cache_enabled=False) as built:
+        yield built
+
+
+@pytest.fixture
+async def cached_stack(settings: Settings) -> AsyncIterator[Stack]:
+    """The same stack with the result cache on, as the server ships."""
+    async with _stack(settings, cache_enabled=True) as built:
+        yield built
+
+
+@asynccontextmanager
+async def _stack(settings: Settings, *, cache_enabled: bool) -> AsyncIterator[Stack]:
     idp = LocalIdp()
     manifests = {**DEFAULT_MANIFESTS, "SK7777": [CANARY_ROW]}
     ops_app = create_app(
@@ -125,6 +142,7 @@ async def stack(settings: Settings) -> AsyncIterator[Stack]:
             "auth_client_secret": idp.secrets[SERVER],
             "ops_api_base_url": OPS_URL,
             "ops_api_audience": OPS_AUDIENCE,
+            "cache_enabled": cache_enabled,
         }
     )
     install(configured)  # builds the airport database
@@ -302,6 +320,47 @@ async def test_a_refreshed_token_for_the_same_user_reuses_the_exchange(stack: St
     await stack.impact(second)
 
     assert stack.exchanges == 1
+
+
+# --- the result cache: private means one identity -------------------------------
+async def test_a_private_result_is_never_served_to_another_identity(
+    cached_stack: Stack,
+) -> None:
+    """`flight_passenger_impact` is `cacheScope: private`. Five users ask ten times each,
+    concurrently: each user's first call reaches the ops API as that user, the other
+    nine are answered from that user's own entry, and no user is answered from
+    another's."""
+    users = [f"user-{index}" for index in range(5)]
+    tokens = {user: await cached_stack.user(user) for user in users}
+
+    payloads = await asyncio.gather(
+        *(cached_stack.impact(tokens[users[index % 5]]) for index in range(50))
+    )
+
+    assert all(payload["ok"] for payload in payloads)
+    # Exactly one downstream read per identity: never zero (served from someone
+    # else's entry) and never more (the cache did nothing).
+    assert Counter(entry["user"] for entry in cached_stack.audit) == dict.fromkeys(users, 1)
+    assert sum(1 for payload in payloads if (payload.get("cache") or {}).get("hit")) == 45
+    assert {claims_of(bearer)["sub"] for bearer in cached_stack.ops.bearers} == set(users)
+
+
+async def test_a_cached_private_result_is_not_served_to_a_narrower_token_of_the_same_user(
+    cached_stack: Stack,
+) -> None:
+    """The partition is subject, client and granted scopes. A token that carries less
+    is a different authorization context, so it is asked about afresh."""
+    wide = await cached_stack.user("user-9", scope=f"{PASSENGERS_READ} {CREW_READ}")
+    narrow = await cached_stack.user("user-9", scope=PASSENGERS_READ)
+
+    first = await cached_stack.impact(wide)
+    again = await cached_stack.impact(wide)
+    other = await cached_stack.impact(narrow)
+
+    assert "cache" not in first
+    assert again["cache"] == {"hit": True, "ttl_ms": 30_000, "scope": "private"}
+    assert "cache" not in other
+    assert [entry["user"] for entry in cached_stack.audit] == ["user-9", "user-9"]
 
 
 # --- failure paths on demand ---------------------------------------------------

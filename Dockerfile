@@ -24,6 +24,14 @@ FROM python:3.12-slim AS runtime
 
 # Non-root by default: an MCP server holds upstream credentials, so a container
 # escape is not the only thing to defend against — a writable /usr is too.
+#
+# First, Debian security fixes that landed after the base image was published. The image scan
+# in CI gates on fixable HIGH and CRITICAL findings; this is what keeps "fixable" from meaning
+# "fixed in Debian, not in our image" (docs/SECURITY.md, ADR 0006).
+RUN apt-get update \
+    && apt-get upgrade --yes --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system --gid 1001 flightops \
     && useradd --system --uid 1001 --gid flightops --create-home flightops
 

@@ -192,6 +192,32 @@ def airport_movements(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Ob
     return f"{icao}: {counted} estimated from ADS-B. These are estimates, not a schedule."
 
 
+def schiphol_schedule(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Count Schiphol's published flights in a window. EHAM only: nothing to resolve."""
+    arguments: dict[str, Any] = {"direction": params.get("direction", "both")}
+    if "window_minutes" in params:
+        arguments["window_minutes"] = params["window_minutes"]
+    (schedule,) = yield [("schiphol_flights", arguments)]
+    if not schedule.ok:
+        return (
+            f"Schiphol's schedule is unavailable ({schedule.code}). What is due at EHAM is unknown."
+        )
+    unknowns = schedule.payload.get("unknowns") or []
+    if unknowns:
+        return (
+            f"Schiphol's schedule is unknown in part: {len(unknowns)} gap(s) in the published "
+            "data. That is not evidence that nothing is due."
+        )
+    counts = schedule.payload.get("counts") or {}
+    parts = [
+        f"{c.get('listed')} {which}(s) listed, {c.get('cancelled')} cancelled, "
+        f"{c.get('diverted')} diverted, {c.get('delayed')} delayed"
+        for which, c in sorted(counts.items())
+        if isinstance(c, dict)
+    ]
+    return f"EHAM: {'; '.join(parts)}. A published schedule, not observed movements."
+
+
 def airport_triage(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
     """Resolve an airport and run the composite triage. Severity is quoted, never upgraded."""
     icao, miss = yield from _resolve(params["airport"])
@@ -283,6 +309,7 @@ POLICIES: Final[dict[str, Policy]] = {
     "airport_traffic": airport_traffic,
     "airport_movements": airport_movements,
     "airport_triage": airport_triage,
+    "schiphol_schedule": schiphol_schedule,
     "passenger_impact": passenger_impact,
     "upstream_check": upstream_check,
     "decline": decline,

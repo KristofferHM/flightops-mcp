@@ -1,0 +1,132 @@
+{
+  "config": {
+    "rps": 50.0,
+    "duration_s": 60.0,
+    "requests_scheduled": 3000,
+    "connections": 100,
+    "mix": [
+      "resolve_airport",
+      "airport_weather",
+      "airport_live_traffic",
+      "airport_weather",
+      "airport_movements",
+      "schiphol_flights",
+      "airport_live_traffic",
+      "disruption_triage",
+      "resolve_airport",
+      "upstream_status"
+    ],
+    "airports": [
+      "ESGG",
+      "ESSA",
+      "EKCH",
+      "ENGM",
+      "EHAM",
+      "EGLL",
+      "EDDF",
+      "LFPG"
+    ],
+    "mock_latency_ms": 25.0
+  },
+  "machine": {
+    "platform": "Windows-10-10.0.19044-SP0",
+    "processor": "Intel64 Family 6 Model 142 Stepping 9, GenuineIntel",
+    "logical_cpus": 4,
+    "python": "3.12.12",
+    "note": "load generator, server, IdP and mock upstream all on this one machine"
+  },
+  "timing": {
+    "sending_s": 59.97,
+    "wall_s": 59.99,
+    "achieved_send_rps": 50.0,
+    "max_send_lag_ms": 8.7
+  },
+  "requests": {
+    "completed": 3000,
+    "ok": 3000,
+    "failed": 0,
+    "error_rate": 0.0,
+    "of_which_answered_tool_errors": 0,
+    "outcomes": {
+      "ok": 3000
+    }
+  },
+  "latency_ms_from_schedule": {
+    "p50": 10.1,
+    "p95": 41.1,
+    "p99": 67.7,
+    "max": 149.9
+  },
+  "latency_ms_from_send": {
+    "p50": 7.5,
+    "p95": 33.2,
+    "p99": 57.7
+  },
+  "latency_ms_by_tool": {
+    "airport_live_traffic": {
+      "n": 600,
+      "p50": 14.6,
+      "p95": 58.5
+    },
+    "airport_movements": {
+      "n": 300,
+      "p50": 10.3,
+      "p95": 35.0
+    },
+    "airport_weather": {
+      "n": 600,
+      "p50": 7.9,
+      "p95": 34.7
+    },
+    "disruption_triage": {
+      "n": 300,
+      "p50": 8.9,
+      "p95": 38.7
+    },
+    "resolve_airport": {
+      "n": 600,
+      "p50": 9.2,
+      "p95": 32.4
+    },
+    "schiphol_flights": {
+      "n": 300,
+      "p50": 10.0,
+      "p95": 40.7
+    },
+    "upstream_status": {
+      "n": 300,
+      "p50": 8.9,
+      "p95": 30.2
+    }
+  },
+  "spend": {
+    "opensky_credits": 160.0,
+    "by_upstream": {
+      "flightops_upstream_credits_spent_total{upstream=\"opensky\"}": 160.0,
+      "flightops_upstream_credits_spent_total{upstream=\"schiphol\"}": 2.0
+    },
+    "cache": {
+      "flightops_cache_requests_total{outcome=\"coalesced\",tool=\"airport_movements\"}": 5.0,
+      "flightops_cache_requests_total{outcome=\"coalesced\",tool=\"airport_weather\"}": 8.0,
+      "flightops_cache_requests_total{outcome=\"hit\",tool=\"airport_live_traffic\"}": 804.0,
+      "flightops_cache_requests_total{outcome=\"hit\",tool=\"airport_movements\"}": 587.0,
+      "flightops_cache_requests_total{outcome=\"hit\",tool=\"airport_weather\"}": 884.0,
+      "flightops_cache_requests_total{outcome=\"hit\",tool=\"resolve_airport\"}": 592.0,
+      "flightops_cache_requests_total{outcome=\"hit\",tool=\"schiphol_flights\"}": 299.0,
+      "flightops_cache_requests_total{outcome=\"miss\",tool=\"airport_live_traffic\"}": 96.0,
+      "flightops_cache_requests_total{outcome=\"miss\",tool=\"airport_movements\"}": 8.0,
+      "flightops_cache_requests_total{outcome=\"miss\",tool=\"airport_weather\"}": 8.0,
+      "flightops_cache_requests_total{outcome=\"miss\",tool=\"resolve_airport\"}": 8.0,
+      "flightops_cache_requests_total{outcome=\"miss\",tool=\"schiphol_flights\"}": 1.0
+    },
+    "upstream_requests_served_by_mock": {
+      "noaa.metar_requests": 8,
+      "noaa.taf_requests": 8,
+      "opensky.arrival_requests": 8,
+      "opensky.departure_requests": 8,
+      "opensky.states_requests": 96,
+      "opensky.token_requests": 1,
+      "schiphol.flight_requests": 2
+    }
+  }
+}

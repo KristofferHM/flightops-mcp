@@ -58,6 +58,7 @@ from .auth.approval import (
     approval_invalid,
     approval_required,
 )
+from .cache import LIST_CACHE_HINTS, cached
 from .config import Settings
 from .errors import (
     ToolFailure,
@@ -72,6 +73,7 @@ from .otel import configure_tracing, tracer, tracing_kind
 from .rebooking import Proposal, approved_digest, build_proposal
 from .resilience import breakers, configure_breakers
 from .runtime import Runtime, get_runtime
+from .schiphol import DIRECTIONS as SCHIPHOL_DIRECTIONS
 from .telemetry import REGISTRY as METRICS_REGISTRY
 from .telemetry import TOOL_CALLS, configure_logging, get_logger
 from .weather import fleet_impact_flags
@@ -104,6 +106,11 @@ complete on your say-so. It answers with a request for a human approval; a perso
 other than the user you act for must approve the exact proposal. If the approval \
 is refused, missing or declined, report that and stop. Never try to supply, guess \
 or work around an approval.
+8. `schiphol_flights` reads Amsterdam Schiphol's published schedule. It is a \
+schedule, not an observation: compare it with `airport_movements` before saying \
+a flight has operated.
+9. A payload with `cache.hit: true` was served from this server's cache. Its \
+`as_of` is when the data was fetched; a repeat inside the TTL costs no credits.
 """
 
 _log = get_logger(__name__)
@@ -183,10 +190,14 @@ def tool(fn: Any) -> Any:
     """Guard a tool function and add it to the registry every server is built from.
 
     Registration fails for a tool with no entry in the scope table, so a new tool
-    cannot ship unprotected by omission.
+    cannot ship unprotected by omission, and likewise for the cache hint table, so
+    a new tool is never cached (or left uncached) by default.
+
+    The cache sits inside `guarded` and, on the HTTP server, inside `scoped`: the
+    scope is checked before the cache is consulted, every time.
     """
     Scopes.for_tool(fn.__name__)
-    wrapped: ToolFn = guarded(fn)
+    wrapped: ToolFn = guarded(cached(fn, cache=lambda: get_runtime().cache))
     _TOOLS.append(wrapped)
     return wrapped
 
@@ -600,6 +611,91 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
 
 
 @tool
+async def schiphol_flights(direction: str = "both", window_minutes: int = 120) -> dict[str, Any]:
+    """Amsterdam Schiphol's published schedule: flights due in the next window, with state.
+
+    Reads the Schiphol Public Flight API (v4) as this server, with its own OAuth2
+    client. EHAM only. A schedule is what the airport has published, not what has
+    happened: a flight listed here may not have operated. Counts cancelled,
+    diverted and delayed flights (delayed: state DEL, or an estimate 15 min or more
+    after schedule). One request per page of 20 flights, charged to a local
+    per-hour request budget; no OpenSky credits.
+
+    This adapter has been exercised only against a mock of Schiphol's documented
+    API, never with a live key.
+
+    Args:
+        direction: "arrival", "departure", or "both".
+        window_minutes: How far ahead of now to look, in minutes (15-720).
+    """
+    runtime = get_runtime()
+    wanted = direction.lower().strip()
+    if wanted not in {*SCHIPHOL_DIRECTIONS, "both"}:
+        raise ToolFailure(
+            code="invalid_argument",
+            message="direction must be 'arrival', 'departure' or 'both'",
+            hint="Use 'both' if you are unsure; it costs twice the requests of one direction.",
+        )
+    window = max(15, min(720, window_minutes))
+    begin = runtime.data_clock()
+    end = begin + window * 60
+    directions = ["arrival", "departure"] if wanted == "both" else [wanted]
+
+    flights: dict[str, list[dict[str, Any]]] = {}
+    counts: dict[str, dict[str, int]] = {}
+    unknowns: list[str] = []
+    requests = 0
+    for which in directions:
+        schedule = await runtime.schiphol.schedule(which, begin=begin, end=end)
+        requests += schedule.requests
+        flights[which] = [flight.to_payload() for flight in schedule.flights]
+        counts[which] = {
+            "listed": len(schedule.flights),
+            "cancelled": sum(1 for f in schedule.flights if f.cancelled),
+            "diverted": sum(1 for f in schedule.flights if f.diverted),
+            "delayed": sum(1 for f in schedule.flights if f.delayed),
+        }
+        if schedule.unreadable:
+            unknowns.append(
+                f"{schedule.unreadable} of {schedule.received} {which} rows in Schiphol's answer "
+                "were not readable flights. The counts cover only the readable ones."
+            )
+        if schedule.truncated:
+            unknowns.append(
+                f"More {which} pages exist than the {runtime.settings.schiphol_max_pages} "
+                "fetched. The counts are a lower bound for the window."
+            )
+        if not schedule.flights and not schedule.unreadable:
+            unknowns.append(
+                f"No {which}s listed in this window. That can be a quiet period or a gap in "
+                "the published schedule; it is not evidence that nothing is moving."
+            )
+
+    return {
+        "ok": True,
+        "as_of": _iso_now(runtime.data_clock),
+        "airport": {"icao": "EHAM", "iata": "AMS", "name": "Amsterdam Airport Schiphol"},
+        "window": {"begin_epoch": int(begin), "end_epoch": int(end), "minutes": window},
+        "counts": counts,
+        "flights": flights,
+        "bookkeeping": {
+            "credits_spent": requests,
+            "unit": "requests",
+            "requests_this_hour": runtime.schiphol.requests_this_hour,
+            "local_budget_per_hour": runtime.schiphol.budget_per_hour,
+        },
+        "unknowns": unknowns,
+        "source": {
+            "name": "Schiphol Public Flight API",
+            "endpoint": "/public-flights/v4/flights",
+            "caveat": "Published schedule and states, not observed movements",
+            "verification": "Adapter built to the vendor's documented shape and tested "
+            "against a mock of it; not yet run against the live API.",
+        },
+    }
+
+
+@tool
 async def upstream_status() -> dict[str, Any]:
     """Report upstream health, credit spend and credential state.
 
@@ -612,6 +708,7 @@ async def upstream_status() -> dict[str, Any]:
         "as_of": _iso_now(runtime.clock),
         "credentials": {
             "opensky_configured": runtime.opensky._tokens.has_credentials(),  # noqa: SLF001
+            "schiphol_configured": runtime.schiphol.configured,
             "aviationweather_required": False,
         },
         "budget": {
@@ -619,6 +716,12 @@ async def upstream_status() -> dict[str, Any]:
             "credits_spent_this_process": runtime.opensky.credits_spent_total,
             "local_budget_per_hour": runtime.settings.credit_budget_per_hour,
             "upstream_remaining_last_seen": runtime.opensky.last_credits_remaining,
+            "schiphol_requests_this_hour": runtime.schiphol.requests_this_hour,
+            "schiphol_local_budget_per_hour": runtime.schiphol.budget_per_hour,
+        },
+        "cache": {
+            "enabled": runtime.settings.cache_enabled,
+            "entries": len(runtime.cache),
         },
         "token": {
             "cached": runtime.opensky.token_cached,
@@ -1019,8 +1122,12 @@ def create_server(
         auth=auth,
         token_verifier=token_verifier,
         request_state_security=request_state_security,
+        cache_hints=LIST_CACHE_HINTS,
     )
-    for fn in _TOOLS:
+    # Sorted by name, not registration order. A host puts the tool list near the top
+    # of a model's prompt, and a prompt cache only hits on an identical prefix: an
+    # order that followed import order would change when a module was reorganised.
+    for fn in sorted(_TOOLS, key=lambda tool_fn: tool_fn.__name__):
         server.add_tool(scoped(fn) if authenticated else fn)
     return server
 

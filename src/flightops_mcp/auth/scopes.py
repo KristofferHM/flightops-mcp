@@ -22,6 +22,10 @@ class Scopes:
     WEATHER_READ: Final = "flightops.weather.read"
     TRAFFIC_READ: Final = "flightops.traffic.read"
     STATUS_READ: Final = "flightops.status.read"
+    # Published airport schedules (Schiphol). Its own domain: a schedule is what an
+    # airport says will happen, traffic is what receivers heard, and an operator may
+    # grant one without the other.
+    SCHEDULE_READ: Final = "flightops.schedule.read"
     # Also the scope requested downstream when exchanging the user's token.
     PASSENGERS_READ: Final = "flightops.passengers.read"
     # The only write. Its own scope, not an extension of a read one: a token that can
@@ -43,6 +47,7 @@ class Scopes:
         # A composite needs everything its parts need. It calls them directly, so
         # this entry is the only check that stands between a caller and both.
         "disruption_triage": frozenset({WEATHER_READ, TRAFFIC_READ}),
+        "schiphol_flights": frozenset({SCHEDULE_READ}),
         "upstream_status": frozenset({STATUS_READ}),
         "flight_passenger_impact": frozenset({PASSENGERS_READ}),
         # Proposing needs the write scope alone. It reads no manifest itself: the

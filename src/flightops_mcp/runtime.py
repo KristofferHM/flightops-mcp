@@ -18,9 +18,11 @@ import httpx
 from .airports import AirportDB
 from .auth import ApprovalVerifier, build_approval_verifier
 from .auth.obo import OboExchanger
+from .cache import ToolCache
 from .config import Settings
 from .opensky import OpenSkyClient
 from .ops import OpsApiClient
+from .schiphol import SchipholClient
 from .weather import WeatherClient
 
 
@@ -29,10 +31,14 @@ class Runtime:
     settings: Settings
     opensky: OpenSkyClient
     weather: WeatherClient
+    schiphol: SchipholClient
     airports: AirportDB
     obo: OboExchanger
     ops: OpsApiClient
     approvals: ApprovalVerifier
+    # Tool results under their ttlMs/cacheScope hints. One per runtime, so a test or
+    # an eval scenario never sees another world's answers.
+    cache: ToolCache
     clock: Callable[[], float]
     # The instant upstream data is judged against: how old a METAR or a traffic
     # snapshot is, and which movement window to ask for. Separate from `clock`,
@@ -50,6 +56,8 @@ class Runtime:
         weather_transport: httpx.AsyncBaseTransport | None = None,
         idp_transport: httpx.AsyncBaseTransport | None = None,
         ops_transport: httpx.AsyncBaseTransport | None = None,
+        schiphol_transport: httpx.AsyncBaseTransport | None = None,
+        schiphol_token_transport: httpx.AsyncBaseTransport | None = None,
         sleep: Any = None,
         clock: Callable[[], float] = time.time,
         data_clock: Callable[[], float] | None = None,
@@ -69,11 +77,23 @@ class Runtime:
                 clock=clock,
             ),
             weather=WeatherClient(resolved, transport=weather_transport),
+            schiphol=SchipholClient(
+                resolved,
+                transport=schiphol_transport,
+                token_transport=schiphol_token_transport,
+                sleep=sleep,
+                clock=clock,
+            ),
             airports=AirportDB(resolved.airports_db),
             obo=OboExchanger(resolved, transport=idp_transport, clock=clock),
             ops=OpsApiClient(resolved, transport=ops_transport, sleep=sleep),
             # The grants are signed by the issuer the exchange already talks to.
             approvals=build_approval_verifier(resolved, jwks_transport=idp_transport, clock=clock),
+            cache=ToolCache(
+                max_entries=resolved.cache_max_entries,
+                enabled=resolved.cache_enabled,
+                clock=clock,
+            ),
             clock=clock,
             data_clock=data_clock or clock,
         )
@@ -81,6 +101,7 @@ class Runtime:
     async def aclose(self) -> None:
         await self.opensky.aclose()
         await self.weather.aclose()
+        await self.schiphol.aclose()
         await self.obo.aclose()
         await self.ops.aclose()
 

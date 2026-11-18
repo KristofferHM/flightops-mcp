@@ -15,16 +15,20 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import httpx
 from opentelemetry.trace import SpanKind
 
 from .auth.passthrough import refuse_inbound_token
 from .config import Settings
+from .errors import upstream_auth_failed, upstream_rate_limited, upstream_unavailable
 from .otel import inject_trace_headers, tracer
 from .resilience import breakers
 from .telemetry import UPSTREAM_LATENCY, UPSTREAM_REQUESTS, get_logger
+
+if TYPE_CHECKING:
+    from .opensky_token import ClientCredentialsTokenManager
 
 SleepFn = Callable[[float], Awaitable[None]]
 
@@ -312,3 +316,61 @@ def _safe_json(response: httpx.Response) -> object | None:
         return cast("object | None", response.json())
     except ValueError:
         return None
+
+
+async def authorized_get(
+    http: UpstreamHttp,
+    tokens: ClientCredentialsTokenManager,
+    path: str,
+    params: dict[str, object],
+    *,
+    upstream: str,
+    settings: Settings,
+    sleep: Callable[[float], Awaitable[None]],
+    empty_status: frozenset[int] = frozenset(),
+) -> HttpResponse | None:
+    """GET a bearer-authenticated endpoint under the one policy every upstream shares.
+
+    * A `401` drops the cached token and tries once more with a fresh one. A second
+      `401` is `upstream_auth_failed`: the credentials, not the token, are wrong.
+    * A `429` whose wait is within `max_rate_limit_wait_s` is waited out once; a
+      longer one, or a second `429`, is `upstream_rate_limited` carrying the wait.
+    * A status in `empty_status` is the upstream saying "nothing here" (OpenSky's
+      `404` for an empty window) and returns None. Any other error status is
+      `upstream_unavailable`, never an empty result.
+
+    OpenSky's client used to own this. The second adapter is why it moved: the
+    rate-limit contract is a governance rule, and a rule that lives in one
+    adapter is a rule the next adapter does not follow.
+    """
+    log = get_logger(__name__).bind(upstream=upstream)
+    for auth_attempt in range(2):
+        token = await tokens.token()
+        headers = {"Authorization": f"Bearer {token}"}
+        response = await http.request_json("GET", path, params=params, headers=headers)
+
+        if response.status_code == 401:
+            if auth_attempt == 0:
+                log.info("token_rejected_retrying", path=path)
+                tokens.invalidate()
+                continue
+            raise upstream_auth_failed(401, upstream)
+
+        if response.status_code == 429:
+            wait = retry_after_from_headers(response.headers)
+            remaining_header = response.headers.get("x-rate-limit-remaining")
+            if wait is None or wait > settings.max_rate_limit_wait_s:
+                raise upstream_rate_limited(upstream, wait, remaining_header)
+            log.info("rate_limited_waiting", wait_s=wait, path=path)
+            await sleep(wait)
+            response = await http.request_json("GET", path, params=params, headers=headers)
+            if response.status_code == 429:
+                raise upstream_rate_limited(upstream, wait, remaining_header)
+
+        if response.status_code in empty_status:
+            return None
+        if response.status_code >= 400:
+            raise upstream_unavailable(upstream, f"HTTP {response.status_code} for {path}")
+        return response
+
+    raise upstream_auth_failed(401, upstream)  # pragma: no cover

@@ -34,6 +34,9 @@ All on `/metrics`, all registered in `telemetry.py`.
 | `flightops_opensky_credits_remaining` | gauge | — | Last value the upstream reported in `X-Rate-Limit-Remaining`. |
 | `flightops_token_refreshes_total` | counter | `outcome` | `ok` should tick roughly every 30 minutes, not every minute. |
 | `flightops_circuit_open` | gauge | `upstream` | `1` means calls to that upstream are being refused without an attempt. |
+| `flightops_upstream_credits_spent_total` | counter | `upstream` | Metered units charged by the local ledger: OpenSky credits, Schiphol requests. |
+| `flightops_cache_requests_total` | counter | `tool`, `outcome` | `hit`, `miss`, `coalesced`, `bypass`. A falling hit rate under steady traffic means the questions changed, or the TTLs did. |
+| `flightops_cache_entries` | gauge | — | Tool results held. Bounded by `FLIGHTOPS_CACHE_MAX_ENTRIES` (1024). |
 
 ### Suggested alerts
 
@@ -77,13 +80,18 @@ Two different situations, distinguishable by `retry_after_s`:
 
 The in-process credit guard (`FLIGHTOPS_CREDIT_BUDGET_PER_HOUR`, default 400) stopped the call. This is
 a feature: one runaway agent loop must not drain the day's allowance. Look for a loop before raising
-the limit.
+the limit. Check the cache hit rate too: with `FLIGHTOPS_CACHE_ENABLED=false` the load test spends
+the whole 400 in under a minute (docs/LOAD-TEST.md). The error's `details` name the upstream's numbers;
+Schiphol has its own budget, `FLIGHTOPS_SCHIPHOL_REQUEST_BUDGET_PER_HOUR` (1200 requests).
 
 ### `credentials_missing`
 
 `FLIGHTOPS_OPENSKY_CLIENT_ID` / `_SECRET` are unset. Weather and reference tools keep working; traffic
 and movement tools cannot. Create the client in the OpenSky account page (the id ends in `-api-client`
-and is only valid for the REST API), then restart the server.
+and is only valid for the REST API), then restart the server. For `schiphol_flights` the variables are
+`FLIGHTOPS_SCHIPHOL_CLIENT_ID` / `_SECRET` (an application on developer.schiphol.nl); `details.upstream`
+says which. A Schiphol `upstream_auth_failed` with status 403 from the token endpoint is usually the
+wrong `FLIGHTOPS_SCHIPHOL_AUDIENCE` or an API the application is not subscribed to.
 
 ### `reference_data_missing` / `/readyz` failing
 
@@ -145,6 +153,7 @@ decision is respected downstream.
 | `FLIGHTOPS_OPENSKY_CLIENT_SECRET` | `.env` / secret store, never the repo | New API client in the OpenSky account page, update the value, restart. The old token stays valid until it expires (≤30 min). |
 | `DEV_MCP_CLIENT_SECRET` | `.env` (local IdP only) | Regenerate, update the IdP's `IDP_CLIENTS` and the server's `FLIGHTOPS_AUTH_CLIENT_SECRET`, restart both. Exchanges fail with `invalid_client` until they match. |
 | `DEV_AGENT_CLIENT_SECRET` | `.env` (local IdP only) | Same, for the test client that mints user tokens. |
+| `FLIGHTOPS_SCHIPHOL_CLIENT_SECRET` | `.env` / secret store, never the repo | New secret on the Schiphol portal (shown once), update, restart. The cached token is refreshed 60 s before its 30 minutes run out. |
 
 No secret is ever logged: the redaction pipeline strips `authorization`, `client_secret`, `access_token`,
 PII field names, bearer strings and JWTs, and `tests/test_redaction.py` proves it with canary values.
@@ -157,5 +166,9 @@ PII field names, bearer strings and JWTs, and `tests/test_redaction.py` proves i
 - **The IdP is a test fixture, not an identity provider.** `/dev/user-token` mints a token for any user
   without a sign-in. Never expose it beyond localhost.
 - **Logs go to stdout** as JSON with no retention of their own; ship them to your platform's log store.
-- **There is no write path.** Nothing here books, rebooks or cancels anything, so there is no
-  compensation or idempotency story to operate yet.
+- **One write path, with its idempotency in the ops API's memory.** `propose_rebooking` executes only
+  with a signed approval (ADR 0003), once per idempotency key, for the lifetime of the ops API process.
+- **The cache, the credit ledgers, the breakers and single flight are per process.** Two replicas have
+  two caches and two budgets; size `FLIGHTOPS_CREDIT_BUDGET_PER_HOUR` per replica accordingly.
+- **The Schiphol adapter has never seen the live API** (ADR 0005). Expect the first real run to find
+  something; read its `unknowns` and the mock's assumptions before trusting its counts.

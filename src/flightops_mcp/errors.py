@@ -61,14 +61,22 @@ def insufficient_scope(tool: str, required: Iterable[str], missing: Iterable[str
     )
 
 
-def missing_credentials() -> ToolFailure:
+def missing_credentials(
+    upstream: str = "OpenSky",
+    variables: tuple[str, str] = (
+        "FLIGHTOPS_OPENSKY_CLIENT_ID",
+        "FLIGHTOPS_OPENSKY_CLIENT_SECRET",
+    ),
+    signup: str = "free account: https://opensky-network.org",
+) -> ToolFailure:
     return ToolFailure(
         code="credentials_missing",
-        message="OpenSky credentials are not configured, so authenticated upstream calls "
+        message=f"{upstream} credentials are not configured, so authenticated upstream calls "
         "cannot be made.",
-        hint="Set FLIGHTOPS_OPENSKY_CLIENT_ID and FLIGHTOPS_OPENSKY_CLIENT_SECRET "
-        "(free account: https://opensky-network.org). Tools backed by "
+        hint=f"Set {variables[0]} and {variables[1]} "
+        f"({signup}). Tools backed by "
         "AviationWeather.gov and the local airport database keep working without them.",
+        details={"upstream": upstream},
     )
 
 

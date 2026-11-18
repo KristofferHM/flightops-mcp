@@ -31,15 +31,10 @@ import httpx
 
 from .config import Settings
 from .credits import CreditLedger
-from .errors import (
-    ToolFailure,
-    upstream_auth_failed,
-    upstream_rate_limited,
-    upstream_unavailable,
-)
-from .http import UpstreamHttp, credits_remaining_from_headers, retry_after_from_headers
+from .errors import ToolFailure, upstream_unavailable
+from .http import UpstreamHttp, authorized_get, credits_remaining_from_headers
 from .opensky_token import OpenSkyTokenManager
-from .telemetry import CREDITS_REMAINING, CREDITS_SPENT, get_logger
+from .telemetry import CREDITS_REMAINING, CREDITS_SPENT, UPSTREAM_CREDITS_SPENT, get_logger
 
 SleepFn = Callable[[float], Any]
 
@@ -243,6 +238,7 @@ class OpenSkyClient:
     def _charge(self, credits: int) -> None:
         self._ledger.charge(credits)
         CREDITS_SPENT.inc(credits)
+        UPSTREAM_CREDITS_SPENT.labels(upstream="opensky").inc(credits)
 
     @property
     def credits_spent_this_hour(self) -> int:
@@ -258,53 +254,25 @@ class OpenSkyClient:
 
     # --- requests -----------------------------------------------------------
     async def _authorized_get(self, path: str, params: dict[str, Any]) -> Any:
-        """GET an authenticated endpoint, handling 401 and 429 explicitly."""
-        for auth_attempt in range(2):
-            token = await self._tokens.token()
-            response = await self._http.request_json(
-                "GET",
-                path,
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-
-            if response.status_code == 401:
-                if auth_attempt == 0:
-                    self._log.info("token_rejected_retrying", path=path)
-                    self._tokens.invalidate()
-                    continue
-                raise upstream_auth_failed(401, "OpenSky")
-
-            if response.status_code == 429:
-                wait = retry_after_from_headers(response.headers)
-                remaining_header = response.headers.get("x-rate-limit-remaining")
-                if wait is not None and wait <= self._settings.max_rate_limit_wait_s:
-                    self._log.info("rate_limited_waiting", wait_s=wait, path=path)
-                    await (self._sleep or _default_sleep)(wait)
-                    response = await self._http.request_json(
-                        "GET",
-                        path,
-                        params=params,
-                        headers={"Authorization": f"Bearer {token}"},
-                    )
-                    if response.status_code == 429:
-                        raise upstream_rate_limited("OpenSky", wait, remaining_header)
-                else:
-                    raise upstream_rate_limited("OpenSky", wait, remaining_header)
-
-            if response.status_code == 404:
-                return None
-
-            if response.status_code >= 400:
-                raise upstream_unavailable("OpenSky", f"HTTP {response.status_code} for {path}")
-
-            remaining = credits_remaining_from_headers(response.headers)
-            if remaining is not None:
-                self.last_credits_remaining = remaining
-                CREDITS_REMAINING.set(float(remaining))
-            return response.json_body
-
-        raise upstream_auth_failed(401, "OpenSky")  # pragma: no cover
+        """GET an authenticated endpoint under the shared 401/429 policy (http.py)."""
+        response = await authorized_get(
+            self._http,
+            self._tokens,
+            path,
+            params,
+            upstream="OpenSky",
+            settings=self._settings,
+            sleep=self._sleep or _default_sleep,
+            # 404 is OpenSky's documented answer for "no flights in this interval".
+            empty_status=frozenset({404}),
+        )
+        if response is None:
+            return None
+        remaining = credits_remaining_from_headers(response.headers)
+        if remaining is not None:
+            self.last_credits_remaining = remaining
+            CREDITS_REMAINING.set(float(remaining))
+        return response.json_body
 
     async def states_in_bbox(self, bbox: BBox, *, max_vectors: int = 200) -> StatesSnapshot:
         cost = bbox.credit_cost
