@@ -30,7 +30,7 @@ jobs:
       - name: Ruff (format)
         run: uv run ruff format --check .
       - name: Mypy (strict)
-        run: uv run mypy src services agent evals
+        run: uv run mypy src services agent evals dashboard
 
   tests:
     name: tests (py${{ matrix.python }})

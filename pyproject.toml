@@ -45,6 +45,12 @@ dev = [
     { include-group = "services" },
     { include-group = "agent" },
     { include-group = "evals" },
+    { include-group = "dashboard" },
+]
+# The airport board. Not a runtime dependency of the server.
+dashboard = [
+    "fastapi>=0.163.0",
+    "uvicorn>=0.54.0",
 ]
 # The agent loop's model backends. Not a runtime dependency of the server, and
 # the offline backend imports none of it: the SDK is loaded only when the
@@ -99,7 +105,7 @@ ignore_missing_imports = true
 # goes up, in the same commit as the tests that raise it, never by excluding code.
 [tool.coverage.run]
 branch = true
-source = ["src/flightops_mcp", "agent", "evals", "services", "scripts"]
+source = ["src/flightops_mcp", "agent", "evals", "services", "scripts", "dashboard"]
 
 [tool.coverage.report]
 fail_under = 89

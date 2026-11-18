@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Airport board</title>
+  <link rel="stylesheet" href="/static/board.css">
+</head>
+<body>
+  <header class="topline">
+    <h1>Airport board</h1>
+    <p id="banner" class="banner" data-mode="NO DATA" role="status">NO DATA</p>
+    <form method="post" action="/logout"><button class="quiet" type="submit">Sign out</button></form>
+  </header>
+
+  <main class="layout">
+    <nav class="bay" aria-label="Airports">
+      <h2>Airports</h2>
+      <ul id="strips" class="strips"></ul>
+    </nav>
+
+    <section class="chart" aria-label="Map">
+      <div class="chart-tools">
+        <fieldset class="segmented">
+          <legend>Projection</legend>
+          <label><input type="radio" name="projection" value="map" checked><span>Map</span></label>
+          <label><input type="radio" name="projection" value="globe"><span>Globe</span></label>
+        </fieldset>
+        <label class="check"><input id="traffic-on" type="checkbox"> Show traffic (4 credits per refresh)</label>
+        <label class="pick">Region <select id="region"></select></label>
+        <span id="traffic-note" class="note" role="status"></span>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="map" role="img" aria-label="Map of the listed airports. The airport list holds the same information as text."></canvas>
+        <div id="tip" class="tip" hidden></div>
+      </div>
+      <div class="legend">
+        <span class="key"><i class="mark vfr"></i>VFR</span>
+        <span class="key"><i class="mark mvfr"></i>MVFR</span>
+        <span class="key"><i class="mark ifr"></i>IFR</span>
+        <span class="key"><i class="mark lifr"></i>LIFR</span>
+        <span class="key"><i class="mark unknown"></i>Unknown</span>
+        <span class="legend-note">Markers show weather only, not airport status.</span>
+      </div>
+    </section>
+
+    <aside class="detail" aria-label="Selected airport">
+      <div id="detail-empty"><h2>No airport selected</h2><p>Choose an airport from the list or the map.</p></div>
+      <div id="detail" hidden>
+        <h2 id="d-title"></h2>
+        <p id="d-name" class="sub"></p>
+        <dl class="facts">
+          <dt>Weather</dt><dd><i id="d-mark" class="mark"></i><span id="d-weather"></span></dd>
+          <dt>Aircraft heard</dt><dd id="d-traffic"></dd>
+          <dt>Arrivals</dt><dd id="d-arrivals"></dd>
+          <dt>Departures</dt><dd id="d-departures"></dd>
+        </dl>
+        <p id="d-raw" class="raw"></p>
+        <button id="triage" type="button">Run triage (up to 9 credits)</button>
+        <section id="triage-result" aria-live="polite" hidden>
+          <h3>Triage: <span id="t-severity"></span></h3>
+          <ul id="t-reasons"></ul>
+          <p id="t-silent" class="sub"></p>
+        </section>
+        <details id="d-gaps" hidden>
+          <summary>What this cannot show</summary>
+          <ul id="d-unknowns"></ul>
+        </details>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="governance" aria-label="Usage and limits">
+    <div><span>OpenSky access</span><b id="g-mode">Unknown</b></div>
+    <div><span>Credits this hour</span><b id="g-hour">Unknown</b></div>
+    <div><span>Board credits, 24 h</span><b id="g-day">Unknown</b></div>
+    <div><span>Cache hit rate</span><b id="g-cache">Unknown</b></div>
+    <div><span>OpenSky credits left</span><b id="g-left">Unknown</b></div>
+  </footer>
+
+  <script src="/static/vendor/internmap.min.js"></script>
+  <script src="/static/vendor/d3-array.min.js"></script>
+  <script src="/static/vendor/d3-geo.min.js"></script>
+  <script src="/static/vendor/topojson-client.min.js"></script>
+  <script src="/static/board.js"></script>
+</body>
+</html>
