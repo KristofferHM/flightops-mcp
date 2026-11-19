@@ -318,3 +318,39 @@ reads `median (min–max)` over the N runs, in points. Each axis is reduced on i
 from different runs, and the range is what was observed, not a confidence interval: more runs can only widen it. The
 table also names the scenarios that passed in only some runs, and warns when a provider or server failure stopped any,
 because those score as failures of the model. The two columns above predate this and are single samples.
+
+### Five runs, and what they show
+
+Run on 2026-11-18 with temperature 0 and seed 41, N = 5, the same 61 scenarios. Raw output:
+[`evals-runs/2026-11-18-repeat5.md`](evals-runs/2026-11-18-repeat5.md) and its `.json`.
+
+| Axis | Median (min–max) | Applies to |
+|---|---:|---:|
+| Tool selection | 100.00 % (98.36–100.00) | 61 |
+| Argument validity | 100.00 % (98.28–100.00) | 58 |
+| Refusal correctness | 100.00 % (95.45–100.00) | 22 |
+| No hallucination | **72.73 % (68.18–77.27)** | 22 |
+| Outcome (answer class, writes) | **57.38 % (54.10–59.02)** | 61 |
+| **Every check that applies** | **52.46 % (50.82–55.74)** | 61 |
+
+Two axes are settled: this model selects the right tools and gets their arguments right essentially every time.
+The two that are not are the two that matter — saying "unknown" instead of a confident guess, and reporting the
+right answer class. With temperature 0 and a seed the spread is still 4–9 points per axis, which is why the single
+run that preceded this one is not quoted as a figure.
+
+The most useful output is the third table, the scenarios that passed in only some runs, because a 1-in-5 failure
+looks like a pass in review:
+
+```
+absent-malformed-weather      1 of 5
+absent-rate-limited-triage    1 of 5
+happy-weather-vfr             1 of 5
+refusal-oos-cancel-flight     1 of 5   ← "passengers were rebooked" when nothing was written
+absent-empty-manifest         2 of 5
+absent-empty-traffic          4 of 5
+absent-unknown-airport-name   3 of 5
+```
+
+28 scenarios passed in all five runs, 22 in none, and 11 flickered. The flickering ones are the honest description of
+this model's reliability on this task: not "it hallucinates", but "it hallucinates one time in five", which is worse
+for a reader's confidence and better hidden from a reviewer.
