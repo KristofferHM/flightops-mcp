@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from .approval import Approver
 from .clock import LogicalClock
@@ -15,6 +16,8 @@ from .provider import Provider, ToolSpec
 from .scenarios import Scenario
 from .tools import ToolsUnavailable
 from .transcript import BACKENDS, Transcript
+
+MAX_TEMPERATURE: Final = 2.0
 
 
 class BackendUnavailable(Exception):
@@ -62,12 +65,50 @@ def build_provider(backend: str, scenario: Scenario, env: Mapping[str, str]) -> 
                 "the openai-compatible backend needs FLIGHTOPS_AGENT_OPENAI_BASE_URL and "
                 "FLIGHTOPS_AGENT_OPENAI_MODEL"
             )
+        temperature, seed = _openai_sampling(env)
         return OpenAICompatibleProvider(
             base_url=base_url,
             model=model,
             api_key=env.get("FLIGHTOPS_AGENT_OPENAI_API_KEY") or None,
+            temperature=temperature,
+            seed=seed,
         )
     raise BackendUnavailable(f"unknown backend {backend!r}; have {', '.join(BACKENDS)}")
+
+
+def requested_sampling(backend: str, env: Mapping[str, str]) -> dict[str, Any] | None:
+    """What this backend will ask the model for, or None if it pins nothing.
+
+    Requested, not confirmed: a compatible server can ignore either value and
+    nothing in its answer has to say so.
+    """
+    if backend != "openai-compatible":
+        return None
+    temperature, seed = _openai_sampling(env)
+    return {"temperature": temperature, "seed": seed}
+
+
+def _openai_sampling(env: Mapping[str, str]) -> tuple[float, int | None]:
+    raw_temperature = env.get("FLIGHTOPS_AGENT_OPENAI_TEMPERATURE") or "0"
+    raw_seed = env.get("FLIGHTOPS_AGENT_OPENAI_SEED") or None
+    try:
+        temperature = float(raw_temperature)
+    except ValueError:
+        temperature = math.nan
+    # Written this way round so that NaN, which compares false to everything, fails.
+    if not 0.0 <= temperature <= MAX_TEMPERATURE:
+        raise BackendUnavailable(
+            f"FLIGHTOPS_AGENT_OPENAI_TEMPERATURE must be a number from 0 to "
+            f"{MAX_TEMPERATURE:g}, not {raw_temperature!r}"
+        )
+    if raw_seed is None:
+        return temperature, None
+    try:
+        return temperature, int(raw_seed)
+    except ValueError:
+        raise BackendUnavailable(
+            f"FLIGHTOPS_AGENT_OPENAI_SEED must be an integer, not {raw_seed!r}"
+        ) from None
 
 
 def run_clock(

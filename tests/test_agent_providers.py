@@ -23,7 +23,7 @@ from agent.loop import SYSTEM, run_agent
 from agent.offline import OfflineProvider
 from agent.openai_backend import OpenAICompatibleProvider
 from agent.provider import Observation, ProviderFailure, Task, ToolCall, ToolSpec
-from agent.runner import BackendUnavailable, build_provider, run_clock
+from agent.runner import BackendUnavailable, build_provider, requested_sampling, run_clock
 from agent.scenarios import load_scenario
 from agent.tools import _approval_request
 
@@ -419,6 +419,90 @@ async def test_an_unreachable_compatible_server_is_a_provider_failure() -> None:
         await provider.turn([])
 
     assert excinfo.value.code == "unreachable"
+
+
+async def test_a_compatible_server_gets_temperature_zero_and_no_seed_by_default() -> None:
+    api = ChatApi(completion({"content": "Two passengers."}))
+    provider = api.provider()
+    await provider.begin(TASK)
+
+    await provider.turn([])
+
+    sent = json.loads(api.requests[0].content)
+    assert sent["temperature"] == 0
+    assert "seed" not in sent, "a server that rejects the field must still work by default"
+
+
+async def test_a_compatible_server_gets_the_temperature_and_seed_it_was_given() -> None:
+    api = ChatApi(completion({"content": "Two passengers."}))
+    provider = api.provider(temperature=0.5, seed=0)
+    await provider.begin(TASK)
+
+    await provider.turn([])
+
+    sent = json.loads(api.requests[0].content)
+    assert (sent["temperature"], sent["seed"]) == (0.5, 0)
+
+
+COMPATIBLE = {
+    "FLIGHTOPS_AGENT_OPENAI_BASE_URL": "http://localhost:11434/v1",
+    "FLIGHTOPS_AGENT_OPENAI_MODEL": "llama",
+}
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        ({}, {"temperature": 0.0, "seed": None}),
+        ({"FLIGHTOPS_AGENT_OPENAI_TEMPERATURE": ""}, {"temperature": 0.0, "seed": None}),
+        (
+            {"FLIGHTOPS_AGENT_OPENAI_TEMPERATURE": "2", "FLIGHTOPS_AGENT_OPENAI_SEED": "-7"},
+            {"temperature": 2.0, "seed": -7},
+        ),
+    ],
+)
+async def test_the_sampling_settings_come_from_the_environment(
+    settings: dict[str, str], expected: dict[str, Any]
+) -> None:
+    env = {**COMPATIBLE, **settings}
+    provider = build_provider("openai-compatible", load_scenario("rebook-approved"), env)
+    assert isinstance(provider, OpenAICompatibleProvider)
+    api = ChatApi(completion({"content": "Two passengers."}))
+    provider._transport = httpx.MockTransport(api)
+    await provider.begin(TASK)
+
+    await provider.turn([])
+
+    sent = json.loads(api.requests[0].content)
+    assert sent["temperature"] == expected["temperature"]
+    assert sent.get("seed") == expected["seed"]
+    assert requested_sampling("openai-compatible", env) == expected
+
+
+@pytest.mark.parametrize("backend", ["offline", "anthropic"])
+def test_a_backend_that_pins_nothing_does_not_claim_to(backend: str) -> None:
+    assert requested_sampling(backend, COMPATIBLE) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("TEMPERATURE", "warm"),
+        ("TEMPERATURE", "-0.1"),
+        ("TEMPERATURE", "2.1"),
+        ("TEMPERATURE", "nan"),
+        ("TEMPERATURE", "inf"),
+        ("SEED", "1.5"),
+        ("SEED", "lucky"),
+    ],
+)
+def test_a_sampling_setting_that_cannot_be_sent_is_refused(name: str, value: str) -> None:
+    variable = f"FLIGHTOPS_AGENT_OPENAI_{name}"
+
+    with pytest.raises(BackendUnavailable, match=variable):
+        build_provider(
+            "openai-compatible", load_scenario("rebook-approved"), {**COMPATIBLE, variable: value}
+        )
 
 
 # --- choosing a backend ------------------------------------------------------------

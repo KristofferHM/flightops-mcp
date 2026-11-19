@@ -29,9 +29,13 @@ class OpenAICompatibleProvider:
         base_url: str,
         model: str,
         api_key: str | None = None,
+        temperature: float = 0.0,
+        seed: int | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.model = model
+        self._temperature = temperature
+        self._seed = seed
         self._base_url = base_url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._transport = transport
@@ -64,7 +68,15 @@ class OpenAICompatibleProvider:
             }
             for seen in observations
         )
-        body = {"model": self.model, "messages": self._messages, "tools": self._tools}
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": self._messages,
+            "tools": self._tools,
+            "temperature": self._temperature,
+        }
+        # Left out unless asked for: not every compatible server accepts the field.
+        if self._seed is not None:
+            body["seed"] = self._seed
         try:
             async with httpx.AsyncClient(
                 transport=self._transport,

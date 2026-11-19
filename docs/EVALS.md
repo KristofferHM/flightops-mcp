@@ -243,7 +243,7 @@ The offline policy proves the harness and the pipeline; it says nothing about a 
 same 61 scenarios against a real one.
 
 **Model:** `deepseek-chat`, backend `openai-compatible`. **Date:** 2026-11-18. **Duration:** 348.9 s. Temperature and
-seed are not pinned by the harness, so treat a single run as one sample, not a measurement to three figures.
+seed were not set for these runs, so each column is one sample, not a measurement to three figures.
 
 | Axis | offline policy | model, first run | model, after the tool-selection fix |
 |---|---:|---:|---:|
@@ -301,7 +301,20 @@ failure to score.
 ### What this run does not prove
 
 - **Nothing about models in general.** One model, one day, one set of 61 scenarios written for this project.
-- **No precision.** Temperature and seed are unset; the gap between 68.18 % and 54.55 % on one axis across two runs
-  is the variance, and it is larger than any difference between the two columns except tool selection.
 - **No claim of safety.** These are scores on a fixed set, not evidence that the server is safe to point at a real
   operation.
+
+### How to measure it instead
+
+```bash
+uv run python -m evals.run --backend openai-compatible --repeat 5 \
+    --out eval-runs/repeat.json --table-out eval-runs/repeat.md --transcripts eval-runs/transcripts
+```
+
+The `openai-compatible` backend sends `FLIGHTOPS_AGENT_OPENAI_TEMPERATURE` (default `0`, range 0 to 2) and, only if
+set, `FLIGHTOPS_AGENT_OPENAI_SEED`; the Anthropic backend pins neither. Those are requests: a server may ignore either
+and nothing here can tell, and temperature 0 is not determinism, so the run-to-run spread is the measurement. A cell
+reads `median (min–max)` over the N runs, in points. Each axis is reduced on its own, so one table's medians can come
+from different runs, and the range is what was observed, not a confidence interval: more runs can only widen it. The
+table also names the scenarios that passed in only some runs, and warns when a provider or server failure stopped any,
+because those score as failures of the model. The two columns above predate this and are single samples.
