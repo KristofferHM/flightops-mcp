@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -34,6 +35,7 @@ from dashboard.sources import (
 from flightops_mcp.airports import AirportDB, build_from_csv
 from flightops_mcp.config import Settings
 from flightops_mcp.runtime import Runtime, set_runtime
+from services.mock_upstream.dated import http_date
 
 from .conftest import FIXTURES, FakeClock, LogCapture, SleepRecorder
 
@@ -45,9 +47,10 @@ METAR = {
     "rawOb": "ESGG 142320Z 24008KT 9999 BKN030 08/05 Q1008",
     "fltCat": "VFR",
 }
-AS_OF = datetime.fromtimestamp(NOW, tz=UTC).isoformat()
 LOCAL = "http://127.0.0.1:8765"
 AIRCRAFT = ["abc123", "SAS1 ", "Sweden", NOW, NOW - 60, 12.0, 57.7, 3000.0, False, 200.0, 90.0, 0.0]
+# What this machine's clock read when the change was made: 21 min 27 s ahead of the world.
+HOST_SKEW_S = 21 * 60 + 27
 
 
 @dataclass
@@ -55,6 +58,12 @@ class Upstreams:
     metar: list[dict[str, Any]] = field(default_factory=list)
     states: list[list[Any]] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
+    # The upstreams' own clock, sent as `Date`. None sends no `Date` at all.
+    date: int | None = NOW
+    snapshot: int = NOW
+
+    def _headers(self) -> dict[str, str]:
+        return {} if self.date is None else {"Date": http_date(self.date)}
 
     def opensky(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(request.url.path)
@@ -62,15 +71,15 @@ class Upstreams:
             return httpx.Response(200, json=[])
         return httpx.Response(
             200,
-            json={"time": NOW, "states": self.states},
-            headers={"X-Rate-Limit-Remaining": "3900"},
+            json={"time": self.snapshot, "states": self.states},
+            headers={"X-Rate-Limit-Remaining": "3900", **self._headers()},
         )
 
     def weather(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(request.url.path)
         if request.url.path.endswith("/metar") and self.metar:
-            return httpx.Response(200, json=self.metar)
-        return httpx.Response(204)
+            return httpx.Response(200, json=self.metar, headers=self._headers())
+        return httpx.Response(204, headers=self._headers())
 
     def token(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(request.url.path)
@@ -94,7 +103,9 @@ def airports(database: Path) -> list[dict[str, Any]]:
     return [a for a in AirportDB(database).board() if a["ident"] == "ESGG"]
 
 
-def live_runtime(database: Path, upstream: Upstreams, **overrides: Any) -> Runtime:
+def live_runtime(
+    database: Path, upstream: Upstreams, *, host_clock: float = NOW, **overrides: Any
+) -> Runtime:
     values: dict[str, Any] = {
         "opensky_client_id": "id",
         "opensky_client_secret": "secret",
@@ -109,8 +120,8 @@ def live_runtime(database: Path, upstream: Upstreams, **overrides: Any) -> Runti
         token_transport=httpx.MockTransport(upstream.token),
         weather_transport=httpx.MockTransport(upstream.weather),
         sleep=SleepRecorder(),
-        clock=lambda: float(NOW),
-        data_clock=lambda: float(NOW),
+        clock=lambda: float(host_clock),
+        data_clock=lambda: float(host_clock),
     )
     set_runtime(runtime)
     return runtime
@@ -173,7 +184,7 @@ async def open_board(database: Path) -> AsyncIterator[httpx.AsyncClient]:
 def test_weather_without_a_current_category_is_an_unknown_marker(
     payload: dict[str, Any], summary: str
 ) -> None:
-    view = board.weather_view(payload)
+    view = board.weather_view({"upstream_time_epoch": NOW, **payload})
 
     assert view["state"] == "unknown"
     assert view["category"] is None
@@ -191,6 +202,7 @@ def test_a_coloured_marker_claims_weather_and_nothing_more() -> None:
     view = board.weather_view(
         {
             "ok": True,
+            "upstream_time_epoch": NOW,
             "metar": [
                 {"flight_category": "IFR", "observation_time": "2026-11-14T22:00:00Z"},
                 {"flight_category": "VFR", "observation_time": "2026-11-14T23:20:00Z"},
@@ -283,7 +295,7 @@ def test_traffic_views_separate_failure_quiet_and_old() -> None:
             "counts": {"returned": 1},
             "snapshot_current": False,
             "snapshot_time_epoch": NOW - 1300,
-            "as_of": AS_OF,
+            "upstream_time_epoch": NOW,
             "aircraft": [{"icao24": "a", "last_contact": NOW - 1300}],
         }
     )
@@ -300,7 +312,7 @@ def test_traffic_views_separate_failure_quiet_and_old() -> None:
 
 def test_airspace_views_cover_every_state() -> None:
     columns = ["icao24", "latitude", "longitude", "last_contact"]
-    base = {"ok": True, "columns": columns, "snapshot_time_epoch": NOW, "as_of": AS_OF}
+    base = {"ok": True, "columns": columns, "snapshot_time_epoch": NOW, "upstream_time_epoch": NOW}
 
     assert board.airspace_view({"ok": False, "error": {"code": "x"}})["state"] == "unknown"
     assert board.airspace_view({**base, "rows": []})["summary"] == board.NONE_HEARD
@@ -388,12 +400,11 @@ async def test_airport_detail_spends_one_credit_at_forty_miles(
 
 
 # --- the last-update badge -------------------------------------------------------------
-STATUS = {"as_of": AS_OF}
 RECORDED_AT = "2026-11-14T23:30:40+00:00"
 
 
 def seen(age_s: int | None) -> dict[str, Any]:
-    return {"state": "reported", "age_s": age_s, "answered_at": float(NOW)}
+    return {"state": "reported", "age_s": age_s, "upstream_time": NOW}
 
 
 def badge_texts(view: dict[str, Any]) -> list[str]:
@@ -404,7 +415,7 @@ def badge_texts(view: dict[str, Any]) -> list[str]:
 def test_the_badge_says_no_data_yet_until_a_report_has_a_time(
     weather: list[dict[str, Any]],
 ) -> None:
-    view = board.last_update(weather, STATUS, None)
+    view = board.last_update(weather, None)
 
     assert view["state"] == "no_data"
     assert view["lines"] == [
@@ -413,7 +424,7 @@ def test_the_badge_says_no_data_yet_until_a_report_has_a_time(
 
 
 def test_the_badge_reports_the_freshest_weather_and_names_it() -> None:
-    view = board.last_update([seen(3000), seen(None), seen(240)], STATUS, None)
+    view = board.last_update([seen(3000), seen(None), seen(240)], None)
 
     assert view["state"] == "live"
     assert view["lines"] == [
@@ -436,30 +447,30 @@ def test_the_badge_reports_the_freshest_weather_and_names_it() -> None:
     ],
 )
 def test_the_badge_words_short_ages_without_rounding_up(age_s: int, text: str) -> None:
-    assert badge_texts(board.last_update([seen(age_s)], STATUS, None)) == [text]
+    assert badge_texts(board.last_update([seen(age_s)], None)) == [text]
 
 
 def test_weather_turns_stale_only_past_the_tools_own_threshold() -> None:
     limit = board.METAR_STALE_AFTER_S
 
-    at_limit = board.last_update([seen(limit)], STATUS, None)
-    past_limit = board.last_update([seen(limit + 1)], STATUS, None)
+    at_limit = board.last_update([seen(limit)], None)
+    past_limit = board.last_update([seen(limit + 1)], None)
 
     assert limit == 5400
     assert (at_limit["state"], badge_texts(at_limit)) == ("live", ["Last update 90 min ago"])
     assert past_limit["state"] == "stale"
     assert past_limit["lines"][0]["state"] == "stale"
     assert badge_texts(past_limit) == ["stale: last update 90 min ago"]
-    long_gone = board.last_update([seen(7500)], STATUS, None)
+    long_gone = board.last_update([seen(7500)], None)
     assert badge_texts(long_gone) == ["stale: last update 2 h 5 min ago"]
 
 
 def test_a_report_dated_far_ahead_is_never_the_freshest() -> None:
     ahead = -board.METAR_STALE_AFTER_S - 1
 
-    mixed = board.last_update([seen(ahead), seen(600)], STATUS, None)
-    alone = board.last_update([seen(ahead)], STATUS, None)
-    at_tolerance = board.last_update([seen(-board.METAR_STALE_AFTER_S)], STATUS, None)
+    mixed = board.last_update([seen(ahead), seen(600)], None)
+    alone = board.last_update([seen(ahead)], None)
+    at_tolerance = board.last_update([seen(-board.METAR_STALE_AFTER_S)], None)
 
     assert badge_texts(mixed) == ["Last update 10 min ago"]
     assert (alone["state"], badge_texts(alone)) == ("stale", ["stale: dated in the future"])
@@ -467,7 +478,7 @@ def test_a_report_dated_far_ahead_is_never_the_freshest() -> None:
 
 
 def test_weather_and_traffic_age_separately() -> None:
-    view = board.last_update([seen(240)], STATUS, None, NOW - 1300)
+    view = board.last_update([seen(240)], None, NOW - 1300, NOW)
 
     assert view["state"] == "stale", "one stale source warns the whole badge"
     assert [(line["label"], line["state"], line["text"]) for line in view["lines"]] == [
@@ -479,9 +490,9 @@ def test_weather_and_traffic_age_separately() -> None:
 def test_traffic_turns_stale_only_past_the_snapshot_threshold() -> None:
     limit = board.STATES_STALE_AFTER_S
 
-    at_limit = board.last_update([seen(60)], STATUS, None, NOW - limit)
-    past_limit = board.last_update([seen(60)], STATUS, None, NOW - limit - 1)
-    ahead = board.last_update([seen(60)], STATUS, None, NOW + limit + 1)
+    at_limit = board.last_update([seen(60)], None, NOW - limit, NOW)
+    past_limit = board.last_update([seen(60)], None, NOW - limit - 1, NOW)
+    ahead = board.last_update([seen(60)], None, NOW + limit + 1, NOW)
 
     assert limit == 300
     assert at_limit["state"] == "live"
@@ -495,29 +506,32 @@ def test_traffic_turns_stale_only_past_the_snapshot_threshold() -> None:
     assert ahead["lines"][1]["text"] == "stale: dated in the future"
 
 
-def test_traffic_age_is_measured_from_the_payloads_not_a_local_clock() -> None:
-    later = {**seen(60), "answered_at": float(NOW + 600)}
-    from_weather = board.last_update([seen(60), later], STATUS, None, NOW)
-    failed = {"state": "unknown", "age_s": None, "answered_at": None}
-    from_status = board.last_update([failed], STATUS, None, NOW - 120)
-    no_time_at_all = board.last_update([failed], {}, None, NOW - 120)
+def test_traffic_age_is_measured_against_opensky_and_nothing_else() -> None:
+    # A weather answer from a later NOAA clock must not age the traffic snapshot.
+    later = {**seen(60), "upstream_time": NOW + 600}
+    own_clock = board.last_update([seen(60), later], None, NOW - 120, NOW)
+    no_clock = board.last_update([later], None, NOW - 120, None)
 
-    assert from_weather["lines"][1]["text"] == "stale: last update 10 min ago"
-    assert from_status["lines"][1]["text"] == "Last update 2 min ago"
-    assert no_time_at_all["lines"][1]["text"] == board.SNAPSHOT_TIME_UNKNOWN
+    assert own_clock["lines"][1]["text"] == "Last update 2 min ago"
+    assert no_clock["lines"][1] == {
+        "source": "traffic",
+        "label": "Traffic",
+        "state": "no_upstream_time",
+        "text": "freshness unknown — no upstream time",
+    }
 
 
 def test_a_layer_without_a_snapshot_time_claims_no_age() -> None:
-    view = board.last_update([seen(240)], STATUS, None, 0)
+    view = board.last_update([seen(240)], None, 0)
 
     assert view["state"] == "live"
     assert view["lines"][1]["state"] == "unknown"
     assert view["lines"][1]["text"] == "snapshot time unknown"
-    assert len(board.last_update([seen(240)], STATUS, None)["lines"]) == 1
+    assert len(board.last_update([seen(240)], None)["lines"]) == 1
 
 
 def test_a_recording_shows_its_own_time_and_no_age() -> None:
-    view = board.last_update([seen(9000)], STATUS, RECORDED_AT, NOW - 60)
+    view = board.last_update([seen(9000)], RECORDED_AT, NOW - 60)
 
     assert view["state"] == "recorded", "age during playback would describe the playback"
     assert [(line["label"], line["state"], line["text"]) for line in view["lines"]] == [
@@ -525,7 +539,7 @@ def test_a_recording_shows_its_own_time_and_no_age() -> None:
         ("Traffic", "recorded", "snapshot 2026-11-14 23:29 UTC"),
     ]
     assert not any("ago" in text for text in badge_texts(view))
-    undated = board.last_update([], STATUS, RECORDED_AT, 0)
+    undated = board.last_update([], RECORDED_AT, 0)
     assert undated["lines"][1]["text"] == board.SNAPSHOT_TIME_UNKNOWN
 
 
@@ -539,7 +553,7 @@ def test_a_recording_shows_its_own_time_and_no_age() -> None:
     ],
 )
 def test_a_recording_time_is_never_guessed(recorded_at: str, text: str) -> None:
-    assert badge_texts(board.last_update([], STATUS, recorded_at)) == [text]
+    assert badge_texts(board.last_update([], recorded_at)) == [text]
 
 
 @pytest.mark.parametrize(
@@ -562,14 +576,145 @@ async def test_the_board_reports_both_ages_through_its_api(
     layer = (await open_board.get("/api/traffic/europe")).json()
     weather_only = (await open_board.get("/api/board")).json()["last_update"]
     both = (
-        await open_board.get("/api/board", params={"traffic_snapshot": layer["snapshot_epoch"]})
+        await open_board.get(
+            "/api/board",
+            params={
+                "traffic_snapshot": layer["snapshot_epoch"],
+                "traffic_upstream": layer["upstream_epoch"],
+            },
+        )
     ).json()["last_update"]
     failed_layer = (await open_board.get("/api/board?traffic_snapshot=0")).json()["last_update"]
 
-    assert layer["snapshot_epoch"] == NOW
+    assert (layer["snapshot_epoch"], layer["upstream_epoch"]) == (NOW, NOW)
     assert badge_texts(weather_only) == ["Last update 10 min ago"]
     assert badge_texts(both) == ["Last update 10 min ago", "Last update under 1 min ago"]
     assert badge_texts(failed_layer)[1] == "snapshot time unknown"
+
+
+# --- ages come from the upstream's clock, never this machine's ---------------------------
+# Each test runs the real tools and the real board with this machine's clock 21 min 27 s
+# fast, as measured when the change was made, and also patches `time.time` itself. The
+# verdict must be the one a correct clock gives, because no clock of ours is consulted.
+OBSERVED = NOW - 600  # METAR's reportTime, 23:20
+
+
+def fast_host(monkeypatch: pytest.MonkeyPatch, upstream_now: int) -> float:
+    host = float(upstream_now + HOST_SKEW_S)
+    monkeypatch.setattr(time, "time", lambda: host)
+    return host
+
+
+async def board_badge(
+    database: Path, upstream: Upstreams, host: float, *, traffic: bool = False
+) -> dict[str, Any]:
+    live_runtime(database, upstream, host_clock=host)
+    async with http(live_app(database)) as client:
+        params: dict[str, Any] = {}
+        if traffic:
+            layer = (await client.get("/api/traffic/europe")).json()
+            params = {
+                "traffic_snapshot": layer["snapshot_epoch"],
+                "traffic_upstream": layer.get("upstream_epoch", 0),
+            }
+        badge: dict[str, Any] = (await client.get("/api/board", params=params)).json()[
+            "last_update"
+        ]
+        return badge
+
+
+@pytest.mark.parametrize("offset_s", [-30, 30])
+async def test_weather_is_live_against_noaas_clock_with_the_host_21_min_fast(
+    database: Path, monkeypatch: pytest.MonkeyPatch, offset_s: int
+) -> None:
+    upstream_now = OBSERVED + offset_s
+    fast = await board_badge(
+        database, Upstreams(metar=[METAR], date=upstream_now), fast_host(monkeypatch, upstream_now)
+    )
+    honest = await board_badge(
+        database, Upstreams(metar=[METAR], date=upstream_now), float(upstream_now)
+    )
+
+    assert fast["lines"] == [line("weather", "Weather", "live", "Last update under 1 min ago")]
+    assert fast == honest, "the host clock changed the verdict"
+
+
+async def test_weather_is_stale_by_noaas_clock_whatever_the_host_says(
+    database: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream_now = OBSERVED + board.METAR_STALE_AFTER_S + 60
+    badge = await board_badge(
+        database, Upstreams(metar=[METAR], date=upstream_now), fast_host(monkeypatch, upstream_now)
+    )
+
+    assert badge["lines"] == [line("weather", "Weather", "stale", "stale: last update 91 min ago")]
+
+
+async def test_weather_without_an_upstream_time_claims_no_age(
+    database: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    badge = await board_badge(
+        database, Upstreams(metar=[METAR], date=None), fast_host(monkeypatch, NOW)
+    )
+
+    assert badge == {
+        "state": "no_upstream_time",
+        "lines": [line("weather", "Weather", "no_upstream_time", board.NO_UPSTREAM_TIME)],
+    }
+    assert not re.search(r"\d", badge["lines"][0]["text"]), "a number would be the host's"
+
+
+@pytest.mark.parametrize("offset_s", [-30, 30])
+async def test_traffic_is_live_against_openskys_clock_with_the_host_21_min_fast(
+    database: Path, monkeypatch: pytest.MonkeyPatch, offset_s: int
+) -> None:
+    upstream_now = NOW + offset_s
+    world = Upstreams(metar=[METAR], states=[AIRCRAFT], date=upstream_now, snapshot=NOW)
+    fast = await board_badge(database, world, fast_host(monkeypatch, upstream_now), traffic=True)
+    honest = await board_badge(database, world, float(upstream_now), traffic=True)
+
+    assert fast["lines"][1] == line("traffic", "Traffic", "live", "Last update under 1 min ago")
+    assert fast == honest, "the host clock changed the verdict"
+
+
+async def test_traffic_is_stale_by_openskys_clock_whatever_the_host_says(
+    database: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream_now = NOW + board.STATES_STALE_AFTER_S + 60
+    world = Upstreams(metar=[METAR], states=[AIRCRAFT], date=upstream_now, snapshot=NOW)
+    badge = await board_badge(database, world, fast_host(monkeypatch, upstream_now), traffic=True)
+
+    assert badge["lines"][1] == line("traffic", "Traffic", "stale", "stale: last update 6 min ago")
+
+
+async def test_traffic_without_an_upstream_time_claims_no_age(
+    database: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = Upstreams(metar=[METAR], states=[AIRCRAFT], date=None, snapshot=NOW)
+    badge = await board_badge(database, world, fast_host(monkeypatch, NOW), traffic=True)
+
+    assert badge["lines"][1] == line(
+        "traffic", "Traffic", "no_upstream_time", board.NO_UPSTREAM_TIME
+    )
+    assert not re.search(r"\d", badge["lines"][1]["text"]), "a number would be the host's"
+
+
+def test_the_board_reads_no_clock_of_its_own() -> None:
+    source = Path(board.__file__).read_text(encoding="utf-8")
+
+    assert not re.search(r"\btime\.time\b|datetime\.now|\bimport time\b", source)
+
+
+def test_no_upstream_time_is_neither_live_nor_stale() -> None:
+    css = (STATIC / "board.css").read_text(encoding="utf-8")
+
+    assert board.NO_UPSTREAM_TIME == "freshness unknown — no upstream time"
+    assert '.last-update[data-state="no_upstream_time"]' in css
+    assert len({"live", "stale", "no_data", "no_upstream_time"}) == 4
+
+
+def line(source: str, label: str, state: str, text: str) -> dict[str, str]:
+    return {"source": source, "label": label, "state": state, "text": text}
 
 
 async def test_a_failed_layer_gives_the_page_no_snapshot_time(

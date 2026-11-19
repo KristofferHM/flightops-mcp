@@ -5,6 +5,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Freshness is judged by the upstream's clock, never this machine's.** Each data tool reports `upstream_time_epoch`,
+  the response's `Date` header to the second, and measures METAR and snapshot ages against it. `as_of`, which was the
+  host clock, is gone from those payloads and from `upstream_status`.
+- The motive: this host's clock ran 21 min 27 s fast and could not be resynced, so every board badge read `stale`.
+  A test now runs the tools and the board with the host clock that far ahead and the verdicts do not change.
+- With no `Date`, nothing is aged: the payload says so in `unknowns` and the badge reads
+  `freshness unknown — no upstream time`, which is neither live nor stale. The page echoes OpenSky's `Date` with the
+  snapshot time, so traffic is aged by OpenSky's clock rather than NOAA's.
+
 ### Added
 - **`evals.run --repeat N`** reports `median (min–max)` per axis, in JSON and Markdown; it refuses `--update-baseline`.
 - The `openai-compatible` backend sends temperature (default 0) and an optional seed, which a server may ignore.

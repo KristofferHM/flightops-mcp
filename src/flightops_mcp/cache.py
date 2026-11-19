@@ -19,7 +19,7 @@ The rules, each one a test in `tests/test_cache.py`:
 * **The cache sits inside the scope check.** `tool()` wraps it inside `guarded`,
   and the HTTP server wraps `scoped` around that, so a caller who lacks the scope
   is refused before the cache is consulted.
-* **A hit says it is a hit.** The payload keeps its original `as_of`, gains a
+* **A hit says it is a hit.** The payload keeps its original `upstream_time_epoch`, gains a
   `cache` block, and its `credits_spent` is zero, because nothing was spent.
 * **Concurrent identical calls make one upstream call.** The first caller runs
   the tool; the rest wait for its answer. Counted as `coalesced`.

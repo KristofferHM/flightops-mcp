@@ -171,6 +171,12 @@ async function walk(browser, viewport, servers, passcode) {
   await page.locator('#banner[data-mode="NO DATA"]').waitFor();
   await inspect(page, viewport, "no data yet");
 
+  await context.clearCookies();
+  await open(page, servers.noTime.base, passcode, viewport);
+  await expectBadge(page, "freshness unknown — no upstream time");
+  await page.locator('#last-update[data-state="no_upstream_time"]').waitFor();
+  await inspect(page, viewport, "no upstream time");
+
   await context.close();
 }
 
@@ -180,6 +186,7 @@ async function main() {
   const servers = {
     data: await startServer("data", passcode),
     empty: await startServer("empty", passcode),
+    noTime: await startServer("no_time", passcode),
   };
   const browser = await chromium.launch();
   try {
@@ -189,6 +196,7 @@ async function main() {
     await browser.close();
     servers.data.stop();
     servers.empty.stop();
+    servers.noTime.stop();
   }
   if (failures.length) {
     console.log(`FAILED: ${failures.length} problems in ${checks} checks`);

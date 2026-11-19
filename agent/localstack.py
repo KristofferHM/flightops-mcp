@@ -47,6 +47,7 @@ from flightops_mcp.config import Settings
 from flightops_mcp.runtime import Runtime, set_runtime
 from services.idp.app import create_app as create_idp
 from services.idp.config import ClientConfig, IdpConfig
+from services.mock_upstream.dated import dated_transport
 from services.ops_api.app import OpsApiConfig
 from services.ops_api.app import create_app as create_ops_api
 
@@ -245,12 +246,15 @@ async def local_stack(
             ops_api_audience=OPS_AUDIENCE,
             approval_audience=APPROVAL_AUDIENCE,
         )
+        upstream_clock = lambda: scenario.clock_start  # noqa: E731
         runtime = Runtime.build(
             settings,
-            opensky_transport=httpx.MockTransport(world.opensky),
+            # Each upstream's `Date` is the scenario's start: the fixture describes
+            # that moment, and the server ages data against the upstream's clock.
+            opensky_transport=dated_transport(world.opensky, upstream_clock),
             token_transport=httpx.MockTransport(world.opensky_token),
-            weather_transport=httpx.MockTransport(world.weather),
-            schiphol_transport=httpx.MockTransport(world.schiphol),
+            weather_transport=dated_transport(world.weather, upstream_clock),
+            schiphol_transport=dated_transport(world.schiphol, upstream_clock),
             schiphol_token_transport=httpx.MockTransport(world.schiphol_token),
             idp_transport=idp,
             ops_transport=ops,

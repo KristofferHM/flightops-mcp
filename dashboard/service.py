@@ -39,11 +39,14 @@ class BoardService:
     async def _weather(self, icao: str) -> Payload:
         return board.weather_view(await self._source.call("airport_weather", {"airport": icao}))
 
-    async def snapshot(self, traffic_snapshot: int | None = None) -> Payload:
+    async def snapshot(
+        self, traffic_snapshot: int | None = None, traffic_upstream: int | None = None
+    ) -> Payload:
         """Every listed airport with its weather, plus the banner, badge and governance strip.
 
-        `traffic_snapshot` is the time of the traffic layer the page is drawing, as this
-        server gave it. It costs nothing: no upstream is asked about traffic here.
+        `traffic_snapshot` is the time of the traffic layer the page is drawing, and
+        `traffic_upstream` OpenSky's clock when it sent it, both as this server gave them.
+        They cost nothing: no upstream is asked about traffic here.
         """
         gate = asyncio.Semaphore(WEATHER_CONCURRENCY)
 
@@ -56,7 +59,7 @@ class BoardService:
         return {
             "banner": board.banner(views, self._source.recorded_at),
             "last_update": board.last_update(
-                views, status, self._source.recorded_at, traffic_snapshot
+                views, self._source.recorded_at, traffic_snapshot, traffic_upstream
             ),
             "governance": board.governance(status),
             "regions": list(AIRSPACE_REGIONS),

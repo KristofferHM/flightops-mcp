@@ -157,6 +157,12 @@ Five upstreams, four auth models. The tools do not care which; the governance la
 Every scope is prefixed `flightops.`. The tool list carries `ttlMs: 300000, cacheScope: "public"` and
 is sorted by name.
 
+Every tool that reads an upstream reports `upstream_time_epoch`: the `Date` header of the upstream's response, in
+epoch seconds, or `null` when it sent none. Ages (`latest_metar.age_s`, `snapshot_current`) are measured against it
+and never against this machine's clock; with `null` the age is unknown and `unknowns` says why. A composite reports
+the newest of its parts' times. `flight_passenger_impact` and `propose_rebooking` keep `as_of`, the time this server
+answered, because they report an action and a record rather than an observation with an age.
+
 ## Running it
 
 ```bash

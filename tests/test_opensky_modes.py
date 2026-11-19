@@ -21,6 +21,7 @@ from flightops_mcp.airports import build_from_csv
 from flightops_mcp.config import Settings
 from flightops_mcp.opensky import AIRSPACE_REGIONS, credentials_mode, daily_metered
 from flightops_mcp.runtime import Runtime, set_runtime
+from services.mock_upstream.dated import dated
 
 from .conftest import FIXTURES, FakeClock, LogCapture, SleepRecorder
 
@@ -97,10 +98,13 @@ def install(settings: Settings, upstream: FakeOpenSky, clock: Any = None) -> Run
     clock = clock or (lambda: float(NOW))
     runtime = Runtime.build(
         settings,
-        opensky_transport=httpx.MockTransport(upstream.api),
+        opensky_transport=httpx.MockTransport(dated(upstream.api, clock)),
         token_transport=httpx.MockTransport(upstream.token),
         weather_transport=httpx.MockTransport(
-            lambda r: httpx.Response(200, json=METAR if r.url.path.endswith("/metar") else [])
+            dated(
+                lambda r: httpx.Response(200, json=METAR if r.url.path.endswith("/metar") else []),
+                clock,
+            )
         ),
         sleep=SleepRecorder(),
         clock=clock,

@@ -52,8 +52,9 @@
   const context = canvas.getContext("2d");
   const state = {
     land: null, airports: [], selected: null, detail: null, airspace: [],
-    // The time of the traffic layer on screen, as the server gave it. Null when none is.
-    trafficSnapshot: null, boardRequest: 0,
+    // The time of the traffic layer on screen, and OpenSky's clock when it was sent,
+    // as the server gave them. Null when no layer is drawn.
+    trafficSnapshot: null, trafficUpstream: null, boardRequest: 0,
     projection: "map", lon: 10, lat: 20, panY: 0, zoom: 1,
     width: 0, height: 0, dirty: true,
   };
@@ -84,7 +85,10 @@
   async function refreshBoard() {
     // Only the newest request may paint, or a slow answer could restore a removed layer.
     const request = ++state.boardRequest;
-    const query = known(state.trafficSnapshot) ? `?traffic_snapshot=${state.trafficSnapshot}` : "";
+    // Both times go back exactly as the server gave them; the page does no date arithmetic.
+    const query = known(state.trafficSnapshot)
+      ? `?traffic_snapshot=${state.trafficSnapshot}&traffic_upstream=${state.trafficUpstream || 0}`
+      : "";
     try {
       const board = await api(`/api/board${query}`);
       if (request !== state.boardRequest) return;
@@ -127,6 +131,7 @@
       if (superseded()) return;
       state.airspace = layer.aircraft;
       state.trafficSnapshot = layer.snapshot_epoch;
+      state.trafficUpstream = layer.upstream_epoch;
       note.textContent = layer.hint ? `${layer.summary}. ${layer.hint}` : layer.summary;
       if (layer.truncated) note.textContent += ", most recent only";
       if (layer.freshness && layer.freshness.most_recent_only) {
@@ -137,6 +142,7 @@
       if (superseded()) return;
       state.airspace = [];
       state.trafficSnapshot = 0;
+      state.trafficUpstream = 0;
       note.textContent = "Unknown: the board server did not answer";
       refreshBoard();
     }
@@ -702,6 +708,7 @@
     if ($("traffic-on").checked) { refreshTraffic(); return; }
     state.airspace = [];
     state.trafficSnapshot = null;
+    state.trafficUpstream = null;
     $("traffic-note").textContent = "";
     refreshBoard();
     invalidate();

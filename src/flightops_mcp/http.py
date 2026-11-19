@@ -117,6 +117,31 @@ def credits_remaining(response: httpx.Response) -> int | None:
     return credits_remaining_from_headers(response.headers)
 
 
+def parse_http_date(raw: str | None) -> int | None:
+    """An HTTP `Date` header as epoch seconds, or None when it does not say.
+
+    The header is the producing server's clock, so data ages are measured against it
+    rather than against this machine's clock, which may be wrong by minutes. HTTP-date
+    carries whole seconds, and they are kept: rounding to the minute would hide skew.
+    """
+    if raw is None or not raw.strip():
+        return None
+    try:
+        when = email.utils.parsedate_to_datetime(raw.strip())
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    # RFC 9110 dates are always GMT. A zone-less one is read as GMT too.
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    epoch = int(when.timestamp())
+    return epoch if epoch > 0 else None
+
+
+def upstream_time_from_headers(headers: Mapping[str, str]) -> int | None:
+    lowered = {name.lower(): value for name, value in headers.items()}
+    return parse_http_date(lowered.get("date"))
+
+
 @dataclass(slots=True)
 class HttpResponse:
     """The parts of a response we actually keep, so callers never hold sockets open."""
@@ -124,6 +149,11 @@ class HttpResponse:
     status_code: int
     json_body: object | None
     headers: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def upstream_time_epoch(self) -> int | None:
+        """The upstream's own clock when it answered, from its `Date` header."""
+        return upstream_time_from_headers(self.headers)
 
 
 class UpstreamHttp:
@@ -328,7 +358,7 @@ async def authorized_get(
     settings: Settings,
     sleep: Callable[[float], Awaitable[None]],
     empty_status: frozenset[int] = frozenset(),
-) -> HttpResponse | None:
+) -> HttpResponse:
     """GET an upstream endpoint under the one policy every upstream shares.
 
     `tokens=None` is an anonymous request: no `Authorization` header, and a `401`
@@ -340,7 +370,8 @@ async def authorized_get(
     * A `429` whose wait is within `max_rate_limit_wait_s` is waited out once; a
       longer one, or a second `429`, is `upstream_rate_limited` carrying the wait.
     * A status in `empty_status` is the upstream saying "nothing here" (OpenSky's
-      `404` for an empty window) and returns None. Any other error status is
+      `404` for an empty window) and returns with no body, but with its headers: an
+      empty answer still carries the upstream's `Date`. Any other error status is
       `upstream_unavailable`, never an empty result.
 
     OpenSky's client used to own this. The second adapter is why it moved: the
@@ -373,7 +404,7 @@ async def authorized_get(
                 raise upstream_rate_limited(upstream, wait, remaining_header)
 
         if response.status_code in empty_status:
-            return None
+            return HttpResponse(response.status_code, None, response.headers)
         if response.status_code >= 400:
             raise upstream_unavailable(upstream, f"HTTP {response.status_code} for {path}")
         return response

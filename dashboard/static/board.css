@@ -223,6 +223,10 @@ canvas.dragging { cursor: grabbing; }
 }
 .last-update[data-side="left"] { right: auto; left: 10px; }
 .last-update[data-state="no_data"] { border-style: dashed; }
+/* Not live and not stale: the upstream sent no clock, so no age is claimed. Dotted, and
+   the line is italic and carries its own words, so neither shape nor colour alone says it. */
+.last-update[data-state="no_upstream_time"] { border-style: dotted; border-width: 2px; }
+.last-update p[data-state="no_upstream_time"] { font-style: italic; }
 .last-update[data-state="stale"] { border: 2px solid var(--amber); }
 .last-update p[data-state="stale"] { color: var(--amber); font-weight: 600; }
 .last-update .source { display: inline-block; min-width: 9ch; color: var(--muted); font-weight: 400; }
