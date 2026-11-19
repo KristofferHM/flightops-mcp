@@ -16,9 +16,12 @@ The rules are about honesty, so they live where a test can hold them:
 
 from __future__ import annotations
 
+import bisect
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Final
 
+from flightops_mcp.airports import haversine_nm
 from flightops_mcp.opensky import STATES_STALE_AFTER_S
 from flightops_mcp.server import METAR_STALE_AFTER_S
 
@@ -35,6 +38,11 @@ MIN_FADE: Final = 0.2
 # The page echoes a snapshot time back to /api/board. The year 2100 bounds what it may
 # send, so a corrupt upstream time cannot overflow the date formatting.
 MAX_SNAPSHOT_EPOCH: Final = 4_102_444_800
+# How far away a neighbour's report may be offered for an airport with none. Measured
+# on the world set: 5 % of the airports without a report have a reporting airport
+# within 25 nm, 18 % within 50 and 48 % within 100. At 100 nm it is not that airport's
+# weather. Widening this needs that argument answered here, not a setting.
+NEIGHBOUR_MAX_NM: Final = 25.0
 
 Payload = dict[str, Any]
 
@@ -67,6 +75,7 @@ def weather_view(payload: Payload) -> Payload:
         code = _error(payload).get("code", "unknown")
         return {
             "state": "unknown",
+            "no_observation": False,
             "category": None,
             "age_s": None,
             "upstream_time": None,
@@ -100,6 +109,9 @@ def weather_view(payload: Payload) -> Payload:
     reported = age is not None and current and known is not None
     return {
         "state": "reported" if reported else "unknown",
+        # NOAA answered and held nothing for this station. Only these may borrow a
+        # neighbour's line: a failed fetch or an old report is a different unknown.
+        "no_observation": newest is None,
         "category": known if reported else None,
         "age_s": age,
         "upstream_time": upstream,
@@ -108,6 +120,54 @@ def weather_view(payload: Payload) -> Payload:
         "raw": (newest or {}).get("raw_text"),
         "unknowns": list(payload.get("unknowns") or []),
     }
+
+
+def neighbours(airports: Sequence[Payload], views: Mapping[str, Payload]) -> dict[str, Payload]:
+    """For each airport NOAA holds nothing for, the nearest one that has a current report.
+
+    An annotation, never evidence: the airport's own view, marker and every count stay
+    as they were. `views` holds one view per airport in `airports`, and those are the
+    only candidates. "Current" is the view's own `reported`, so the tool's 90-minute
+    rule decides it, and an airport is never its own neighbour because it cannot be
+    both reported and without an observation. Ties go to the lower ICAO
+    code, so the same data always names the same neighbour.
+    """
+    reporting = sorted(
+        (airport["latitude"], airport["ident"], airport)
+        for airport in airports
+        if views[airport["ident"]]["state"] == "reported"
+    )
+    latitudes = [entry[0] for entry in reporting]
+    # A degree of latitude is 60 nm, so nothing outside this band can be within reach.
+    band = NEIGHBOUR_MAX_NM / 60.0
+    found: dict[str, Payload] = {}
+    for airport in airports:
+        ident = airport["ident"]
+        if not views[ident]["no_observation"]:
+            continue
+        lat, lon = airport["latitude"], airport["longitude"]
+        low = bisect.bisect_left(latitudes, lat - band)
+        high = bisect.bisect_right(latitudes, lat + band)
+        scored = [
+            (haversine_nm(lat, lon, other["latitude"], other["longitude"]), code)
+            for _, code, other in reporting[low:high]
+        ]
+        within = [pair for pair in scored if pair[0] <= NEIGHBOUR_MAX_NM]
+        if not within:
+            continue
+        distance, code = min(within)
+        view = views[code]
+        found[ident] = {
+            "icao": code,
+            "distance_nm": round(distance),
+            "category": view["category"],
+            "age_s": view["age_s"],
+            "text": (
+                f"No report at {ident} — {code} ({round(distance)} nm away) reports "
+                f"{view['category']}, {_ago(view['age_s'])} old"
+            ),
+        }
+    return found
 
 
 def marker(weather: Payload) -> Payload:

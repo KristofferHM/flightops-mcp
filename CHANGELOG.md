@@ -24,9 +24,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search box, each with how many rows were readable), `weather` (ceiling, visibility, wind with gusts, category, as
   values), `legs` (each leg's state, source and age by its own upstream's clock) and `why_not_higher` /
   `why_not_lower`. The board shows all four.
+- **Weather batching that degrades per airport.** `WeatherClient.metar_batch` asks 50 ids per request (NOAA's
+  limits measured in `docs/DASHBOARD.md`), halves a refused request until one id is left, and asks a failed one once
+  more at half size. An airport NOAA did not answer for gets its own `ok: false` entry in `weather_overview`, with
+  the reason; `counts` gains `failed` and `requests`. `airport_weather` is unchanged.
+- **A neighbour's report on the board**, for an airport NOAA holds nothing for: the nearest airport with a current
+  report within 25 nm, with its distance, labelled as a neighbour. Never in a marker, the banner or the triage.
+- `scripts/measure_world_weather.py` counts what one board snapshot sends to NOAA, for the before/after table.
 - Eval scenarios may set `expect.triage`; three new ones cover a triage with three legs, two legs and weather only.
 
 ### Fixed
+- **1,200 of a World view's 3,270 airports were Unknown for our own fetching.** NOAA refuses a whole request with
+  `400` when one id in it is an OurAirports local code with a hyphen (`CN-0062`); twelve requests of 100 held one.
+  Those codes are no longer sent, each is Unknown with its reason, and the failures fell to 0 in three live polls.
+- `weather_overview` read NOAA's `200 {"status": "error"}` answer as a report with no station, and an answer cut at
+  NOAA's silent 400-record cap as complete. Both now split the request and ask again.
 - **A triage repeated a reason once per METAR.** Each reason is now listed once, with how many METARs said it, and
   the ladder counts distinct reasons. One condition seen in four METARs used to read as four reasons and `high`; it
   is now one reason and `elevated`. `unknown` still outranks `elevated`, and `low` still needs an observation.

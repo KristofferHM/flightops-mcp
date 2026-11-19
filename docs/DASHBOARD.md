@@ -23,8 +23,10 @@ browser. The map draws every airport in the region; the list beside it shows 25 
 name or city. The server filters and pages the list (`/api/airports?region=&q=&offset=&limit=`), so a phone never
 holds more than one page of rows.
 
-Weather for a region arrives through `weather_overview`, one NOAA request per hundred airports, at most four at a
-time, cached for 60 s. World is 33 requests per minute at most.
+Weather for a region arrives through `weather_overview`, a hundred airports per call, at most four calls at a time,
+cached for 60 s. The client asks NOAA 50 airports per request, so World is 66 requests per minute at most. An airport
+NOAA did not answer for is Unknown with its own reason; the others in its request keep their reports. Why 50, and
+what NOAA does with more, is under "Weather requests, measured".
 
 Under the region control, in so many words: **the airport data is worldwide; live traffic is not.** OpenSky's
 receivers are dense over Europe and North America and sparse over Africa, South America and much of Asia, so an
@@ -48,6 +50,20 @@ version of it, so the map can be read without leaving it.
 | credit | OpenSky's unit of API cost; the strip shows what is left | | |
 
 A colour describes the weather category at that airport, never the airport's status. The tab says that first.
+
+**A neighbour's report, labelled as one.** When NOAA holds no observation for an airport, its line may name the
+nearest airport that does have a current one, within 25 nm:
+
+```
+No report at ESGT — ESGG (18 nm away) reports VFR, 12 min old
+```
+
+The marker stays Unknown, and the banner keeps counting airports with their own report. A neighbour is never used
+for severity or the triage, and `airport_weather` for that airport still says no METAR was returned: a tool that
+reported a neighbour's weather as the airport's own would mislead an agent. "Current" is the tool's 90-minute rule.
+Ties go to the lower ICAO code. Only an airport NOAA answered with nothing gets one, not one whose fetch failed or
+whose own report is old. The 25 nm cap is fixed: 5 % of the airports without a report have a reporting airport within
+25 nm, 18 % within 50 and 48 % within 100, and at 100 nm it is not that airport's weather.
 
 ## Traffic
 
@@ -241,6 +257,57 @@ Two things follow. A busy airport can list no arrivals for the last hour, so an 
 available yet today". And flights cost far more than the 4 credits this client charges for them, at least
 anonymously, so anonymous mode does not call them. **Whether authenticated calls are debited the same has not
 been measured.** Compare the strip's "OpenSky credits left" before and after a triage once credentials exist.
+
+## Weather requests, measured
+
+NOAA documents none of these limits. Each was measured live on 2026-11-19, against `/api/data/metar` at `hours=2`:
+
+| What was sent | What NOAA did |
+|---|---|
+| 1 to 400 ids | `200`, but **the answer stops at 400 records**, silently. At `hours=2` a station sends about 2.4 records, so 150 ids already lost stations: 400 ids returned 268 stations, the same ids asked 25 at a time returned 355 |
+| 401 ids or more | `200` with `{"status": "error", "error": "Maximum number of stations exceeded (400)"}` instead of data |
+| about 1,200 ids (8 KB of URL) | `414 Request-URI Too Large` from nginx |
+| any id outside `[A-Z0-9]`, such as `CN-0062` | `400 "Must specify station IDs or bounding box..."` for the **whole request**. Codes with digits (`K61B`, `5A8`) pass |
+| `/taf` with a hyphenated id | the same `400` |
+
+What the client does about it (`src/flightops_mcp/weather.py`):
+
+- **50 ids per request.** Over a World poll the largest answer at 50 was 223 records, 56 % of the cap; at 100 it
+  was 388, 97 % of the cap, one dense hour away from losing stations without a word.
+- An answer of exactly 400 records is treated as cut and asked again in halves. So is the `200` error object,
+  which the parser used to read as one report with no station, so every airport in the request read "no METAR".
+- A refused request (`400`, `413`, `414`) is halved until the refused part is one id. That id alone is Unknown
+  (`station_rejected`) with NOAA's words.
+- A request NOAA fails to answer (`5xx` after retries, `429`, a timeout, an open circuit) is asked once more as two
+  halves, then its airports are Unknown with the reason. A struggling upstream gets one second chance, not a
+  bisection's worth of requests.
+- The 43 world airports whose OurAirports code is a local one with a hyphen are never sent. Each is Unknown with
+  that reason. The world file has no `icao_code` column to map them, so one that has a METAR under a real code
+  (Western Sydney is `AU-0539` here) is not shown it.
+
+A World view (3,270 airports) on this machine, through `scripts/measure_world_weather.py`, which builds the board
+as `python -m dashboard` does and counts what reaches NOAA:
+
+| | requests | wall time | own report | no observation | upstream failures | id not sent | neighbour line |
+|---|---|---|---|---|---|---|---|
+| before (`main`, 100 per request), 3 polls | 33-34 | 13.3, 16.8, 22.7 s | 1,366-1,371 | 665-673 | **1,200** | 0 | 0 |
+| after (50 per request), 3 polls | 66-67 | 10.5, 29.3, 44.0 s | 2,136-2,169 | 1,036-1,039 | **0** | 43 | 58 |
+
+- **All 1,200 failures were twelve requests of 100 that NOAA refused with `400`,** each because it held one
+  hyphenated code. The brief this work came from blamed one request per airport (about 6,540); the board had already
+  batched by 100 since v1.7.0, which is why the failures came in hundreds. 1,157 of those airports are now answered;
+  the other 43 are the hyphenated codes themselves.
+- **The request count doubled and the wall time did not improve.** Wall time is dominated by NOAA stalling a
+  request past the 15 s timeout. Stalls were seen in 1 of 3 polls before, 3 of 4 at 50 per request, and in one poll
+  of the running board (`python -m dashboard`, `/api/board?region=world`) that met 8 stalls and took 115.8 s. Every
+  stalled request succeeded on retry, so none became a failure, but twice the requests meet a stall twice as often.
+  Two polls at 100 per request with these fixes took 9.4 and 12.3 s with no stall and no failure, but at 97 % of
+  the record cap.
+- "No observation" rose because the 1,157 airports are now asked at all. 58 of the 1,037 (5.6 %) gained a neighbour
+  line.
+- At `hours=2` NOAA leaves out a station whose newest METAR is older than two hours. 50 ids returned 35 stations at
+  `hours=2` and 42 without it, so some "no observation" airports do have a report, just an old one. That is
+  unchanged here; an old report would be Unknown either way.
 
 ## Which clock judges freshness
 

@@ -297,7 +297,13 @@ async def test_the_overview_asks_once_for_many_airports_and_ages_each(
     assert len(requests) == 1
     assert requests[0].url.params["ids"] == "ESGG,ESSA,EKCH"
     assert answer["not_in_reference_data"] == ["ZZZZ"]
-    assert answer["counts"] == {"asked": 4, "with_metar": 2, "current": 1}
+    assert answer["counts"] == {
+        "asked": 4,
+        "with_metar": 2,
+        "current": 1,
+        "failed": 0,
+        "requests": 1,
+    }
     entries = answer["airports"]
     assert entries["ESGG"]["latest_metar"] == {"age_s": 600, "current": True}
     assert entries["ESSA"]["latest_metar"]["current"] is False
