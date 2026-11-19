@@ -1,0 +1,24 @@
+id: happy-search-no-match
+group: happy-path
+why: 'A search that matches nothing says so, and does not turn an empty page into "no such airport".'
+question: Is there an airport called Narnia International?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: airport_search
+  params:
+    query: Narnia
+expect:
+  tools:
+    required:
+    - search_airports
+    allowed:
+    - resolve_airport
+  arguments:
+    search_airports:
+      query: Narnia
+  answer: unknown

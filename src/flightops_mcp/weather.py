@@ -9,6 +9,7 @@ tool layer must preserve, because "no observation" is not "the airport is fine".
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from . import progress
 from .config import Settings
 from .errors import ToolFailure, upstream_unavailable
 from .http import UpstreamHttp
@@ -134,14 +136,29 @@ class WeatherClient:
                     "refuse the whole request, so it was not asked about.",
                 )
         size = chunk_size or METAR_CHUNK
+        progress.expect(-(-len(askable) // size))
         for start in range(0, len(askable), size):
             await self._chunk(askable[start : start + size], batch, retried=False)
         return batch
 
+    async def _counted_metars(self, ids: list[str]) -> Reports:
+        """One METAR request, reported as progress whether NOAA answered it or not."""
+        try:
+            reports = await self._observations("metar", ",".join(ids), hours=2, batch=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await progress.upstream_call(
+                f"NOAA did not answer a METAR request for {len(ids)} airport(s)."
+            )
+            raise
+        await progress.upstream_call(f"NOAA answered a METAR request for {len(ids)} airport(s).")
+        return reports
+
     async def _chunk(self, ids: list[str], batch: Batch, *, retried: bool) -> None:
         batch.requests += 1
         try:
-            reports = await self._observations("metar", ",".join(ids), hours=2, batch=True)
+            reports = await self._counted_metars(ids)
         except _Rejected as exc:
             if len(ids) == 1:
                 batch.failed[ids[0]] = Failure(
@@ -171,6 +188,7 @@ class WeatherClient:
 
     async def _halves(self, ids: list[str], batch: Batch, *, retried: bool) -> None:
         middle = (len(ids) + 1) // 2
+        progress.expect(2)  # two requests nobody planned for
         await self._chunk(ids[:middle], batch, retried=retried)
         await self._chunk(ids[middle:], batch, retried=retried)
 

@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 from mcp.server.caching import CacheableMethod, CacheHint
+from mcp.server.mcpserver.utilities.context_injection import find_context_parameter
 
 from .auth import current_access_token
 from .telemetry import CACHE_ENTRIES, CACHE_REQUESTS
@@ -73,6 +74,8 @@ LIST_CACHE_HINTS: Final[Mapping[CacheableMethod, CacheHint]] = {
 TOOL_CACHE_HINTS: Final[Mapping[str, CacheHint]] = {
     # A bundled snapshot that changes only with a new image.
     "resolve_airport": CacheHint(ttl_ms=3_600_000, scope="public"),
+    # The same snapshot, a page at a time. A cursor is part of the key, so pages differ.
+    "search_airports": CacheHint(ttl_ms=3_600_000, scope="public"),
     # METARs are issued at most every 30 minutes. A minute old is still current.
     "airport_weather": CacheHint(ttl_ms=60_000, scope="public"),
     # The same METARs, a hundred airports at a time. The board polls it every 30 s.
@@ -248,12 +251,16 @@ def cached(
     if hint.ttl_ms <= 0:
         return fn  # nothing to decide per call
     signature = inspect.signature(fn)
+    # The request context a tool takes to report progress is per request, not an
+    # argument: in the key, it would make every call a miss.
+    plumbing = find_context_parameter(fn)
 
     @functools.wraps(fn)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
-        parts: list[Any] = [name, sorted(bound.arguments.items())]
+        arguments = sorted((k, v) for k, v in bound.arguments.items() if k != plumbing)
+        parts: list[Any] = [name, arguments]
         if hint.scope == "private":
             identity = cache_identity()
             if identity is None:

@@ -1,0 +1,24 @@
+id: happy-search-cursor-walk
+group: happy-path
+why: 'Every airport is reached by following nextCursor to the end; one page is not the whole list.'
+question: List every European airport in the reference data.
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: airport_catalogue
+  params:
+    region: europe
+    limit: 10
+expect:
+  tools:
+    required:
+    - search_airports
+  arguments:
+    search_airports:
+      region: europe
+      limit: 10
+  answer: reported

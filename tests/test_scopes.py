@@ -29,6 +29,7 @@ METADATA_URL = "http://127.0.0.1:8000/.well-known/oauth-protected-resource/mcp"
 
 ARGUMENTS: dict[str, dict[str, Any]] = {
     "resolve_airport": {"query": "ESGG"},
+    "search_airports": {"query": "ES"},
     "airport_weather": {"airport": "ESGG"},
     "weather_overview": {"airports": ["ESGG", "EGLL"]},
     "airport_live_traffic": {"airport": "ESGG"},

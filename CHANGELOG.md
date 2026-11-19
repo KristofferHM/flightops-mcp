@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The protocol surface around the tools** (`docs/PROTOCOL.md`). Every tool carries annotations from a closed
+  table (`annotations.py`); a tool without an entry fails registration, as one without a scope does.
+  `propose_rebooking` is `destructiveHint: true, idempotentHint: true`; the rest are `readOnlyHint: true`.
+  `resolve_airport`, `airport_weather` and `disruption_triage` publish a real `outputSchema` (`schemas.py`) that
+  includes their failure and `unknowns` shapes; `structuredContent` and the text block carry the same payload.
+- **`search_airports`**: the airport reference a page at a time, in ICAO order, at most 100 per page, with a
+  `nextCursor` while more match. Scope `reference.read`, cached 1 h. A full walk of the 3,270 world airports is
+  tested to reach each one once.
+- **Progress notifications** on `airport_movements`, `airspace_snapshot` and `weather_overview`, one per upstream
+  request, only when the request carries a progress token. Delivered on stdio; not on the HTTP server, whose
+  JSON responses have no room for them (`docs/PROTOCOL.md`).
+- **`airport://{icao}`** as a JSON resource, with `airport://index` describing it; an unknown code is a protocol
+  error. **Prompts** `triage_airport` and `brief_movements`. **Completions** of ICAO codes for the resource
+  template and both prompts, capped at 100. Over HTTP, resource reads and completions need `reference.read`.
+- Three eval scenarios for `search_airports`: a match, no match, and a cursor walk. Baseline 68/68.
 - **The world on the board.** `data/airports_world.csv` commits OurAirports' 3,270 large and medium airports with
   scheduled service (343 kB, public domain, source and date in its header and in `docs/REFERENCE-DATA.md`). The
   board builds from it, the 25-airport seed stays the test fixture, and the reference database gains a `continent`

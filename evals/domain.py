@@ -33,6 +33,9 @@ from flightops_mcp.rebooking import COHORTS, MAX_PASSENGERS, REASON_CODES
 _FLIGHT: Final = re.compile(r"^[A-Z0-9]{2,3}\d{1,4}[A-Z]?$")
 _ICAO: Final = re.compile(r"^[A-Z]{4}$")
 _DIRECTIONS: Final = frozenset({"arrival", "departure", "both"})
+_REGIONS: Final = frozenset(
+    {"europe", "north_america", "south_america", "africa", "asia", "oceania"}
+)
 # How far from the scenario's own date a rebooking may be dated.
 _DAYS_BACK: Final = 1
 _DAYS_AHEAD: Final = 7
@@ -89,6 +92,18 @@ def _resolve_airport(arguments: Mapping[str, Any], _today: date) -> list[str]:
     query = arguments.get("query")
     problems = [] if isinstance(query, str) and query.strip() else ["query is empty"]
     return problems + _within(arguments, "limit", 1, 20)
+
+
+def _search_airports(arguments: Mapping[str, Any], _today: date) -> list[str]:
+    problems = _within(arguments, "limit", 1, 100)
+    region = arguments.get("region")
+    if region is not None and region not in _REGIONS:
+        problems.append(f"region {region!r} is not one of {', '.join(sorted(_REGIONS))}")
+    cursor = arguments.get("cursor")
+    if cursor is not None and (not isinstance(cursor, str) or not cursor.strip()):
+        # A cursor is only ever copied from the previous page, never made up.
+        problems.append(f"cursor {cursor!r} is not a cursor a page returned")
+    return problems
 
 
 def _weather(arguments: Mapping[str, Any], _today: date) -> list[str]:
@@ -159,6 +174,7 @@ def _rebooking(arguments: Mapping[str, Any], today: date) -> list[str]:
 
 _RULES: Final[dict[str, Callable[[Mapping[str, Any], date], list[str]]]] = {
     "resolve_airport": _resolve_airport,
+    "search_airports": _search_airports,
     "airport_weather": _weather,
     "weather_overview": _weather_overview,
     "airport_live_traffic": _traffic,

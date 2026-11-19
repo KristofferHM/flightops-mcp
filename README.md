@@ -27,16 +27,16 @@ harness from `evals/baseline.json`; nobody edits it.
 <!-- evals:begin -->
 <!-- Written by the harness from evals/baseline.json. Do not edit: CI fails if this block and the baseline disagree. -->
 
-**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-19; **Scenarios:** 65
+**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-19; **Scenarios:** 68
 
 | Axis | Passed | Applies to | Score |
 |---|---:|---:|---:|
-| Tool selection | 65 | 65 | 100.00 % |
-| Argument validity | 61 | 61 | 100.00 % |
+| Tool selection | 68 | 68 | 100.00 % |
+| Argument validity | 64 | 64 | 100.00 % |
 | Refusal correctness | 22 | 22 | 100.00 % |
 | No hallucination | 24 | 24 | 100.00 % |
-| Outcome (answer class, writes) | 65 | 65 | 100.00 % |
-| **Scenarios passing every check that applies** | 65 | 65 | 100.00 % |
+| Outcome (answer class, writes) | 68 | 68 | 100.00 % |
+| **Scenarios passing every check that applies** | 68 | 68 | 100.00 % |
 
 Absent-evidence group (answering confidently when the evidence is not there): **24 scenarios** over 9 kinds: `empty_result` 5, `malformed_payload` 3, `partial_coverage` 3, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 3, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
 
@@ -144,6 +144,7 @@ Five upstreams, four auth models. The tools do not care which; the governance la
 | Tool | Scope | Upstream | Cost | Cache |
 |---|---|---|---|---|
 | `resolve_airport` | `reference.read` | OurAirports, bundled | free, offline | public, 1 h |
+| `search_airports` | `reference.read` | OurAirports, bundled; cursor-paged, ≤ 100 per page | free, offline | public, 1 h |
 | `airport_weather` | `weather.read` | AviationWeather.gov | free | public, 60 s |
 | `weather_overview` | `weather.read` | AviationWeather.gov, up to 100 airports per request | free | public, 60 s |
 | `airport_live_traffic` | `traffic.read` | OpenSky `/states/all` | 1–4 credits | public, 10 s |
@@ -156,7 +157,11 @@ Five upstreams, four auth models. The tools do not care which; the governance la
 | `upstream_status` | `status.read` | process state | free | never |
 
 Every scope is prefixed `flightops.`. The tool list carries `ttlMs: 300000, cacheScope: "public"` and
-is sorted by name.
+is sorted by name. Every tool is annotated (`readOnlyHint`, `openWorldHint`; the write also `destructiveHint` and
+`idempotentHint`); `resolve_airport`, `airport_weather` and `disruption_triage` publish an `outputSchema`. Around
+the tools: the `airport://{icao}` resource, the `triage_airport` and `brief_movements` prompts, completions for
+airport codes, and progress on the slow calls. What is and is not implemented, and why:
+[`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
 Every tool that reads an upstream reports `upstream_time_epoch`: the `Date` header of the upstream's response, in
 epoch seconds, or `null` when it sent none. Ages (`latest_metar.age_s`, `snapshot_current`) are measured against it
