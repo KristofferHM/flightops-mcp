@@ -17,8 +17,6 @@ import pytest
 from dashboard import board
 
 NOW = int(datetime(2026, 11, 14, 23, 30, tzinfo=UTC).timestamp())
-AS_OF = datetime.fromtimestamp(NOW, tz=UTC).isoformat()
-STATUS = {"as_of": AS_OF}
 LIMIT = board.METAR_STALE_AFTER_S
 FRESHNESS = {"most_recent_only": True, "time_resolution_s": 10}
 ENTRY = {
@@ -45,7 +43,7 @@ ROW = list(ENTRY.values())
 
 
 def seen(age_s: int | None) -> dict[str, Any]:
-    return {"state": "reported", "age_s": age_s, "answered_at": float(NOW)}
+    return {"state": "reported", "age_s": age_s, "upstream_time": NOW}
 
 
 def line(source: str, label: str, state: str, text: str) -> dict[str, str]:
@@ -55,7 +53,7 @@ def line(source: str, label: str, state: str, text: str) -> dict[str, str]:
 def metar(age_s: int | None, *, current: bool = True, category: str = "VFR") -> dict[str, Any]:
     return {
         "ok": True,
-        "as_of": AS_OF,
+        "upstream_time_epoch": NOW,
         "metar": [{"flight_category": category, "observation_time": "t", "raw_text": "RAW"}],
         "latest_metar": {"age_s": age_s, "current": current},
         "unknowns": ["gap"],
@@ -86,7 +84,8 @@ def test_a_reported_airport_in_full() -> None:
         "state": "reported",
         "category": "VFR",
         "age_s": 600,
-        "answered_at": float(NOW),
+        "upstream_time": NOW,
+        "upstream_time_missing": False,
         "summary": "VFR, METAR 10 min old",
         "raw": "RAW",
         "unknowns": ["gap"],
@@ -94,13 +93,18 @@ def test_a_reported_airport_in_full() -> None:
 
 
 def test_a_failed_weather_call_in_full() -> None:
-    payload = {"ok": False, "as_of": AS_OF, "error": {"code": "down", "message": "It is down."}}
+    payload = {
+        "ok": False,
+        "upstream_time_epoch": NOW,
+        "error": {"code": "down", "message": "It is down."},
+    }
 
     assert board.weather_view(payload) == {
         "state": "unknown",
         "category": None,
         "age_s": None,
-        "answered_at": float(NOW),
+        "upstream_time": None,
+        "upstream_time_missing": False,
         "summary": "Unknown: weather unavailable (down)",
         "raw": None,
         "unknowns": ["It is down."],
@@ -113,7 +117,8 @@ def test_a_failure_without_a_usable_error_still_says_unknown(error: Any) -> None
         "state": "unknown",
         "category": None,
         "age_s": None,
-        "answered_at": None,
+        "upstream_time": None,
+        "upstream_time_missing": False,
         "summary": "Unknown: weather unavailable (unknown)",
         "raw": None,
         "unknowns": ["Weather could not be read."],
@@ -125,7 +130,8 @@ def test_an_answer_with_nothing_in_it_claims_nothing() -> None:
         "state": "unknown",
         "category": None,
         "age_s": None,
-        "answered_at": None,
+        "upstream_time": None,
+        "upstream_time_missing": False,
         "summary": "Unknown: no METAR returned",
         "raw": None,
         "unknowns": [],
@@ -173,7 +179,7 @@ def test_a_weather_marker_in_full() -> None:
 def traffic(**changes: Any) -> dict[str, Any]:
     return {
         "ok": True,
-        "as_of": AS_OF,
+        "upstream_time_epoch": NOW,
         "counts": {"returned": 1},
         "snapshot_current": True,
         "credentials": "anonymous",
@@ -256,7 +262,7 @@ def test_a_traffic_failure_with_no_detail_still_says_unknown() -> None:
 def airspace(**changes: Any) -> dict[str, Any]:
     return {
         "ok": True,
-        "as_of": AS_OF,
+        "upstream_time_epoch": NOW,
         "columns": COLUMNS,
         "rows": [ROW],
         "snapshot_current": True,
@@ -296,6 +302,7 @@ def test_an_airspace_answer_in_full(
         "freshness": FRESHNESS,
         "truncated": True,
         "snapshot_epoch": NOW,
+        "upstream_epoch": NOW,
         "aircraft": aircraft,
         "unknowns": ["gap"],
     }
@@ -309,6 +316,7 @@ def test_a_failed_airspace_call_in_full() -> None:
         "summary": "Unknown: traffic unavailable (down)",
         "hint": "Later.",
         "snapshot_epoch": 0,
+        "upstream_epoch": 0,
         "aircraft": [],
         "unknowns": ["Refused."],
     }
@@ -394,6 +402,43 @@ def test_a_failed_triage_with_no_detail_says_so() -> None:
     assert board.triage_view({"ok": False})["unknowns"] == ["The triage could not run."]
 
 
+# --- no upstream time ------------------------------------------------------------------
+def test_a_current_metar_without_an_upstream_time_in_full() -> None:
+    payload = {key: value for key, value in metar(600).items() if key != "upstream_time_epoch"}
+
+    assert board.weather_view(payload) == {
+        "state": "unknown",
+        "category": None,
+        "age_s": None,
+        "upstream_time": None,
+        "upstream_time_missing": True,
+        "summary": "Unknown: freshness unknown — no upstream time",
+        "raw": "RAW",
+        "unknowns": ["gap"],
+    }
+
+
+@pytest.mark.parametrize("epoch", [True, 0, -1, "1794699000", board.MAX_SNAPSHOT_EPOCH + 1])
+def test_an_unusable_upstream_time_is_no_upstream_time(epoch: Any) -> None:
+    assert board.upstream_time({"upstream_time_epoch": epoch}) is None
+    assert board.airspace_view(airspace(upstream_time_epoch=epoch))["upstream_epoch"] == 0
+
+
+def test_the_unknown_freshness_line_in_full() -> None:
+    missing = {"state": "unknown", "age_s": None, "upstream_time_missing": True}
+
+    assert board.last_update([missing], None) == {
+        "state": "no_upstream_time",
+        "lines": [line("weather", "Weather", "no_upstream_time", board.NO_UPSTREAM_TIME)],
+    }
+    assert board.last_update([missing, seen(60)], None)["lines"] == [
+        line("weather", "Weather", "live", "Last update 1 min ago")
+    ]
+    assert board.last_update([seen(60)], None, NOW, 0)["lines"][1] == line(
+        "traffic", "Traffic", "no_upstream_time", board.NO_UPSTREAM_TIME
+    )
+
+
 # --- the banner and the badge ----------------------------------------------------------
 def test_the_stale_banner_in_full() -> None:
     view = {"state": "unknown", "age_s": 9000}
@@ -405,26 +450,26 @@ def test_the_stale_banner_in_full() -> None:
 
 
 def test_a_report_dated_in_the_future_in_full() -> None:
-    assert board.last_update([seen(-LIMIT - 1)], STATUS, None) == {
+    assert board.last_update([seen(-LIMIT - 1)], None) == {
         "state": "stale",
         "lines": [line("weather", "Weather", "stale", "stale: dated in the future")],
     }
 
 
 def test_a_report_exactly_at_the_future_tolerance_still_counts_as_fresh() -> None:
-    view = board.last_update([seen(-LIMIT), seen(600)], STATUS, None)
+    view = board.last_update([seen(-LIMIT), seen(600)], None)
 
     assert view["lines"][0]["text"] == "Last update under 1 min ago"
 
 
 def test_a_layer_with_no_usable_time_in_full() -> None:
-    assert board.last_update([seen(60)], STATUS, None, 0)["lines"][1] == line(
+    assert board.last_update([seen(60)], None, 0)["lines"][1] == line(
         "traffic", "Traffic", "unknown", board.SNAPSHOT_TIME_UNKNOWN
     )
 
 
 def test_a_recording_in_full() -> None:
-    view = board.last_update([], STATUS, "2026-11-14T23:30:40+00:00", NOW - 60)
+    view = board.last_update([], "2026-11-14T23:30:40+00:00", NOW - 60)
 
     assert view == {
         "state": "recorded",
@@ -449,6 +494,6 @@ def clock_in_tokyo(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 @pytest.mark.usefixtures("clock_in_tokyo")
 def test_times_are_utc_whatever_the_servers_clock_says() -> None:
-    assert board.last_update([], STATUS, "2026-11-15T00:30:00+01:00")["lines"][0]["text"] == (
+    assert board.last_update([], "2026-11-15T00:30:00+01:00")["lines"][0]["text"] == (
         "2026-11-14 23:30 UTC"
     )

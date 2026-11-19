@@ -32,7 +32,9 @@ from flightops_mcp.airports import AirportDB, build_from_csv
 
 Payload = dict[str, Any]
 
-SCENARIOS: Final = ("data", "empty")
+# `no_time` is the data scenario from upstreams that send no `Date`: METARs are on the
+# page, and no age is claimed for them.
+SCENARIOS: Final = ("data", "empty", "no_time")
 # The last entry has no category, so the unknown marker and its wording are on the page too.
 CATEGORIES: Final = ("VFR", "MVFR", "IFR", "LIFR", None)
 FRESH_AGE_S: Final = 240
@@ -51,20 +53,25 @@ class SyntheticSource:
     def _as_of(self) -> str:
         return datetime.fromtimestamp(self._clock(), UTC).isoformat()
 
+    def _upstream_time(self) -> int | None:
+        """The upstream's `Date`, as the tools carry it. None when it sent none."""
+        return None if self._scenario == "no_time" else int(self._clock())
+
     def _weather(self, airport: str) -> Payload:
         if self._scenario == "empty":
             return {
                 "ok": True,
-                "as_of": self._as_of(),
+                "upstream_time_epoch": self._upstream_time(),
                 "metar": [],
                 "latest_metar": {"age_s": None, "current": False},
                 "unknowns": ["No METAR has been returned for this airport."],
             }
         category = CATEGORIES[sum(map(ord, airport)) % len(CATEGORIES)]
         age = FRESH_AGE_S if category else OLD_AGE_S
+        dated = self._upstream_time() is not None
         return {
             "ok": True,
-            "as_of": self._as_of(),
+            "upstream_time_epoch": self._upstream_time(),
             "metar": [
                 {
                     "flight_category": category,
@@ -72,7 +79,10 @@ class SyntheticSource:
                     "raw_text": f"{airport} 182320Z 24008KT 9999 BKN030 08/05 Q1008",
                 }
             ],
-            "latest_metar": {"age_s": age, "current": category is not None},
+            "latest_metar": {
+                "age_s": age if dated else None,
+                "current": dated and category is not None,
+            },
             "unknowns": [],
         }
 
@@ -91,7 +101,7 @@ class SyntheticSource:
         ]
         return {
             "ok": True,
-            "as_of": self._as_of(),
+            "upstream_time_epoch": self._upstream_time(),
             "counts": {"returned": len(aircraft)},
             "snapshot_current": True,
             "aircraft": aircraft,
@@ -100,7 +110,6 @@ class SyntheticSource:
 
     def _status(self) -> Payload:
         return {
-            "as_of": self._as_of(),
             "credentials": {"opensky": "client_credentials"},
             "budget": {"credits_spent_this_hour": 4, "local_budget_per_hour": 400},
             "cache": {"hit_rate": 0.5},

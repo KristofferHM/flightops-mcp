@@ -6,7 +6,14 @@ import httpx
 import pytest
 
 from flightops_mcp.config import Settings
-from flightops_mcp.http import UpstreamHttp, credits_remaining, retry_after_seconds
+from flightops_mcp.http import (
+    HttpResponse,
+    UpstreamHttp,
+    credits_remaining,
+    parse_http_date,
+    retry_after_seconds,
+    upstream_time_from_headers,
+)
 
 from .conftest import SleepRecorder
 
@@ -131,3 +138,29 @@ async def test_allowed_status_is_a_normal_outcome(settings: Settings, sleep: Sle
 
     assert result.status_code == 204
     assert result.json_body is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Sat, 14 Nov 2026 23:30:07 GMT", 1794699007),
+        ("Sat, 14 Nov 2026 23:30:07", 1794699007),
+        ("Sun, 15 Nov 2026 00:30:07 +0100", 1794699007),
+        ("", None),
+        ("   ", None),
+        (None, None),
+        ("soon", None),
+        ("Thu, 01 Jan 1970 00:00:00 GMT", None),
+    ],
+)
+def test_an_http_date_keeps_its_seconds(raw: str | None, expected: int | None) -> None:
+    assert parse_http_date(raw) == expected
+
+
+def test_the_date_header_is_found_whatever_its_case() -> None:
+    stamp = "Sat, 14 Nov 2026 23:30:07 GMT"
+
+    assert upstream_time_from_headers({"date": stamp}) == 1794699007
+    assert upstream_time_from_headers({"DATE": stamp}) == 1794699007
+    assert upstream_time_from_headers({}) is None
+    assert HttpResponse(200, None, {"Date": stamp}).upstream_time_epoch == 1794699007

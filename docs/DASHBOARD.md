@@ -114,6 +114,7 @@ The page only displays them, and it does no date arithmetic.
 | Traffic layer on, snapshot older than 5 min | `Traffic stale: last update 21 min ago` |
 | A report or snapshot dated beyond the limit ahead of the clock | `stale: dated in the future` |
 | Traffic layer on, no usable snapshot time | `Traffic snapshot time unknown` |
+| The upstream's answer carried no `Date` header | `Weather freshness unknown — no upstream time`, or the same for `Traffic` |
 | Replaying a recording | `Recorded 2026-11-14 23:30 UTC`, and `Traffic snapshot 2026-11-14 23:29 UTC` |
 | The board server does not answer | `Board no answer from the server` |
 
@@ -122,8 +123,10 @@ The page only displays them, and it does no date arithmetic.
 - Weather and traffic always get separate lines, so neither age can stand in for the other.
 - The limits are the tools' own, `METAR_STALE_AFTER_S` and `STATES_STALE_AFTER_S`. Exactly at the limit is still
   current. A stale badge turns amber and also says `stale`, so colour is not the only signal.
-- The page sends the traffic layer's snapshot time back to `/api/board`, exactly as the server gave it, and the
-  server works out the age against the time in the newest weather answer. This costs no credits.
+- `freshness unknown — no upstream time` is neither live nor stale: a dotted border and an italic line, in the text
+  colour. It never shows a number, because the only number available would come from this machine's clock.
+- The page sends the traffic layer's snapshot time and OpenSky's `Date` back to `/api/board`, exactly as the server
+  gave them, and the server works out the age from those two. This costs no credits.
 - It says nothing about the aircraft drawn around a selected airport. Those fade by their own age.
 - Ages change when a poll lands. Nothing counts up between polls.
 
@@ -139,7 +142,8 @@ The CI job `a11y` now enforces this. `node scripts/a11y.mjs` (setup in its heade
 synthetic tool answers, signs in, and walks map, globe, airport selected and no data yet at both sizes, plus the
 sign-in page. It fails on a `serious` or `critical` axe-core violation, on sideways scroll or an element wider than
 the viewport at 390 px, on a page error, and on any request that leaves the machine. axe-core and Playwright are
-pinned in `scripts/package-lock.json`. The traffic, stale and recorded states above are not part of the walk.
+pinned in `scripts/package-lock.json`. A third fixture answers with no upstream time, so the walk also covers `freshness unknown — no upstream time` at
+both sizes. The traffic, stale and recorded states above are not part of the walk.
 
 ## Exposure
 
@@ -169,5 +173,25 @@ available yet today". And flights cost far more than the 4 credits this client c
 anonymously, so anonymous mode does not call them. **Whether authenticated calls are debited the same has not
 been measured.** Compare the strip's "OpenSky credits left" before and after a triage once credentials exist.
 
-The board judges freshness against this machine's clock. A clock that runs fast makes current data read as old,
-which the board reports as a snapshot that is not current.
+## Which clock judges freshness
+
+Every age is measured against the upstream's own clock: the `Date` header of the HTTP response that carried the data,
+which the tools report as `upstream_time_epoch`, to the second. A METAR's age is NOAA's `Date` minus its observation
+time. A traffic snapshot's age is OpenSky's `Date` minus the snapshot's `time`. Aircraft fade by OpenSky's `Date`
+minus their last contact.
+
+When a response carries no `Date`, the tool says so in `unknowns`, reports no age and does not call the data current,
+and the badge reads `freshness unknown — no upstream time`. Nothing falls back to this machine's clock.
+
+This machine's clock is not trusted because it was measured 21 min 27 s fast on 2026-11-19 and cannot be resynced
+from a non-administrator account (`w32tm` reports a free-running system clock). Against it, every METAR read 21
+minutes older than it was and every traffic snapshot read stale. `tests/test_dashboard.py` runs the real tools and
+the board with the host clock 21 min 27 s fast and asserts each verdict is the one a correct clock gives.
+
+Two things still read the local clock, on purpose. The windows sent upstream (`airport_movements`' look-back,
+`schiphol_flights`' look-ahead) are request parameters, chosen before any upstream has answered. The credit ledgers,
+the `429` waits and token expiry measure this machine's own behaviour.
+
+A recording keeps each answer's `upstream_time_epoch`, so playback ages are the upstream's too. The time a recording
+shows in the badge, `created_at` and each entry's `t`, is the recording machine's clock: when the data arrived
+there, which on a skewed machine is off by the skew.

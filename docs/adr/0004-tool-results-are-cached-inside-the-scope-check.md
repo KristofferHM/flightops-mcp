@@ -37,8 +37,8 @@ choice a line of policy in code.**
   server wraps `scoped(...)` around that. A refused caller is refused before the cache is consulted.
 - **Only `ok: true` payloads are kept.** A failure payload or a raised failure goes to the caller and
   is forgotten.
-- **A hit is labelled**: a `cache` block (`hit`, `ttl_ms`, `scope`), its original `as_of` (when the
-  data was fetched), and `credits_spent: 0`, so a composite that sums its parts' spend does not count
+- **A hit is labelled**: a `cache` block (`hit`, `ttl_ms`, `scope`), its original `upstream_time_epoch`
+  (the upstream's clock when the data was fetched; `as_of` until 2026-11-19), and `credits_spent: 0`, so a composite that sums its parts' spend does not count
   a credit twice.
 - **Concurrent identical calls are coalesced**: the first runs, the rest await its answer.
 - **Observable**: `flightops_cache_requests_total{tool,outcome}` (hit, miss, coalesced, bypass) and
@@ -57,7 +57,7 @@ top of the model's prompt, and a prompt cache hits only on an identical prefix.
   the same load with the cache off spends the 400-credit hourly budget in under a minute and has
   27.87 % of calls refused by the ledger (docs/LOAD-TEST.md).
 - A cached traffic snapshot is up to 10 s older than it would have been. The payload says so
-  (`cache.hit`, `as_of`), and the tool description tells the model what a hit means.
+  (`cache.hit`, `upstream_time_epoch`), and the tool description tells the model what a hit means.
 - One cache per process. Replicas do not share entries, and coalescing works within one process.
 - Tests that count downstream calls per request (`tests/test_obo.py`) run with the cache off and
   say why; two tests run the same stack with it on and show one downstream read per identity.

@@ -10,6 +10,7 @@ tool layer must preserve, because "no observation" is not "the airport is fine".
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -21,6 +22,19 @@ from .telemetry import get_logger
 
 # Flight-category thresholds are advisory: report them, never act on them alone.
 IFR_CATEGORIES = frozenset({"IFR", "LIFR"})
+
+
+@dataclass(slots=True)
+class Reports:
+    """One product's reports, and NOAA's clock when it answered.
+
+    `upstream_time` comes from the response's `Date` header and is None when it had
+    none. A METAR's age is `upstream_time - observation_time`, so NOAA's clock judges
+    NOAA's data and this machine's clock is not an input.
+    """
+
+    items: list[dict[str, Any]] = field(default_factory=list)
+    upstream_time: int | None = None
 
 
 class WeatherClient:
@@ -45,17 +59,21 @@ class WeatherClient:
         await self.aclose()
 
     async def metar(self, icao: str) -> list[dict[str, Any]]:
-        return await self._observations("metar", icao, hours=2)
+        return (await self.metar_reports(icao)).items
 
     async def taf(self, icao: str) -> list[dict[str, Any]]:
+        return (await self.taf_reports(icao)).items
+
+    async def metar_reports(self, icao: str) -> Reports:
+        return await self._observations("metar", icao, hours=2)
+
+    async def taf_reports(self, icao: str) -> Reports:
         # No `hours` parameter: AviationWeather.gov rejects it on /taf with
         # HTTP 400 "Unexpected query parameter provided" (verified live), while
         # /metar accepts it. Sending it anyway silently breaks TAF retrieval.
         return await self._observations("taf", icao, hours=None)
 
-    async def _observations(
-        self, product: str, icao: str, hours: int | None
-    ) -> list[dict[str, Any]]:
+    async def _observations(self, product: str, icao: str, hours: int | None) -> Reports:
         params: dict[str, object] = {"ids": icao.upper(), "format": "json"}
         if hours is not None:
             params["hours"] = hours
@@ -65,15 +83,16 @@ class WeatherClient:
             params=params,
             allow_status=frozenset({204}),
         )
+        upstream_time = response.upstream_time_epoch
         if response.status_code == 204:
-            return []
+            return Reports([], upstream_time)
         if response.status_code >= 400:
             raise upstream_unavailable(
                 "AviationWeather.gov", f"HTTP {response.status_code} for {product} {icao}"
             )
         body = response.json_body
         if body is None:
-            return []
+            return Reports([], upstream_time)
         if isinstance(body, dict):
             body = [body]
         if not isinstance(body, list):
@@ -100,7 +119,7 @@ class WeatherClient:
                     "product": product,
                 }
             )
-        return out
+        return Reports(out, upstream_time)
 
 
 def _number(value: object) -> float | None:

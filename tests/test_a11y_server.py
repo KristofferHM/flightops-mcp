@@ -36,6 +36,24 @@ async def test_the_empty_scenario_is_the_no_data_yet_state() -> None:
     assert {airport["marker"]["kind"] for airport in board["airports"]} == {"unknown"}
 
 
+async def test_the_no_time_scenario_claims_no_age() -> None:
+    async with client("no_time") as http:
+        board = (await http.get("/api/board")).json()
+
+    assert board["last_update"] == {
+        "state": "no_upstream_time",
+        "lines": [
+            {
+                "source": "weather",
+                "label": "Weather",
+                "state": "no_upstream_time",
+                "text": "freshness unknown — no upstream time",
+            }
+        ],
+    }
+    assert {airport["marker"]["kind"] for airport in board["airports"]} == {"unknown"}
+
+
 async def test_a_selected_airport_has_weather_and_traffic() -> None:
     async with client("data") as http:
         icao = (await http.get("/api/board")).json()["airports"][0]["icao"]

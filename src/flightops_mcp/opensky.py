@@ -30,7 +30,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Final, Literal
 
 import httpx
@@ -210,6 +210,9 @@ class StatesSnapshot:
     # silently: a count over the readable rows is not the count.
     unreadable: int = 0
     received: int = 0
+    # OpenSky's clock when it answered, from the response's `Date` header. The
+    # snapshot's age is `upstream_time - time`; this machine's clock plays no part.
+    upstream_time: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +221,7 @@ class Movements:
     # Rows that were not a flight object. Counted for the same reason as above.
     unreadable: int = 0
     received: int = 0
+    upstream_time: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,8 +348,11 @@ class OpenSkyClient:
         }
 
     # --- requests -----------------------------------------------------------
-    async def _authorized_get(self, path: str, params: dict[str, Any]) -> Any:
-        """GET under the shared 401/429 policy (http.py), as this credential mode."""
+    async def _authorized_get(self, path: str, params: dict[str, Any]) -> tuple[Any, int | None]:
+        """GET under the shared 401/429 policy (http.py), as this credential mode.
+
+        Returns the body and the upstream's `Date`, which is None when the answer had none.
+        """
         response = await authorized_get(
             self._http,
             self._tokens if self.credentials_mode == "client_credentials" else None,
@@ -357,20 +364,19 @@ class OpenSkyClient:
             # 404 is OpenSky's documented answer for "no flights in this interval".
             empty_status=frozenset({404}),
         )
-        if response is None:
-            return None
         remaining = credits_remaining_from_headers(response.headers)
         if remaining is not None:
             self.last_credits_remaining = remaining
             CREDITS_REMAINING.set(float(remaining))
-        return response.json_body
+        return response.json_body, response.upstream_time_epoch
 
     async def states_in_bbox(self, bbox: BBox, *, max_vectors: int = 200) -> StatesSnapshot:
         self._require_access()
         cost = bbox.credit_cost
         self._charge(cost)
-        body = await self._authorized_get("/states/all", bbox.as_params())
+        body, upstream_time = await self._authorized_get("/states/all", bbox.as_params())
         snapshot = decode_states(body, max_vectors=max_vectors)
+        snapshot.upstream_time = upstream_time
         snapshot.credits_spent = cost
         snapshot.credits_remaining = self.last_credits_remaining
         return snapshot
@@ -396,11 +402,11 @@ class OpenSkyClient:
             raise missing_credentials()
         cost = 4  # live / < 24h window
         self._charge(cost)
-        body = await self._authorized_get(
+        body, upstream_time = await self._authorized_get(
             f"/flights/{direction}",
             {"airport": airport_icao, "begin": begin, "end": end},
         )
-        return decode_movements(body)
+        return replace(decode_movements(body), upstream_time=upstream_time)
 
 
 def decode_states(body: object, *, max_vectors: int) -> StatesSnapshot:

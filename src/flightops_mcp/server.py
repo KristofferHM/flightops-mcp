@@ -141,7 +141,10 @@ or work around an approval.
 schedule, not an observation: compare it with `airport_movements` before saying \
 a flight has operated.
 9. A payload with `cache.hit: true` was served from this server's cache. Its \
-`as_of` is when the data was fetched; a repeat inside the TTL costs no credits.
+`upstream_time_epoch` is the upstream's clock when the data was fetched; a repeat \
+inside the TTL costs no credits.
+10. Ages are measured against `upstream_time_epoch`, the upstream's own `Date` \
+header. When it is null the age is unknown, and the payload says so in `unknowns`.
 """
 
 _log = get_logger(__name__)
@@ -284,8 +287,19 @@ def _age(seconds: float) -> str:
     return f"{minutes} min" if minutes < 120 else f"{minutes // 60} h {minutes % 60} min"
 
 
-def _snapshot_unknowns(snapshot: StatesSnapshot, now: float, where: str) -> tuple[list[str], bool]:
-    """What a traffic snapshot cannot show, and whether it describes the present."""
+def _newest(*epochs: object) -> int | None:
+    """The latest of several upstream times, ignoring the ones that are missing."""
+    known = [e for e in epochs if isinstance(e, int) and not isinstance(e, bool) and e > 0]
+    return max(known) if known else None
+
+
+def _snapshot_unknowns(snapshot: StatesSnapshot, where: str) -> tuple[list[str], bool]:
+    """What a traffic snapshot cannot show, and whether it describes the present.
+
+    "The present" is OpenSky's clock when it answered, from its `Date` header. This
+    machine's clock is not used: a host running minutes fast made every snapshot stale.
+    """
+    now = snapshot.upstream_time
     unknowns: list[str] = []
     if not snapshot.vectors:
         unknowns.append(
@@ -304,6 +318,12 @@ def _snapshot_unknowns(snapshot: StatesSnapshot, now: float, where: str) -> tupl
             unknowns.append(
                 "OpenSky's answer carries no snapshot time, so how current these positions "
                 "are is unknown."
+            )
+    elif now is None:
+        if snapshot.vectors:
+            unknowns.append(
+                "OpenSky's response carried no Date header, so how old this snapshot is "
+                "cannot be judged. This server does not substitute its own clock."
             )
     elif now - snapshot.time > STATES_STALE_AFTER_S:
         unknowns.append(
@@ -405,12 +425,12 @@ async def airport_live_traffic(
     airborne = sum(1 for vector in snapshot.vectors if not vector.on_ground)
     on_ground = len(snapshot.vectors) - airborne
 
-    unknowns, snapshot_current = _snapshot_unknowns(snapshot, runtime.data_clock(), "this box")
+    unknowns, snapshot_current = _snapshot_unknowns(snapshot, "this box")
     if runtime.opensky.credentials_mode == "anonymous":
         unknowns.append(ANONYMOUS_LIMITATION)
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.data_clock),
+        "upstream_time_epoch": snapshot.upstream_time,
         "credentials": runtime.opensky.credentials_mode,
         "freshness": runtime.opensky.freshness(),
         "snapshot_time_epoch": snapshot.time,
@@ -466,7 +486,7 @@ async def airspace_snapshot(region: str, max_aircraft: int = 500) -> dict[str, A
         )
 
     placed = [v for v in snapshot.vectors if v.latitude is not None and v.longitude is not None]
-    unknowns, current = _snapshot_unknowns(snapshot, runtime.data_clock(), "this region")
+    unknowns, current = _snapshot_unknowns(snapshot, "this region")
     if runtime.opensky.credentials_mode == "anonymous":
         unknowns.append(ANONYMOUS_LIMITATION)
     if snapshot.truncated:
@@ -480,7 +500,7 @@ async def airspace_snapshot(region: str, max_aircraft: int = 500) -> dict[str, A
         )
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.data_clock),
+        "upstream_time_epoch": snapshot.upstream_time,
         "region": wanted,
         "credentials": runtime.opensky.credentials_mode,
         "freshness": runtime.opensky.freshness(),
@@ -545,6 +565,8 @@ async def airport_movements(
             hint="Use 'both' if you are unsure; it costs twice the credits of one direction.",
         )
     window = max(5, min(window_minutes, MAX_HISTORY_S // 60))
+    # The window is a request parameter, asked for before any upstream has answered,
+    # so it is the one thing here that a local clock decides.
     end = int(runtime.data_clock())
     end -= end % TIME_RESOLUTION_S
     begin = end - window * 60
@@ -553,6 +575,7 @@ async def airport_movements(
     results: dict[str, list[dict[str, Any]]] = {}
     missing: list[str] = []
     unknowns: list[str] = []
+    upstream_time: int | None = None
     for which in directions:
         try:
             page = await runtime.opensky.movements(record["ident"], which, begin=begin, end=end)
@@ -562,6 +585,7 @@ async def airport_movements(
                 continue
             raise
         results[which] = [movement.to_payload() for movement in page.movements]
+        upstream_time = _newest(upstream_time, page.upstream_time)
         if page.unreadable:
             unknowns.append(
                 f"{page.unreadable} of {page.received} {which} rows in OpenSky's answer were "
@@ -578,7 +602,8 @@ async def airport_movements(
 
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.data_clock),
+        # None when nothing was fetched, or when no answer carried a `Date`.
+        "upstream_time_epoch": upstream_time,
         "credentials": runtime.opensky.credentials_mode,
         "airport": {"icao": record["ident"], "name": record["name"]},
         "window": {"begin_epoch": begin, "end_epoch": end, "minutes": window},
@@ -609,8 +634,11 @@ async def airport_weather(airport: str) -> dict[str, Any]:
     runtime = get_runtime()
     record = _require_airport(runtime, airport)
     icao = record["ident"]
-    metars = await runtime.weather.metar(icao)
-    tafs = await runtime.weather.taf(icao)
+    metar_reports = await runtime.weather.metar_reports(icao)
+    metars = metar_reports.items
+    tafs = (await runtime.weather.taf_reports(icao)).items
+    # NOAA's clock when it sent the METARs. Their age is measured against it.
+    upstream_time = metar_reports.upstream_time
     flags = fleet_impact_flags(metars)
 
     unknowns: list[str] = []
@@ -629,8 +657,13 @@ async def airport_weather(airport: str) -> dict[str, Any]:
                 "The METAR carries no readable observation time, so whether it describes "
                 "conditions now is unknown."
             )
+        elif upstream_time is None:
+            unknowns.append(
+                "NOAA's response carried no Date header, so how old the METAR is cannot be "
+                "judged. This server does not substitute its own clock."
+            )
         else:
-            age = runtime.data_clock() - max(observed)
+            age = upstream_time - max(observed)
             if age > METAR_STALE_AFTER_S:
                 unknowns.append(
                     f"The latest METAR is {_age(age)} old. It is not current conditions, and "
@@ -644,7 +677,7 @@ async def airport_weather(airport: str) -> dict[str, Any]:
 
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.data_clock),
+        "upstream_time_epoch": upstream_time,
         "airport": {"icao": icao, "name": record["name"]},
         "metar": metars,
         "taf": tafs,
@@ -745,7 +778,13 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
 
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.data_clock),
+        # The newest of the legs' upstream times. Each leg judged its own age by its own.
+        "upstream_time_epoch": _newest(
+            *(
+                leg.get("upstream_time_epoch")
+                for leg in (weather_payload, movements_payload, traffic_payload)
+            )
+        ),
         "credentials": mode,
         "airport": {"icao": icao, "name": record["name"], "municipality": record["municipality"]},
         "assessment": {
@@ -801,6 +840,7 @@ async def schiphol_flights(direction: str = "both", window_minutes: int = 120) -
             hint="Use 'both' if you are unsure; it costs twice the requests of one direction.",
         )
     window = max(15, min(720, window_minutes))
+    # A request parameter, asked for before Schiphol has answered: a local clock.
     begin = runtime.data_clock()
     end = begin + window * 60
     directions = ["arrival", "departure"] if wanted == "both" else [wanted]
@@ -809,9 +849,11 @@ async def schiphol_flights(direction: str = "both", window_minutes: int = 120) -
     counts: dict[str, dict[str, int]] = {}
     unknowns: list[str] = []
     requests = 0
+    upstream_time: int | None = None
     for which in directions:
         schedule = await runtime.schiphol.schedule(which, begin=begin, end=end)
         requests += schedule.requests
+        upstream_time = _newest(upstream_time, schedule.upstream_time)
         flights[which] = [flight.to_payload() for flight in schedule.flights]
         counts[which] = {
             "listed": len(schedule.flights),
@@ -837,7 +879,7 @@ async def schiphol_flights(direction: str = "both", window_minutes: int = 120) -
 
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.data_clock),
+        "upstream_time_epoch": upstream_time,
         "airport": {"icao": "EHAM", "iata": "AMS", "name": "Amsterdam Airport Schiphol"},
         "window": {"begin_epoch": int(begin), "end_epoch": int(end), "minutes": window},
         "counts": counts,
@@ -870,7 +912,6 @@ async def upstream_status() -> dict[str, Any]:
     cache_requests = runtime.cache.hits + runtime.cache.misses
     return {
         "ok": True,
-        "as_of": _iso_now(runtime.clock),
         "credentials": {
             "opensky": runtime.opensky.credentials_mode,
             "opensky_configured": runtime.opensky._tokens.has_credentials(),  # noqa: SLF001

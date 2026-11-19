@@ -130,6 +130,7 @@ class FlightsPage:
     unreadable: int = 0
     received: int = 0
     next_page: int | None = None
+    upstream_time: int | None = None
 
 
 @dataclass(slots=True)
@@ -139,6 +140,8 @@ class Schedule:
     received: int = 0
     requests: int = 0
     truncated: bool = False
+    # Schiphol's clock at the newest page it answered, from the `Date` header.
+    upstream_time: int | None = None
 
 
 class SchipholClient:
@@ -215,6 +218,8 @@ class SchipholClient:
             out.flights.extend(result.flights)
             out.unreadable += result.unreadable
             out.received += result.received
+            if result.upstream_time is not None:
+                out.upstream_time = max(out.upstream_time or 0, result.upstream_time)
             page = result.next_page
         return out
 
@@ -241,10 +246,11 @@ class SchipholClient:
             # 204 is how the v4 resource answers a valid query with no flights.
             empty_status=frozenset({204}),
         )
-        if response is None or response.status_code == 204:
-            return FlightsPage([])
+        if response.status_code == 204:
+            return FlightsPage([], upstream_time=response.upstream_time_epoch)
         result = decode_flights(response.json_body)
         result.next_page = page + 1 if _has_next(response.headers) else None
+        result.upstream_time = response.upstream_time_epoch
         return result
 
 

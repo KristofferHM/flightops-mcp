@@ -19,7 +19,10 @@ from mcp import Client
 from flightops_mcp import server as srv
 from flightops_mcp.airports import build_from_csv
 from flightops_mcp.config import Settings
+from flightops_mcp.opensky import OpenSkyClient
 from flightops_mcp.runtime import Runtime, set_runtime
+from flightops_mcp.weather import WeatherClient
+from services.mock_upstream.dated import dated
 
 from .conftest import FIXTURES, SleepRecorder
 
@@ -99,18 +102,20 @@ def install(
             return httpx.Response(204)
         return httpx.Response(200, json=metar)
 
+    # The upstreams' `Date` is the moment the fixture describes; ages are judged by it.
+    world_clock = data_clock or (lambda: float(FIXTURE_NOW))
     runtime = Runtime.build(
         settings,
-        opensky_transport=httpx.MockTransport(opensky_handler),
+        opensky_transport=httpx.MockTransport(dated(opensky_handler, world_clock)),
         token_transport=httpx.MockTransport(token_handler),
-        weather_transport=httpx.MockTransport(weather_handler),
+        weather_transport=httpx.MockTransport(dated(weather_handler, world_clock)),
         schiphol_transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, json={"flights": []})
+            dated(lambda request: httpx.Response(200, json={"flights": []}), world_clock)
         ),
         schiphol_token_transport=httpx.MockTransport(token_handler),
         sleep=SleepRecorder(),
         clock=time.time,
-        data_clock=data_clock or (lambda: float(FIXTURE_NOW)),
+        data_clock=world_clock,
     )
     set_runtime(runtime)
     return runtime
@@ -486,3 +491,72 @@ async def test_upstream_status_explains_the_environment(settings: Settings) -> N
     assert payload["credentials"]["opensky_configured"] is True
     assert payload["credentials"]["aviationweather_required"] is False
     assert payload["reference_data"]["airports_db_present"] is True
+
+
+# --- ages are judged by the upstream's `Date`, never by this machine's clock --------------
+async def test_a_weather_answer_carries_noaas_clock(settings: Settings) -> None:
+    payload = await weather(settings, VFR_METAR)
+
+    assert payload["upstream_time_epoch"] == FIXTURE_NOW
+    assert "as_of" not in payload, "a host-clock time would contradict the upstream's"
+    assert payload["latest_metar"] == {"age_s": 600, "current": True}
+
+
+async def test_a_metar_from_an_upstream_without_a_date_has_no_age(settings: Settings) -> None:
+    runtime = install(settings, metar=VFR_METAR)
+    await runtime.weather.aclose()
+    runtime.weather = WeatherClient(
+        runtime.settings,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=VFR_METAR)),
+    )
+    async with Client(srv.mcp) as client:
+        payload = await call(client, "airport_weather", {"airport": "ESGG"})
+
+    assert payload["upstream_time_epoch"] is None
+    assert payload["latest_metar"] == {"age_s": None, "current": False}
+    assert any("no Date header" in item for item in payload["unknowns"])
+
+
+async def test_a_snapshot_from_an_upstream_without_a_date_is_not_current(
+    settings: Settings,
+) -> None:
+    states = {"time": FIXTURE_NOW, "states": [_state("a1", FIXTURE_NOW - 6)]}
+    runtime = install(settings, states=states)
+    await runtime.opensky.aclose()
+    runtime.opensky = OpenSkyClient(
+        runtime.settings,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=states)),
+        token_transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"access_token": "t", "expires_in": 1800})
+        ),
+    )
+    async with Client(srv.mcp) as client:
+        payload = await call(client, "airport_live_traffic", {"airport": "ESGG"})
+
+    assert payload["upstream_time_epoch"] is None
+    assert payload["snapshot_current"] is False
+    assert any("no Date header" in item for item in payload["unknowns"])
+
+
+async def test_every_data_tool_states_its_upstream_time(settings: Settings) -> None:
+    install(
+        settings,
+        states={"time": FIXTURE_NOW, "states": [_state("a1", FIXTURE_NOW - 6)]},
+        metar=VFR_METAR,
+    )
+    async with Client(srv.mcp) as client:
+        answers = {
+            tool: await call(client, tool, arguments)
+            for tool, arguments in [
+                ("airport_live_traffic", {"airport": "ESGG"}),
+                ("airspace_snapshot", {"region": "europe"}),
+                ("airport_movements", {"airport": "ESGG"}),
+                ("airport_weather", {"airport": "ESGG"}),
+                ("disruption_triage", {"airport": "ESGG"}),
+            ]
+        }
+
+    assert {
+        tool: answer["upstream_time_epoch"] for tool, answer in answers.items()
+    } == dict.fromkeys(answers, FIXTURE_NOW)
+    assert not any("as_of" in answer for answer in answers.values())

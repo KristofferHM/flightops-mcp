@@ -155,8 +155,9 @@ def create_app(
     @app.get("/api/board")
     async def api_board(
         traffic_snapshot: Annotated[int | None, Query(ge=0, le=MAX_SNAPSHOT_EPOCH)] = None,
+        traffic_upstream: Annotated[int | None, Query(ge=0, le=MAX_SNAPSHOT_EPOCH)] = None,
     ) -> dict[str, Any]:
-        return await service.snapshot(traffic_snapshot)
+        return await service.snapshot(traffic_snapshot, traffic_upstream)
 
     @app.get("/api/airport/{icao}")
     async def api_airport(icao: str) -> dict[str, Any]:
