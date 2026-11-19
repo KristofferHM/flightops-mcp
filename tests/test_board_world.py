@@ -438,6 +438,16 @@ def test_weather_says_what_the_report_did_not_give() -> None:
     )
 
 
+def test_a_ceiling_without_a_basis_and_a_plain_visibility_read_as_given() -> None:
+    # A report with no ceiling block at all says so; it must not print `None`.
+    rows = board.weather_rows({"ceiling": {"ft": None}, "visibility": {"statute_mi": 10.0}})
+    assert rows[2:4] == [
+        {"label": "Ceiling", "text": "not in the report"},
+        {"label": "Visibility", "text": "10 sm"},
+    ]
+    assert board.weather_rows({})[2] == {"label": "Ceiling", "text": "not in the report"}
+
+
 def test_each_leg_reads_with_its_state_age_and_source() -> None:
     rows = board.leg_rows(
         {
@@ -472,6 +482,8 @@ def test_each_leg_reads_with_its_state_age_and_source() -> None:
 
 
 def test_the_panel_passes_the_why_not_lines_through() -> None:
+    # Every input here differs from what the builders make of None. With `weather: None`,
+    # `legs: {}` and only a row count, a triage that dropped all three would still pass.
     view = board.triage_view(
         {
             "ok": True,
@@ -481,16 +493,27 @@ def test_the_panel_passes_the_why_not_lines_through() -> None:
                 "why_not_lower": ["Low is the bottom of this ladder."],
             },
             "counts": COUNTS,
-            "weather": None,
-            "legs": {},
+            "weather": {"category": "VFR", "current": True, "age_s": 120},
+            "legs": {
+                "weather": {"status": "observed", "source": "NOAA /metar", "age_s": 30},
+            },
         }
     )
 
     assert view["why_not_higher"] == ["Gusts 12 kt, below the 35 kt flag."]
     assert view["why_not_lower"] == ["Low is the bottom of this ladder."]
-    assert len(view["counts"]) == 3
-    assert view["weather"] == [{"label": "METAR", "text": "none returned, so no values"}]
-    assert view["legs"] == []
+    assert view["counts"][0] == {"label": "Arrivals", "text": "7 in the last 60 min"}
+    assert view["weather"][:2] == [
+        {"label": "Category", "text": "VFR"},
+        {"label": "METAR age", "text": "2 min by NOAA's clock"},
+    ]
+    assert view["legs"] == [
+        {
+            "label": "Weather",
+            "state": "observed",
+            "text": "observed; data under 1 min old; NOAA /metar",
+        },
+    ]
 
 
 def test_a_refused_layer_draws_nothing_and_claims_no_time() -> None:

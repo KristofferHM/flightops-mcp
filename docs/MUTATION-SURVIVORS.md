@@ -1,6 +1,50 @@
 # Mutation survivors
 
-The first 90 rows come from the survivor report of [run 44121537739](https://github.com/KristofferHM/flightops-mcp/actions/runs/44121537739). The 10 for `dashboard/board.py` come from [run 44397823805](https://github.com/KristofferHM/flightops-mcp/actions/runs/44397823805), whose `mutation-report` artifact has every diff. Counts in that run: killed: 2193, survived: 100.
+The first 90 rows come from the survivor report of [run 44121537739](https://github.com/KristofferHM/flightops-mcp/actions/runs/44121537739). The rows for `dashboard/board.py` come from [run 44397823805](https://github.com/KristofferHM/flightops-mcp/actions/runs/44397823805). Ids are those of [run 44522301960](https://github.com/KristofferHM/flightops-mcp/actions/runs/44522301960), the latest read; its `mutation-report` artifact has every diff. mutmut renumbers mutants as code moves, so rows are matched by function and change, not by id.
+
+## Run 44522301960: 111 survivors against a ceiling of 100
+
+Counts in that run: killed: 2609, survived: 111. All 111 diffs were read.
+
+| Survivors | Verdict |
+|---:|---|
+| 95 | Same id and same change as a row already judged here. Judgement unchanged. |
+| 4 | Already judged, renumbered by the branch's new code: `x__weather_line__mutmut_35` is now `_54`, `x_triage_view__mutmut_92/98/99` are now `_102/108/109`. Judgement unchanged. |
+| 12 | **Missing tests**, all new on this branch. Killed by the tests listed under "Killed in this round". |
+| 0 | New and judged behaviour-identical. |
+
+One row left the table without a test: `x__snapshot_epoch__mutmut_9` (`zero-epoch`). The check moved into
+`_valid_epoch`, and its `0 <=` mutant is killed in this run.
+
+Ceiling arithmetic: **was 100. 1 no longer survives (`zero-epoch`, above). 0 new survivors judged equivalent. 12 killed
+by new tests. 100 − 1 + 12 − 12 = 99. Ceiling now 99.** The 99 is the 99 rows of the table below, each with a judgement.
+
+### Killed in this round
+
+| Mutant | Change | Test that now fails it |
+|---|---|---|
+| `x_triage_view__mutmut_137` | `count_rows(None)` for `count_rows(payload["counts"])` | `test_the_panel_passes_the_why_not_lines_through` |
+| `x_triage_view__mutmut_147` | `weather_rows(None)` for `weather_rows(payload["weather"])` | same |
+| `x_triage_view__mutmut_155` | `leg_rows(None)` | same |
+| `x_triage_view__mutmut_156` | `payload.get(None)` for the legs | same |
+| `x_triage_view__mutmut_157` | `payload.get("XXlegsXX")` | same |
+| `x_triage_view__mutmut_158` | `payload.get("LEGS")` | same |
+| `x_weather_rows__mutmut_82` | ceiling `basis` default `None` | `test_a_ceiling_without_a_basis_and_a_plain_visibility_read_as_given` |
+| `x_weather_rows__mutmut_84` | ceiling `basis` default dropped (`None`) | same |
+| `x_weather_rows__mutmut_87` | `"XXnot in the reportXX"` | same |
+| `x_weather_rows__mutmut_88` | `"NOT IN THE REPORT"` | same |
+| `x_weather_rows__mutmut_102` | `' or more'` always | same |
+| `x_weather_rows__mutmut_108` | `'XXXX'` for `''` when the visibility is not a floor | same |
+
+The six `triage_view` survivors were a **test that could not fail**, not only a missing one.
+`test_the_panel_passes_the_why_not_lines_through` fed `weather: None` and `legs: {}` and checked only that there were
+three count rows: exactly what `weather_rows(None)`, `leg_rows(None)` and `count_rows(None)` return. It was fixed, not
+deleted: it now passes a real METAR, a real leg and the shared `COUNTS`, and pins the rows each produces. The
+`weather_rows` survivors were a branch never run: every test gave the ceiling a `basis` and the visibility an
+`at_least: True`. Each of the twelve was applied to `board.py` by hand and run against the board tests: all twelve
+pass the old tests and fail the new ones.
+
+## The judgements
 
 Every surviving mutant is listed below with a judgement. None is a missing test: those were written (docs/QUALITY.md, section 3). Each category below is a judgement made by reading the mutants in it, not a filter applied to them.
 
@@ -19,7 +63,6 @@ Every surviving mutant is listed below with a judgement. None is a missing test:
 | `unconfigured-args` | 4 | An argument to the unconfigured `ApprovalVerifier(None, ...)`. Equivalent: that verifier raises `approval_not_configured` before it reads its clock or age limit. |
 | `unknown-label` | 3 | The special case for the label `Unknown` was disabled or never matched. Equivalent: `"unknown".capitalize()` is `Unknown`, the same word. |
 | `same-instant` | 2 | `datetime.fromtimestamp(snapshot)` without `UTC`. Equivalent: the naive local time goes straight into `astimezone(UTC)`, which reads it as local, so the instant and the text are unchanged. |
-| `zero-epoch` | 1 | `0 <= epoch` for `0 < epoch`. Equivalent: the only added value is 0, and the fallback is also 0. |
 | `under-a-minute-tie` | 1 | `max(age, 1)` for `max(age, 0)` when ranking reports. Equivalent: it only ties ages of 1 s or less, and all of them print `Last update under 1 min ago` with the state `live`. |
 | `whole-seconds` | 1 | `int(abs(seconds) / 60)` for `int(abs(seconds) // 60)`. Equivalent: both tools round ages to whole seconds, and for those truncating the quotient is the floor. |
 | `truthy-count` | 1 | `sum(2 ...)` for `sum(1 ...)` in the banner's count of dated reports. Equivalent: the count is only tested for being non-zero. |
@@ -119,13 +162,12 @@ Every surviving mutant is listed below with a judgement. None is a missing test:
 | `auth.x_build_approval_verifier__mutmut_6` | `unconfigured-args` | `return ApprovalVerifier(None, clock=clock, max_age_s=settings.approval_max_age_s)` | `return ApprovalVerifier(None, max_age_s=settings.approval_max_age_s)` |
 | `auth.x_build_approval_verifier__mutmut_7` | `unconfigured-args` | `return ApprovalVerifier(None, clock=clock, max_age_s=settings.approval_max_age_s)` | `return ApprovalVerifier(None, clock=clock, )` |
 | `credits.xǁCreditLedgerǁ__init____mutmut_4` | `prose` | `raise ValueError("budget_per_hour must not be negative")` | `raise ValueError("XXbudget_per_hour must not be negativeXX")` |
-| `dashboard.board.x__snapshot_epoch__mutmut_9` | `zero-epoch` | `0 < epoch <= MAX_SNAPSHOT_EPOCH` | `0 <= epoch <= MAX_SNAPSHOT_EPOCH` |
 | `dashboard.board.x__traffic_line__mutmut_5` | `same-instant` | `datetime.fromtimestamp(snapshot, UTC)` | `datetime.fromtimestamp(snapshot, None)` |
 | `dashboard.board.x__traffic_line__mutmut_7` | `same-instant` | `datetime.fromtimestamp(snapshot, UTC)` | `datetime.fromtimestamp(snapshot, )` |
-| `dashboard.board.x__weather_line__mutmut_35` | `under-a-minute-tie` | `(age < -METAR_STALE_AFTER_S, max(age, 0))` | `(age < -METAR_STALE_AFTER_S, max(age, 1))` |
+| `dashboard.board.x__weather_line__mutmut_54` | `under-a-minute-tie` | `(age < -METAR_STALE_AFTER_S, max(age, 0))` | `(age < -METAR_STALE_AFTER_S, max(age, 1))` |
 | `dashboard.board.x_age_text__mutmut_3` | `whole-seconds` | `minutes = int(abs(seconds) // 60)` | `minutes = int(abs(seconds) / 60)` |
 | `dashboard.board.x_banner__mutmut_12` | `truthy-count` | `dated = sum(1 for view in weather if view["age_s"] is not None)` | `dated = sum(2 for view in weather if view["age_s"] is not None)` |
 | `dashboard.board.x_fade__mutmut_14` | `unreachable-cap` | `min(1.0, 1.0 - max(0.0, age_s) / FADE_AFTER_S)` | `min(2.0, 1.0 - max(0.0, age_s) / FADE_AFTER_S)` |
-| `dashboard.board.x_triage_view__mutmut_92` | `unknown-label` | `"Unknown" if severity == "unknown" else severity.capitalize()` | `"Unknown" if (severity == "unknown") and False else severity.capitalize()` |
-| `dashboard.board.x_triage_view__mutmut_98` | `unknown-label` | `"Unknown" if severity == "unknown" else severity.capitalize()` | `"Unknown" if severity == "XXunknownXX" else severity.capitalize()` |
-| `dashboard.board.x_triage_view__mutmut_99` | `unknown-label` | `"Unknown" if severity == "unknown" else severity.capitalize()` | `"Unknown" if severity == "UNKNOWN" else severity.capitalize()` |
+| `dashboard.board.x_triage_view__mutmut_102` | `unknown-label` | `"Unknown" if severity == "unknown" else severity.capitalize()` | `"Unknown" if (severity == "unknown") and False else severity.capitalize()` |
+| `dashboard.board.x_triage_view__mutmut_108` | `unknown-label` | `"Unknown" if severity == "unknown" else severity.capitalize()` | `"Unknown" if severity == "XXunknownXX" else severity.capitalize()` |
+| `dashboard.board.x_triage_view__mutmut_109` | `unknown-label` | `"Unknown" if severity == "unknown" else severity.capitalize()` | `"Unknown" if severity == "UNKNOWN" else severity.capitalize()` |

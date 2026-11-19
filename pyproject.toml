@@ -159,8 +159,9 @@ pytest_add_cli_args_test_selection = [
 ]
 pytest_add_cli_args = ["-p", "no:cacheprovider"]
 
-# The survivor ceiling scripts/mutation_gate.py enforces: 90 from run 4 (CI 44121537739) plus 10
-# from dashboard/board.py, each judged in docs/MUTATION-SURVIVORS.md. Lowered when a survivor is
-# killed, never raised to let a new one through without a line in docs/QUALITY.md.
+# The survivor ceiling scripts/mutation_gate.py enforces: the 99 survivors of run 8 (CI 44522301960)
+# that remain after its 12 missing tests were written, each judged in docs/MUTATION-SURVIVORS.md.
+# Lowered when a survivor is killed, never raised to let a new one through without a line in
+# docs/QUALITY.md.
 [tool.mutation-gate]
-ceiling = 100
+ceiling = 99
