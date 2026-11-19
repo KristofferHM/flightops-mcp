@@ -42,6 +42,7 @@ class Scopes:
     _BY_TOOL: Final[Mapping[str, frozenset[str]]] = {
         "resolve_airport": frozenset({REFERENCE_READ}),
         "airport_weather": frozenset({WEATHER_READ}),
+        "weather_overview": frozenset({WEATHER_READ}),
         "airport_live_traffic": frozenset({TRAFFIC_READ}),
         "airport_movements": frozenset({TRAFFIC_READ}),
         "airspace_snapshot": frozenset({TRAFFIC_READ}),

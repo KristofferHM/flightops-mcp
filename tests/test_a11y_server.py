@@ -83,7 +83,7 @@ async def test_an_airport_without_a_category_is_old_rather_than_current() -> Non
     assert uncategorised["latest_metar"] == {"age_s": OLD_AGE_S, "current": False}
 
 
-@pytest.mark.parametrize("tool", ["disruption_triage", "airspace_snapshot"])
+@pytest.mark.parametrize("tool", ["airport_movements", "schiphol_flights"])
 async def test_a_tool_the_fixture_does_not_cover_fails_instead_of_inventing(tool: str) -> None:
     answer = await SyntheticSource("data").call(tool, {})
 

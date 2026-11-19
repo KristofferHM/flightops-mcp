@@ -1,0 +1,51 @@
+id: happy-weather-overview
+group: happy-path
+why: 'Weather at several airports is one batched call, not one call per airport.'
+question: What are the flight categories at ESSA, ESGG and EKCH right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: ESSA
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: ESSA 160850Z 24008KT 9999 BKN030 08/05 Q1008
+        fltCat: VFR
+        wspd: 8
+        visib: 6+
+      - icaoId: ESGG
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: ESGG 160850Z 24012KT 4000 BR OVC008 06/05 Q1004
+        fltCat: IFR
+        wspd: 12
+        visib: 2.5
+      - icaoId: EKCH
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: EKCH 160850Z 26010KT 9999 BKN025 07/04 Q1006
+        fltCat: MVFR
+        wspd: 10
+        visib: 6+
+offline:
+  policy: weather_board
+  params:
+    airports:
+    - ESSA
+    - ESGG
+    - EKCH
+expect:
+  tools:
+    required:
+    - weather_overview
+  arguments:
+    weather_overview:
+      airports:
+      - ESSA
+      - ESGG
+      - EKCH
+  answer: reported

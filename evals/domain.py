@@ -95,6 +95,13 @@ def _weather(arguments: Mapping[str, Any], _today: date) -> list[str]:
     return _airport(arguments)
 
 
+def _weather_overview(arguments: Mapping[str, Any], _today: date) -> list[str]:
+    codes = arguments.get("airports")
+    if not isinstance(codes, list) or not 1 <= len(codes) <= 100:
+        return [f"airports {codes!r} is not a list of 1-100 ICAO codes"]
+    return [problem for code in codes for problem in _airport({"airport": code})]
+
+
 def _traffic(arguments: Mapping[str, Any], _today: date) -> list[str]:
     return [
         *_airport(arguments),
@@ -153,6 +160,7 @@ def _rebooking(arguments: Mapping[str, Any], today: date) -> list[str]:
 _RULES: Final[dict[str, Callable[[Mapping[str, Any], date], list[str]]]] = {
     "resolve_airport": _resolve_airport,
     "airport_weather": _weather,
+    "weather_overview": _weather_overview,
     "airport_live_traffic": _traffic,
     "airport_movements": _movements,
     "disruption_triage": _triage,

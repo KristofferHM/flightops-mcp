@@ -511,3 +511,100 @@ def test_the_four_axes_are_the_ones_the_roadmap_names() -> None:
         "refusal_correctness",
         "no_hallucination",
     )
+
+
+# --- the triage expectation ---------------------------------------------------------
+TRIAGE_EXPECT = {
+    "tools": {"required": ["disruption_triage"]},
+    "arguments": {"disruption_triage": {"airport": "ESGG"}},
+    "answer": "reported",
+    "triage": {
+        "severity": "low",
+        "counts": {"arrivals": 2, "departures": 1, "aircraft": 3},
+        "legs_with_data": 3,
+    },
+}
+SHAPE = {
+    "severity": "low",
+    "reasons": 0,
+    "distinct_reasons": 0,
+    "arrivals": 2,
+    "departures": 1,
+    "aircraft": 3,
+    "legs_with_data": 3,
+    "legs_dated": 3,
+    "weather_values": True,
+    "why_not_higher": 4,
+    "why_not_lower": 1,
+}
+TRIAGE_REPORT = "ESGG: severity low on 0 reason(s), with no gaps reported. Advisory only."
+
+
+def triaged(**changes: Any) -> dict[str, Any]:
+    entry = step("disruption_triage", {"airport": "ESGG"})
+    entry["result"]["triage"] = {**SHAPE, **changes}
+    return entry
+
+
+def test_a_triage_that_counts_and_explains_as_expected_passes() -> None:
+    result = score(scenario(TRIAGE_EXPECT), evidence([triaged()], TRIAGE_REPORT))
+
+    assert result["checks"]["outcome"]["problems"] == []
+
+
+@pytest.mark.parametrize(
+    ("changes", "problem"),
+    [
+        ({"severity": "high"}, "the triage said 'high', expected 'low'"),
+        ({"arrivals": None}, "the triage counted arrivals None, expected 2"),
+        ({"legs_with_data": 2, "legs_dated": 2}, "2 leg(s) observed something, expected 3"),
+        ({"legs_dated": 2}, "a leg that observed something carries no age of its own"),
+        ({"reasons": 4, "distinct_reasons": 1}, "the triage repeats a reason"),
+        ({"why_not_lower": 0}, "the triage does not say why it is not higher and why not lower"),
+        ({"weather_values": False}, "the triage gives no weather values"),
+    ],
+)
+def test_each_part_of_the_triage_expectation_can_fail(
+    changes: dict[str, Any], problem: str
+) -> None:
+    result = score(scenario(TRIAGE_EXPECT), evidence([triaged(**changes)], TRIAGE_REPORT))
+
+    assert result["checks"]["outcome"]["problems"] == [problem]
+
+
+def test_a_triage_expectation_with_no_triage_answered_fails() -> None:
+    refused = step("disruption_triage", {"airport": "ESGG"}, code="insufficient_scope")
+
+    result = score(scenario(TRIAGE_EXPECT), evidence([refused], TRIAGE_REPORT))
+
+    assert (
+        "no triage answered, so its counts cannot be checked"
+        in (result["checks"]["outcome"]["problems"])
+    )
+
+
+@pytest.mark.parametrize(
+    ("triage", "message"),
+    [
+        ("low", "expect.triage must be a mapping"),
+        ({**TRIAGE_EXPECT["triage"], "mood": "calm"}, "unknown key"),
+        ({**TRIAGE_EXPECT["triage"], "severity": "fine"}, "severity must be one of"),
+        ({**TRIAGE_EXPECT["triage"], "counts": {"arrivals": 1}}, "counts names exactly"),
+        (
+            {
+                **TRIAGE_EXPECT["triage"],
+                "counts": {"arrivals": "2", "departures": 1, "aircraft": 3},
+            },
+            "is a count or null",
+        ),
+        ({**TRIAGE_EXPECT["triage"], "legs_with_data": 4}, "legs_with_data is 0 to 3"),
+    ],
+)
+def test_a_triage_expectation_that_cannot_be_scored_is_refused(triage: Any, message: str) -> None:
+    with pytest.raises(ScenarioInvalid, match=message):
+        scenario({**TRIAGE_EXPECT, "triage": triage})
+
+
+def test_a_triage_expectation_needs_the_triage_to_be_required() -> None:
+    with pytest.raises(ScenarioInvalid, match="needs disruption_triage"):
+        scenario({**WEATHER, "triage": TRIAGE_EXPECT["triage"]})

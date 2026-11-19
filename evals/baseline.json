@@ -1,7 +1,7 @@
 {
   "backend": "offline",
   "model": "offline",
-  "recorded_on": "2026-11-18",
+  "recorded_on": "2026-11-19",
   "scenarios": {
     "absent-empty-manifest": {
       "checks": {
@@ -32,6 +32,16 @@
         "tool_selection": true
       },
       "sha256": "a6c15b0ebff4569e102e30534221d6f99d14d44942a6b9592c2cbb70e76792c5"
+    },
+    "absent-empty-triage-two-legs": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "3fa02fa714006d27e95dd5d75e08a087ab63ef4a6de441080938fafac1ff8bc0"
     },
     "absent-empty-weather": {
       "checks": {
@@ -92,6 +102,16 @@
         "tool_selection": true
       },
       "sha256": "826f98a9beeacf1e08766b6e14ed381f253a1f5cfce5fc6e3f08dacda3ddcff9"
+    },
+    "absent-partial-triage-weather-only": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": true,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "c9bc82cf6325b714ae68eec3686630de852c68ef7138a45892791c5f546e39b1"
     },
     "absent-rate-limited-traffic": {
       "checks": {
@@ -383,6 +403,16 @@
       },
       "sha256": "ca64feb45fbf6b6ad1b06a757f93978abb32bcc3f145043a1a7fc83142c71f6b"
     },
+    "happy-triage-three-legs": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "65e0e0b02016793e10e419cbf106cd9eaab4f0b840ccddea9b39a1cae02f07be"
+    },
     "happy-weather-by-icao": {
       "checks": {
         "argument_validity": true,
@@ -402,6 +432,16 @@
         "tool_selection": true
       },
       "sha256": "29b3d2245e5f0d8e2ddfa12b04dd1ceb4b2d2316f4743edb35ed2913ba0da286"
+    },
+    "happy-weather-overview": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "a20285af709d54981514966ee9fab8e3ea4e454c3bf1a80547b016f18f4d5bfb"
     },
     "happy-weather-vfr": {
       "checks": {
@@ -618,9 +658,9 @@
   "summary": {
     "absent_evidence": {
       "kinds": {
-        "empty_result": 4,
+        "empty_result": 5,
         "malformed_payload": 3,
-        "partial_coverage": 2,
+        "partial_coverage": 3,
         "rate_limited": 2,
         "stale_data": 2,
         "unauthenticated_read": 3,
@@ -628,22 +668,22 @@
         "unknown_flight": 1,
         "upstream_error": 3
       },
-      "scenarios": 22
+      "scenarios": 24
     },
     "checks": {
       "argument_validity": {
-        "applicable": 57,
-        "passed": 57,
+        "applicable": 61,
+        "passed": 61,
         "score": 100.0
       },
       "no_hallucination": {
-        "applicable": 22,
-        "passed": 22,
+        "applicable": 24,
+        "passed": 24,
         "score": 100.0
       },
       "outcome": {
-        "applicable": 61,
-        "passed": 61,
+        "applicable": 65,
+        "passed": 65,
         "score": 100.0
       },
       "refusal_correctness": {
@@ -652,17 +692,17 @@
         "score": 100.0
       },
       "tool_selection": {
-        "applicable": 61,
-        "passed": 61,
+        "applicable": 65,
+        "passed": 65,
         "score": 100.0
       }
     },
     "failing": [],
     "overall": {
-      "applicable": 61,
-      "passed": 61,
+      "applicable": 65,
+      "passed": 65,
       "score": 100.0
     },
-    "scenarios": 61
+    "scenarios": 65
   }
 }

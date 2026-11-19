@@ -1,0 +1,80 @@
+id: happy-triage-three-legs
+group: happy-path
+why: 'Every leg answers with something in it: the triage counts each, gives the weather as values, and says why it is not higher.'
+question: Is anything wrong at Stockholm Arlanda right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: ESSA
+        reportTime: '2026-11-16T08:20:00Z'
+        rawOb: ESSA 160820Z 24014G22KT 9999 BKN035 08/04 Q1009
+        fltCat: VFR
+        wdir: 240
+        wspd: 14
+        wgst: 22
+        visib: 6+
+        clouds:
+        - cover: BKN
+          base: 3500
+      - icaoId: ESSA
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: ESSA 160850Z 24015G24KT 9999 BKN035 08/04 Q1009
+        fltCat: VFR
+        wdir: 240
+        wspd: 15
+        wgst: 24
+        visib: 6+
+        clouds:
+        - cover: BKN
+          base: 3500
+    taf:
+      status: 200
+      json:
+      - icaoId: ESSA
+        issueTime: '2026-11-16T08:30:00Z'
+        rawTAF: TAF ESSA 160830Z 1609/1709 24015G25KT 9999 BKN035
+  opensky:
+    states:
+      status: 200
+      json:
+        time: 1794819595
+        states:
+        - [4a91f9, 'SAS157  ', Sweden, 1794819592, 1794819592, 17.6, 59.8, 1219.2, false, 118.3, 182.0, 0.0, null, 1219.2, '1000', false, 0]
+        - [3c6dd3, 'DLH3VP  ', Sweden, 1794819592, 1794819592, 18.1, 59.5, 2133.6, false, 118.3, 182.0, 0.0, null, 2133.6, '1000', false, 0]
+        - [4ac9e1, 'SAS431  ', Sweden, 1794819592, 1794819592, 17.92, 59.65, null, true, 0.0, 182.0, 0.0, null, null, '1000', false, 0]
+    arrival:
+      status: 200
+      json:
+      - {icao24: 4a91f9, firstSeen: 1794815400, estDepartureAirport: ESGG, lastSeen: 1794818700, estArrivalAirport: ESSA, callsign: 'SAS157  ', estDepartureAirportHorizDistance: 1180, estDepartureAirportVertDistance: 46, estArrivalAirportHorizDistance: 2210, estArrivalAirportVertDistance: 61, departureAirportCandidatesCount: 1, arrivalAirportCandidatesCount: 1}
+      - {icao24: 3c6dd3, firstSeen: 1794816000, estDepartureAirport: EDDF, lastSeen: 1794819300, estArrivalAirport: ESSA, callsign: 'DLH3VP  ', estDepartureAirportHorizDistance: 1180, estDepartureAirportVertDistance: 46, estArrivalAirportHorizDistance: 2210, estArrivalAirportVertDistance: 61, departureAirportCandidatesCount: 1, arrivalAirportCandidatesCount: 1}
+    departure:
+      status: 200
+      json:
+      - {icao24: 4ac9e1, firstSeen: 1794815100, estDepartureAirport: ESSA, lastSeen: 1794818400, estArrivalAirport: EKCH, callsign: 'SAS431  ', estDepartureAirportHorizDistance: 1180, estDepartureAirportVertDistance: 46, estArrivalAirportHorizDistance: 2210, estArrivalAirportVertDistance: 61, departureAirportCandidatesCount: 1, arrivalAirportCandidatesCount: 1}
+offline:
+  policy: airport_triage
+  params:
+    airport: Arlanda
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - disruption_triage
+  arguments:
+    disruption_triage:
+      airport: ESSA
+  answer: reported
+  triage:
+    severity: low
+    counts: {arrivals: 2, departures: 1, aircraft: 3}
+    legs_with_data: 3

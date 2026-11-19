@@ -11,7 +11,70 @@ uv run python -m dashboard --record             # also save every tool response
 uv run python -m dashboard --replay FILE        # serve a recording, no upstream calls
 ```
 
-The reference database is built from `data/airports_seed.csv` on first start if it is missing.
+The reference database is built from `data/airports_world.csv` on first start if it is missing: 3,270 large and
+medium airports with scheduled service, worldwide (`docs/REFERENCE-DATA.md`). A database built before continents
+existed is refused with the command that rebuilds it; the board never overwrites one it did not make.
+
+## Regions and the list
+
+The region control offers Europe (508), North America (851), South America (274), Africa (342), Asia (1,054),
+Oceania (241) and World (3,270), each with the number of airports it will draw. The choice is remembered in the
+browser. The map draws every airport in the region; the list beside it shows 25 at a time, searchable by code,
+name or city. The server filters and pages the list (`/api/airports?region=&q=&offset=&limit=`), so a phone never
+holds more than one page of rows.
+
+Weather for a region arrives through `weather_overview`, one NOAA request per hundred airports, at most four at a
+time, cached for 60 s. World is 33 requests per minute at most.
+
+Under the region control, in so many words: **the airport data is worldwide; live traffic is not.** OpenSky's
+receivers are dense over Europe and North America and sparse over Africa, South America and much of Asia, so an
+empty patch of sky means no receiver heard anything there, not that no aircraft are flying.
+
+## Reading the board
+
+The Documentation tab holds a glossary of every abbreviation on the board, and the legend carries a one-line
+version of it, so the map can be read without leaving it.
+
+| Term | Meaning | Limits | Marker |
+|---|---|---|---|
+| VFR | Visual Flight Rules | ceiling over 3000 ft and visibility over 5 mi | green circle |
+| MVFR | Marginal VFR | 1000-3000 ft or 3-5 mi | blue square |
+| IFR | Instrument Flight Rules | 500-1000 ft or 1-3 mi | red diamond |
+| LIFR | Low IFR | below 500 ft or under 1 mi | pale violet triangle |
+| Unknown | no report heard, or one too old or unreadable | not a fifth category, and not good news | hollow dashed ring |
+| ICAO / IATA | four-letter location code / three-letter airport code | | |
+| METAR / TAF | the current observation / the forecast | | |
+| nm | nautical miles; 1 nm = 1.852 km | | |
+| credit | OpenSky's unit of API cost; the strip shows what is left | | |
+
+A colour describes the weather category at that airport, never the airport's status. The tab says that first.
+
+## Traffic
+
+With OpenSky credentials configured the traffic layer starts on, for the selected region. Without them it starts
+off, and the note beside the control says why: anonymous access is opt-in and coarser, and with no access at all
+the box is disabled.
+
+Next to `Show traffic — 4 credits per refresh` the control shows what the layer has spent since the board started,
+what it has spent in the last hour against its own ceiling (`FLIGHTOPS_DASHBOARD_TRAFFIC_CREDITS_PER_HOUR`, 60 by
+default), and the refresh interval that ceiling allows: 60 credits an hour is one refresh every 4 minutes, and never
+faster than every 2. When the ceiling is reached the server refuses the refresh without asking OpenSky, auto-refresh
+stops, and the badge gets a `Refresh` line saying how much was spent and when the next refresh fits. A refusal by
+the tools' own hourly or daily guard, or by OpenSky's `429`, stops it the same way. An upstream failure is not a
+refusal: the layer says `Unknown: traffic unavailable (code)` and keeps trying. Turning the layer off and on again
+asks once more.
+
+## The triage panel
+
+`Run triage` shows the severity, its reasons (each once, with how many METARs said it), then:
+
+- **Why not higher** and **why not lower**: the measured values below each flag's threshold, the missing legs, or
+  the rung the ladder ends at. These come from the tool, word for word.
+- **Counts**: arrivals and departures in the window, aircraft heard within the search radius, and how many rows of
+  each answer were unreadable. A count that was never made reads `not counted`, never `0`.
+- **Weather, as values**: category, the METAR's age by NOAA's clock, ceiling (and what it was read from), visibility
+  (with `or more` when NOAA reported a floor), wind with gusts.
+- **Each source**: every leg's state, the age of its data by its own upstream's clock, and the endpoint.
 
 ## Settings
 
@@ -23,6 +86,7 @@ All are environment variables, or lines in `.env`. Changing one needs a restart 
 | `FLIGHTOPS_OPENSKY_ANONYMOUS` | `false` | Opt in to OpenSky's anonymous tier. Ignored once credentials are set. |
 | `FLIGHTOPS_DASHBOARD_PASSCODE` | unset | Required to serve anything but localhost. |
 | `FLIGHTOPS_DASHBOARD_DAILY_CREDIT_BUDGET` | `1000` | Rolling 24 h ceiling on board and `airspace_snapshot` spend. |
+| `FLIGHTOPS_DASHBOARD_TRAFFIC_CREDITS_PER_HOUR` | `60` | The traffic layer's own hourly ceiling. Auto-refresh stops, with the reason on the badge, when it is reached. |
 | `FLIGHTOPS_DASHBOARD_RECORDINGS_DIR` | `~/.flightops/recordings` | Where `--record` writes. Refused inside the repository. |
 
 ## OpenSky access modes
@@ -112,6 +176,7 @@ The page only displays them, and it does no date arithmetic.
 | Newest METAR older than 90 min | `Weather stale: last update 2 h 5 min ago` |
 | Traffic layer on, snapshot within 5 min | `Traffic Last update under 1 min ago` |
 | Traffic layer on, snapshot older than 5 min | `Traffic stale: last update 21 min ago` |
+| The newest traffic refresh was refused | `Refresh Auto-refresh stopped: 60 of 60 traffic credits used in the last hour; ...` |
 | A report or snapshot dated beyond the limit ahead of the clock | `stale: dated in the future` |
 | Traffic layer on, no usable snapshot time | `Traffic snapshot time unknown` |
 | The upstream's answer carried no `Date` header | `Weather freshness unknown — no upstream time`, or the same for `Traffic` |
@@ -143,7 +208,11 @@ synthetic tool answers, signs in, and walks map, globe, airport selected and no 
 sign-in page. It fails on a `serious` or `critical` axe-core violation, on sideways scroll or an element wider than
 the viewport at 390 px, on a page error, and on any request that leaves the machine. axe-core and Playwright are
 pinned in `scripts/package-lock.json`. A third fixture answers with no upstream time, so the walk also covers `freshness unknown — no upstream time` at
-both sizes. The traffic, stale and recorded states above are not part of the walk.
+both sizes. The fixture lists the 3,270 world airports and reports client credentials, so the walk also covers the
+traffic layer on by default, a triage with every panel field filled, a search, and the Documentation tab.
+`A11Y_CHANNEL=msedge` runs it in an installed Edge instead of Playwright's Chromium. On 2026-11-19, in Edge
+157.0.4341.60 with axe-core 4.14.1: 33 checks, 0 serious or critical violations, no overflow at 390 px. The stale,
+refused and recorded states are not part of the walk.
 
 ## Exposure
 

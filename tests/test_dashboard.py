@@ -348,6 +348,8 @@ async def test_the_governance_strip_reports_mode_spend_and_upstream_count(
     )
 
     await open_board.get("/api/airport/ESGG")
+    await open_board.get("/api/board")
+    # The second overview of the same airports is served from the cache: 1 hit in 4.
     overview = (await open_board.get("/api/board")).json()
 
     assert overview["banner"]["mode"] == "LIVE"
@@ -359,7 +361,7 @@ async def test_the_governance_strip_reports_mode_spend_and_upstream_count(
         "credits_24h": 1,
         "budget_24h": 50,
         "ledger_survives_restart": False,
-        "cache_hit_rate": 0.333,
+        "cache_hit_rate": 0.25,
         "upstream_remaining": 3900,
     }
 
@@ -1169,13 +1171,13 @@ async def test_recording_and_replay_start_from_the_command_line(
     assert logs.events("dashboard_replaying")
 
 
-def test_a_fresh_clone_builds_its_reference_data_from_the_seed(tmp_path: Path) -> None:
+def test_a_fresh_clone_builds_its_reference_data_from_the_world_set(tmp_path: Path) -> None:
     target = tmp_path / "new" / "airports.sqlite3"
 
     listed = cli.load_airports(cli_settings(target))
 
     assert target.is_file()
-    assert listed
+    assert len(listed) == 3270
     assert all(a["latitude"] is not None for a in listed)
     assert listed[0]["type"] == "large_airport"
 

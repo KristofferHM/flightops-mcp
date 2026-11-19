@@ -73,8 +73,20 @@ _TOP_KEYS: Final = frozenset(
     }
 )
 _EXPECT_KEYS: Final = frozenset(
-    {"tools", "forbidden_tools", "arguments", "answer", "absent_evidence", "refusal", "writes"}
+    {
+        "tools",
+        "forbidden_tools",
+        "arguments",
+        "answer",
+        "absent_evidence",
+        "refusal",
+        "writes",
+        "triage",
+    }
 )
+_TRIAGE_KEYS: Final = frozenset({"severity", "counts", "legs_with_data"})
+_TRIAGE_COUNTS: Final = frozenset({"arrivals", "departures", "aircraft"})
+SEVERITIES: Final = ("low", "elevated", "high", "unknown")
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +98,17 @@ class Refusal:
     # request that is out of scope: there, the agent is the one that refuses.
     tool: str | None
     code: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TriageExpectation:
+    """What the last triage of a run must conclude and count."""
+
+    severity: str
+    # Arrivals, departures and aircraft nearby. None is "not counted", which is not 0.
+    counts: Mapping[str, int | None]
+    # How many legs observed something. Each such leg must also carry its own age.
+    legs_with_data: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +128,7 @@ class Expectation:
     refusal: Refusal | None
     # Rebookings the operations API must have written by the end of the run.
     writes: int
+    triage: TriageExpectation | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +258,7 @@ def _expectation(raw: Any) -> Expectation:
     if not isinstance(writes, int) or isinstance(writes, bool) or writes < 0:
         raise ScenarioInvalid("expect.writes must be a count")
     return Expectation(
+        triage=_triage(raw.get("triage"), required),
         required=required,
         allowed=frozenset(allowed),
         forbidden=frozenset(forbidden),
@@ -243,6 +268,30 @@ def _expectation(raw: Any) -> Expectation:
         refusal=_refusal(raw.get("refusal"), required),
         writes=writes,
     )
+
+
+def _triage(raw: Any, required: tuple[str, ...]) -> TriageExpectation | None:
+    if raw is None:
+        return None
+    if "disruption_triage" not in required:
+        raise ScenarioInvalid("expect.triage needs disruption_triage among the required tools")
+    if not isinstance(raw, dict):
+        raise ScenarioInvalid("expect.triage must be a mapping")
+    _only(raw, _TRIAGE_KEYS, "expect.triage")
+    if raw.get("severity") not in SEVERITIES:
+        raise ScenarioInvalid(f"expect.triage.severity must be one of {', '.join(SEVERITIES)}")
+    counts = raw.get("counts")
+    if not isinstance(counts, dict) or set(counts) != _TRIAGE_COUNTS:
+        raise ScenarioInvalid(
+            f"expect.triage.counts names exactly {', '.join(sorted(_TRIAGE_COUNTS))}"
+        )
+    for name, value in counts.items():
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ScenarioInvalid(f"expect.triage.counts.{name} is a count or null")
+    legs = raw.get("legs_with_data")
+    if isinstance(legs, bool) or not isinstance(legs, int) or not 0 <= legs <= 3:
+        raise ScenarioInvalid("expect.triage.legs_with_data is 0 to 3")
+    return TriageExpectation(severity=raw["severity"], counts=dict(counts), legs_with_data=legs)
 
 
 def _refusal(raw: Any, required: tuple[str, ...]) -> Refusal | None:

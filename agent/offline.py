@@ -129,6 +129,40 @@ def airport_brief(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observ
     return f"{icao}: {len(flags)} weather impact flag(s) reported."
 
 
+def _newest_category(metars: Sequence[Mapping[str, Any]]) -> Any:
+    newest = max(metars, key=lambda metar: str(metar.get("observation_time") or ""), default={})
+    return newest.get("flight_category")
+
+
+def weather_board(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Read the latest METAR at several airports in one call, and count what is current."""
+    asked = list(params["airports"])
+    (overview,) = yield [("weather_overview", {"airports": asked})]
+    if not overview.ok:
+        return (
+            f"Weather for {len(asked)} airports is unavailable ({overview.code}). "
+            "Conditions are unknown."
+        )
+    entries = overview.payload.get("airports") or {}
+    without = sorted(
+        code
+        for code, entry in entries.items()
+        if not (entry.get("latest_metar") or {}).get("current")
+    )
+    without += overview.payload.get("not_in_reference_data") or []
+    if without:
+        return (
+            f"{len(without)} of {len(asked)} airports have no current METAR "
+            f"({', '.join(without)}), so conditions there are unknown."
+        )
+    categories = ", ".join(
+        f"{code} {_newest_category(entry.get('metar') or [])}"
+        for code, entry in sorted(entries.items())
+    )
+    flags = sum(len(entry.get("impact_flags") or []) for entry in entries.values())
+    return f"{categories}; {flags} weather impact flag(s) reported."
+
+
 def airport_lookup(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
     """Resolve an airport and name it. The reference data is the whole answer."""
     query = params["airport"]
@@ -325,6 +359,7 @@ POLICIES: Final[dict[str, Policy]] = {
     "rebook_cohort": rebook_cohort,
     "airport_brief": airport_brief,
     "airport_lookup": airport_lookup,
+    "weather_board": weather_board,
     "airport_traffic": airport_traffic,
     "airspace_view": airspace_view,
     "airport_movements": airport_movements,

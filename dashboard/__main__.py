@@ -10,7 +10,7 @@ from typing import Any, Final
 import uvicorn
 from fastapi import FastAPI
 
-from flightops_mcp.airports import AirportDB, build_from_csv
+from flightops_mcp.airports import WORLD_TYPES, AirportDB, build_from_csv
 from flightops_mcp.config import Settings
 from flightops_mcp.resilience import configure_breakers
 from flightops_mcp.runtime import get_runtime
@@ -31,17 +31,39 @@ from .sources import (
 )
 
 SEED_CSV: Final = REPO_ROOT / "data" / "airports_seed.csv"
-BOARD_SIZE: Final = 30
+WORLD_CSV: Final = REPO_ROOT / "data" / "airports_world.csv"
 
 _log = get_logger(__name__)
 
 
-def load_airports(settings: Settings) -> list[dict[str, Any]]:
-    """The listed airports. A fresh clone builds its reference data from the seed file."""
-    if not settings.airports_db.is_file():
-        stored = build_from_csv(SEED_CSV, settings.airports_db)
-        _log.info("dashboard_reference_data_built", airports=stored)
-    return AirportDB(settings.airports_db).board(limit=BOARD_SIZE)
+class StaleReferenceData(OSError):
+    """A reference database from before the board drew continents."""
+
+
+def load_airports(settings: Settings, csv_path: Path = WORLD_CSV) -> list[dict[str, Any]]:
+    """The listed airports. A fresh clone builds its reference data from the world file.
+
+    An existing file is never rebuilt behind the user's back: it may be a full build
+    they chose. One without the continent column is refused, with the command to run.
+    """
+    path = settings.airports_db
+    if not path.is_file():
+        stored = build_from_csv(csv_path, path)
+        _log.info("dashboard_reference_data_built", airports=stored, source=csv_path.name)
+    database = AirportDB(path)
+    if not database.has_continents():
+        raise StaleReferenceData(
+            f"{path} was built before the board drew continents. Rebuild it with: "
+            f"uv run python scripts/build_airports_db.py --csv data/airports_world.csv "
+            f"--db {path.as_posix()}"
+        )
+    # A full build holds tens of thousands of fields and strips. The board draws the
+    # world set: airports with scheduled service, large and medium.
+    return [
+        airport
+        for airport in database.placed()
+        if airport["type"] in WORLD_TYPES and airport["scheduled_service"] == "yes"
+    ]
 
 
 def build(args: argparse.Namespace, settings: Settings) -> tuple[FastAPI, str]:
@@ -84,7 +106,11 @@ def build(args: argparse.Namespace, settings: Settings) -> tuple[FastAPI, str]:
 
         close = close_live
 
-    service = BoardService(source, load_airports(settings))
+    service = BoardService(
+        source,
+        load_airports(settings),
+        traffic_ceiling_per_hour=settings.dashboard_traffic_credits_per_hour,
+    )
     return create_app(service, Gate(passcode), on_close=close), host
 
 

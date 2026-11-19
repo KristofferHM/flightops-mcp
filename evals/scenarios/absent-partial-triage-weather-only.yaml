@@ -1,0 +1,59 @@
+id: absent-partial-triage-weather-only
+group: absent-evidence
+why: 'Only the weather answers: the IFR is reported, the counts are null rather than zero, and unknown outranks the elevated the weather alone would give.'
+question: Is Copenhagen Kastrup disrupted right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: EKCH
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: EKCH 160850Z 18009KT 2500 BR OVC006 07/06 Q1004
+        fltCat: IFR
+        wdir: 180
+        wspd: 9
+        visib: 1.5
+        wxString: BR
+        clouds:
+        - cover: OVC
+          base: 600
+    taf:
+      status: 200
+      json:
+      - icaoId: EKCH
+        issueTime: '2026-11-16T08:30:00Z'
+        rawTAF: TAF EKCH 160830Z 1609/1709 18010KT 3000 BR OVC006
+  opensky:
+    states:
+      status: 503
+    arrival:
+      status: 503
+    departure:
+      status: 503
+offline:
+  policy: airport_triage
+  params:
+    airport: Kastrup
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - disruption_triage
+  arguments:
+    disruption_triage:
+      airport: EKCH
+  answer: unknown
+  absent_evidence: partial_coverage
+  triage:
+    severity: unknown
+    counts: {arrivals: null, departures: null, aircraft: null}
+    legs_with_data: 1

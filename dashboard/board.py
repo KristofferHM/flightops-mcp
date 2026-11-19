@@ -235,8 +235,139 @@ def airspace_view(payload: Payload) -> Payload:
     }
 
 
+def refused_view(reason: str) -> Payload:
+    """A traffic refresh that was not made. Nothing is drawn and no time is claimed."""
+    return {
+        "state": "refused",
+        "summary": reason,
+        "hint": None,
+        "snapshot_epoch": 0,
+        "upstream_epoch": 0,
+        "aircraft": [],
+        "unknowns": [reason],
+        "refused": reason,
+    }
+
+
 def _movement_text(count: int | None) -> str:
     return str(count) if count else MOVEMENTS_NOT_AVAILABLE
+
+
+def _row(label: str, text: str) -> Payload:
+    return {"label": label, "text": text}
+
+
+def _number(value: object) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return f"{value:g}"
+
+
+def _unreadable(entry: Payload) -> str:
+    unreadable = int(entry.get("unreadable") or 0)
+    return f"; {unreadable} of {entry['received']} rows unreadable" if unreadable else ""
+
+
+def count_rows(counts: Payload | None) -> list[Payload]:
+    """The triage's counts as the panel lists them. A count never made says so."""
+    counts = counts or {}
+    window = counts.get("movements_window_minutes")
+    rows = []
+    for key, label in (("arrivals", "Arrivals"), ("departures", "Departures")):
+        entry = counts.get(key)
+        if entry is None:
+            rows.append(_row(label, "not counted: movements unavailable"))
+        else:
+            rows.append(
+                _row(label, f"{entry['count']} in the last {window} min{_unreadable(entry)}")
+            )
+    aircraft = counts.get("aircraft_in_search_box")
+    if aircraft is None:
+        rows.append(_row("Aircraft nearby", "not counted: traffic unavailable"))
+    else:
+        radius = _number(counts.get("search_radius_nm"))
+        text = (
+            f"{aircraft['count']} heard within {radius} nm ({aircraft.get('airborne')} airborne, "
+            f"{aircraft.get('on_ground')} on the ground){_unreadable(aircraft)}"
+        )
+        if aircraft.get("truncated"):
+            text += f"; only the {aircraft['listed']} most recent listed"
+        rows.append(_row("Aircraft nearby", text))
+    return rows
+
+
+def _wind_text(wind: Payload) -> str:
+    speed = _number(wind.get("speed_kt"))
+    if speed is None:
+        return "not in the report"
+    direction = _number(wind.get("direction_deg"))
+    if wind.get("variable"):
+        heading = "variable"
+    elif direction is None:
+        heading = "direction not given"
+    else:
+        heading = f"{direction.zfill(3)}°"
+    gust = _number(wind.get("gust_kt"))
+    return f"{heading} {speed} kt, " + (f"gusts {gust} kt" if gust else "no gusts reported")
+
+
+def weather_rows(weather: Payload | None) -> list[Payload]:
+    """The newest METAR as values. Each figure the report did not give says so."""
+    if weather is None:
+        return [_row("METAR", "none returned, so no values")]
+    category = weather.get("category") or "none given"
+    if not weather.get("current"):
+        category += " (not current)"
+    age = weather.get("age_s")
+    ceiling = weather.get("ceiling") or {}
+    feet = ceiling.get("ft")
+    visibility = weather.get("visibility") or {}
+    miles = _number(visibility.get("statute_mi"))
+    return [
+        _row("Category", category),
+        _row("METAR age", "unknown" if age is None else f"{_ago(age)} by NOAA's clock"),
+        _row(
+            "Ceiling",
+            f"{feet:,} ft ({ceiling.get('basis')})"
+            if isinstance(feet, int)
+            else str(ceiling.get("basis", "not in the report")),
+        ),
+        _row(
+            "Visibility",
+            "not in the report"
+            if miles is None
+            else f"{miles}{' or more' if visibility.get('at_least') else ''} sm",
+        ),
+        _row("Wind", _wind_text(weather.get("wind") or {})),
+    ]
+
+
+LEG_STATES: Final = {
+    "observed": "observed",
+    "empty": "answered, nothing in it",
+    "not_current": "answered, not current",
+    "unavailable": "unavailable",
+    "not_fetched": "not fetched",
+}
+
+
+def leg_rows(legs: Payload | None) -> list[Payload]:
+    """Each leg's state, age by its own upstream's clock, and source."""
+    rows = []
+    for key, entry in (legs or {}).items():
+        state = LEG_STATES.get(entry.get("status"), "unknown")
+        if entry.get("error"):
+            state += f" ({entry['error']})"
+        age = entry.get("age_s")
+        when = "age unknown" if age is None else f"data {_ago(age)} old"
+        rows.append(
+            {
+                "label": key.capitalize(),
+                "state": entry.get("status"),
+                "text": f"{state}; {when}; {entry.get('source')}",
+            }
+        )
+    return rows
 
 
 def triage_view(payload: Payload) -> Payload:
@@ -250,6 +381,11 @@ def triage_view(payload: Payload) -> Payload:
             "unknowns": [str(error.get("message", "The triage could not run."))],
             "legs_without_evidence": [],
             "movements": {"arrivals": "not available", "departures": "not available"},
+            "counts": [],
+            "weather": [],
+            "legs": [],
+            "why_not_higher": [],
+            "why_not_lower": [],
         }
     assessment = payload.get("assessment") or {}
     severity = str(assessment.get("severity", "unknown"))
@@ -269,6 +405,13 @@ def triage_view(payload: Payload) -> Payload:
         "unknowns": list(assessment.get("unknowns") or []),
         "legs_without_evidence": list(assessment.get("legs_without_evidence") or []),
         "movements": movements,
+        # A triage from before these fields existed (an old recording) shows none of
+        # them, rather than rows that claim nothing was counted or reported.
+        "counts": count_rows(payload["counts"]) if "counts" in payload else [],
+        "weather": weather_rows(payload["weather"]) if "weather" in payload else [],
+        "legs": leg_rows(payload.get("legs")),
+        "why_not_higher": list(assessment.get("why_not_higher") or []),
+        "why_not_lower": list(assessment.get("why_not_lower") or []),
     }
 
 
@@ -360,6 +503,7 @@ def last_update(
     recorded_at: str | None,
     traffic_snapshot: int | None = None,
     traffic_upstream: int | None = None,
+    traffic_refused: str | None = None,
 ) -> Payload:
     """The map's badge: how old the data on screen is, one line per source.
 
@@ -367,6 +511,8 @@ def last_update(
     `traffic_snapshot` is None while no traffic layer is drawn; `traffic_upstream` is
     OpenSky's clock when it sent that snapshot. A recording shows when it was made,
     because an age measured during playback would describe the playback.
+    `traffic_refused` is why the newest refresh was not made; it gets its own line, so
+    an old snapshot is never read as a layer that is still refreshing.
     """
     recorded = recorded_at is not None
     if recorded_at is not None:
@@ -375,5 +521,7 @@ def last_update(
         lines = [_weather_line(weather)]
     if traffic_snapshot is not None:
         lines.append(_traffic_line(traffic_snapshot, _valid_epoch(traffic_upstream), recorded))
-    stale = any(line["state"] == "stale" for line in lines)
+        if traffic_refused:
+            lines.append(_line("traffic", "Refresh", "refused", traffic_refused))
+    stale = any(line["state"] in ("stale", "refused") for line in lines)
     return {"state": "stale" if stale else lines[0]["state"], "lines": lines}

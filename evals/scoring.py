@@ -65,7 +65,7 @@ def score(scenario: EvalScenario, evidence: Evidence) -> dict[str, Any]:
         "argument_validity": _argument_validity(scenario, evidence),
         "refusal_correctness": _refusal(scenario, transcript, answer, written),
         "no_hallucination": _no_hallucination(scenario, answer, written),
-        "outcome": _outcome(scenario, answer, written),
+        "outcome": _outcome(scenario, transcript, answer, written),
     }
     return {
         "id": scenario.id,
@@ -209,9 +209,45 @@ def _no_hallucination(scenario: EvalScenario, answer: str, written: int) -> dict
     return _check(problems)
 
 
-def _outcome(scenario: EvalScenario, answer: str, written: int) -> dict[str, Any]:
-    expect = scenario.expect
+def _triage(scenario: EvalScenario, transcript: Transcript) -> list[str]:
+    """The last triage against what the scenario says it must conclude and count."""
+    wanted = scenario.expect.triage
+    if wanted is None:
+        return []
+    shapes = [
+        step["result"].get("triage")
+        for step in transcript.steps
+        if step["tool"] == "disruption_triage" and step["result"]["class"] == "ok"
+    ]
+    if not shapes or not isinstance(shapes[-1], dict):
+        return ["no triage answered, so its counts cannot be checked"]
+    shape = shapes[-1]
     problems: list[str] = []
+    if shape["severity"] != wanted.severity:
+        problems.append(f"the triage said {shape['severity']!r}, expected {wanted.severity!r}")
+    for name, count in sorted(wanted.counts.items()):
+        if shape[name] != count:
+            problems.append(f"the triage counted {name} {shape[name]!r}, expected {count!r}")
+    if shape["legs_with_data"] != wanted.legs_with_data:
+        problems.append(
+            f"{shape['legs_with_data']} leg(s) observed something, expected {wanted.legs_with_data}"
+        )
+    if shape["legs_dated"] != shape["legs_with_data"]:
+        problems.append("a leg that observed something carries no age of its own")
+    if shape["distinct_reasons"] != shape["reasons"]:
+        problems.append("the triage repeats a reason")
+    if not shape["why_not_higher"] or not shape["why_not_lower"]:
+        problems.append("the triage does not say why it is not higher and why not lower")
+    if not shape["weather_values"]:
+        problems.append("the triage gives no weather values")
+    return problems
+
+
+def _outcome(
+    scenario: EvalScenario, transcript: Transcript, answer: str, written: int
+) -> dict[str, Any]:
+    expect = scenario.expect
+    problems: list[str] = _triage(scenario, transcript)
     found = answers.classify(answer)
     if found not in expect.answer:
         problems.append(f"the answer is {found!r}, expected {' or '.join(expect.answer)}")

@@ -13,12 +13,13 @@ from typing import Annotated, Any, Final
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import FastAPI, Query, Request, Response
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .board import MAX_SNAPSHOT_EPOCH
 from .gate import COOKIE_NAME, LOCAL_HOSTS, SESSION_TTL_S, Gate, host_name
-from .service import BoardService, UnknownBoardItem
+from .service import DEFAULT_REGION, LIST_PAGE, LIST_PAGE_MAX, BoardService, UnknownBoardItem
 
 STATIC: Final = Path(__file__).parent / "static"
 MAX_LOGIN_BODY: Final = 4096
@@ -97,6 +98,8 @@ def create_app(
     # Added last runs first, so even a refusal from the gate carries the headers.
     app.middleware("http")(guard)
     app.middleware("http")(headers)
+    # A continent's airports are a few hundred kB of JSON every 30 s; compressed, a tenth.
+    app.add_middleware(GZipMiddleware, minimum_size=2048)
 
     @app.exception_handler(UnknownBoardItem)
     async def not_listed(_request: Request, _exc: UnknownBoardItem) -> JSONResponse:
@@ -154,10 +157,20 @@ def create_app(
 
     @app.get("/api/board")
     async def api_board(
+        region: Annotated[str, Query(max_length=32)] = DEFAULT_REGION,
         traffic_snapshot: Annotated[int | None, Query(ge=0, le=MAX_SNAPSHOT_EPOCH)] = None,
         traffic_upstream: Annotated[int | None, Query(ge=0, le=MAX_SNAPSHOT_EPOCH)] = None,
     ) -> dict[str, Any]:
-        return await service.snapshot(traffic_snapshot, traffic_upstream)
+        return await service.snapshot(region, traffic_snapshot, traffic_upstream)
+
+    @app.get("/api/airports")
+    async def api_airports(
+        region: Annotated[str, Query(max_length=32)] = DEFAULT_REGION,
+        q: Annotated[str, Query(max_length=64)] = "",
+        offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+        limit: Annotated[int, Query(ge=1, le=LIST_PAGE_MAX)] = LIST_PAGE,
+    ) -> dict[str, Any]:
+        return service.airport_list(region, q, offset, limit)
 
     @app.get("/api/airport/{icao}")
     async def api_airport(icao: str) -> dict[str, Any]:

@@ -6,8 +6,12 @@ dependency on an upstream being up. It also makes the test suite hermetic.
 
 Build it with:
 
-    uv run python scripts/build_airports_db.py            # downloads the CSV
+    uv run python scripts/build_airports_db.py --csv data/airports_world.csv   # committed
+    uv run python scripts/build_airports_db.py            # downloads the whole CSV
     uv run python scripts/build_airports_db.py --csv X    # or use a local copy
+
+`data/airports_world.csv` is the committed world set: every large and medium airport
+with scheduled service. `data/airports_seed.csv` is a 25-airport fixture for tests.
 """
 
 from __future__ import annotations
@@ -15,10 +19,10 @@ from __future__ import annotations
 import csv
 import math
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import closing
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS airports (
@@ -32,9 +36,11 @@ CREATE TABLE IF NOT EXISTS airports (
     iso_country TEXT,
     iso_region TEXT,
     municipality TEXT,
-    scheduled_service TEXT
+    scheduled_service TEXT,
+    continent TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_airports_iata ON airports(iata);
+CREATE INDEX IF NOT EXISTS idx_airports_continent ON airports(continent);
 CREATE INDEX IF NOT EXISTS idx_airports_name ON airports(name);
 """
 
@@ -50,19 +56,55 @@ _COLUMNS = (
     "iso_region",
     "municipality",
     "scheduled_service",
+    "continent",
 )
 
 # Only airports a crew-scheduling system would actually know about.
-_USEFUL_TYPES = frozenset({"large_airport", "medium_airport", "small_airport", "seaplane_base"})
+USEFUL_TYPES: Final = frozenset(
+    {"large_airport", "medium_airport", "small_airport", "seaplane_base"}
+)
+# The world set the board draws: both kinds kept, so a reader can tell them apart.
+WORLD_TYPES: Final = frozenset({"large_airport", "medium_airport"})
+
+# OurAirports' continent codes. Antarctica has no scheduled large or medium airport.
+CONTINENTS: Final[Mapping[str, str]] = {
+    "EU": "Europe",
+    "NA": "North America",
+    "SA": "South America",
+    "AF": "Africa",
+    "AS": "Asia",
+    "OC": "Oceania",
+}
 
 
-def build_from_csv(csv_path: Path, db_path: Path, *, limit: int | None = None) -> int:
+def _without_comment_header(lines: Iterable[str]) -> Iterator[str]:
+    """Drop the `#` lines a committed export starts with, and nothing after them.
+
+    Only the leading block: a quoted field further down may begin a line with `#`.
+    """
+    header = True
+    for line in lines:
+        if header and line.startswith("#"):
+            continue
+        header = False
+        yield line
+
+
+def build_from_csv(
+    csv_path: Path,
+    db_path: Path,
+    *,
+    limit: int | None = None,
+    types: frozenset[str] = USEFUL_TYPES,
+    scheduled_only: bool = False,
+) -> int:
     """Load OurAirports' airports.csv into SQLite. Returns the number of airports stored.
 
     A row without an ident cannot be looked up and is skipped. When an ident
     appears twice the later row wins, and the return value counts airports in
     the database, not rows read: the two differ exactly when the CSV repeats
-    itself. `limit` stops after that many accepted rows.
+    itself. `limit` stops after that many accepted rows. `types` and
+    `scheduled_only` filter rows before they count towards it.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     if db_path.exists():
@@ -74,12 +116,14 @@ def build_from_csv(csv_path: Path, db_path: Path, *, limit: int | None = None) -
     with closing(sqlite3.connect(db_path)) as connection:
         connection.executescript(_SCHEMA)
         with csv_path.open(newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
+            reader = csv.DictReader(_without_comment_header(handle))
             batch: list[tuple[Any, ...]] = []
             for record in reader:
                 if limit is not None and accepted >= limit:
                     break
-                if record.get("type") not in _USEFUL_TYPES:
+                if record.get("type") not in types:
+                    continue
+                if scheduled_only and record.get("scheduled_service") != "yes":
                     continue
                 ident = (record.get("ident") or "").strip().upper()
                 if not ident:
@@ -97,6 +141,7 @@ def build_from_csv(csv_path: Path, db_path: Path, *, limit: int | None = None) -
                         record.get("iso_region"),
                         record.get("municipality"),
                         record.get("scheduled_service"),
+                        (record.get("continent") or "").strip().upper() or None,
                     )
                 )
                 accepted += 1
@@ -154,11 +199,17 @@ class AirportDB:
         if not self.path.is_file():
             return False
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 row = connection.execute("SELECT count(*) FROM airports").fetchone()
         except sqlite3.Error:
             return False
         return bool(row) and int(row[0]) > 0
+
+    def has_continents(self) -> bool:
+        """Whether the file was built with the continent column the board filters on."""
+        with closing(self._connect()) as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(airports)")}
+        return "continent" in columns
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(f"file:{self.path.as_posix()}?mode=ro", uri=True)
@@ -166,7 +217,7 @@ class AirportDB:
         return connection
 
     def get(self, ident: str) -> dict[str, Any] | None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT * FROM airports WHERE ident = ?", (ident.upper(),)
             ).fetchone()
@@ -182,7 +233,7 @@ class AirportDB:
         if not needle:
             return []
         upper = needle.upper()
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             exact = connection.execute(
                 "SELECT * FROM airports WHERE ident = ? OR iata = ? ORDER BY ident LIMIT ?",
                 (upper, upper, limit),
@@ -197,7 +248,7 @@ class AirportDB:
 
     def board(self, *, limit: int = 30) -> list[dict[str, Any]]:
         """Airports that can be placed on a map, the largest kind first."""
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 "SELECT * FROM airports WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
                 "ORDER BY type != 'large_airport', ident LIMIT ?",
@@ -205,10 +256,19 @@ class AirportDB:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def placed(self) -> list[dict[str, Any]]:
+        """Every airport with coordinates, large before medium, then by ident."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM airports WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
+                "ORDER BY type != 'large_airport', ident"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def nearest(
         self, lat: float, lon: float, *, limit: int = 5, max_nm: float = 200.0
     ) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 "SELECT * FROM airports WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
             ).fetchall()

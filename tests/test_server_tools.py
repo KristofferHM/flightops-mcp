@@ -31,6 +31,7 @@ EXPECTED_TOOLS = {
     "airport_live_traffic",
     "airport_movements",
     "airport_weather",
+    "weather_overview",
     "airspace_snapshot",
     "disruption_triage",
     "schiphol_flights",

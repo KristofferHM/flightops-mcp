@@ -24,11 +24,12 @@ from typing import Any, Final
 import uvicorn
 from fastapi import FastAPI
 
-from dashboard.__main__ import BOARD_SIZE, SEED_CSV
+from dashboard.__main__ import WORLD_CSV, load_airports
 from dashboard.app import create_app
 from dashboard.gate import LOCAL_BIND, Gate
 from dashboard.service import BoardService
-from flightops_mcp.airports import AirportDB, build_from_csv
+from flightops_mcp.config import Settings
+from flightops_mcp.server import AIRSPACE_COLUMNS
 
 Payload = dict[str, Any]
 
@@ -108,6 +109,91 @@ class SyntheticSource:
             "unknowns": ["Coverage near the ground is not proven."],
         }
 
+    def _overview(self, airports: list[str]) -> Payload:
+        return {
+            "ok": True,
+            "upstream_time_epoch": self._upstream_time(),
+            "airports": {code: self._weather(code) for code in airports},
+        }
+
+    def _airspace(self) -> Payload:
+        heard = int(self._clock()) - 20
+        rows = [
+            ["4ca1f2", "TEST1", 57.7, 12.3, 3000.0, False, 200.0, 90.0, heard],
+            ["4ca1f3", "TEST2", 52.3, 4.8, 9000.0, False, 230.0, 180.0, heard],
+        ]
+        return {
+            "ok": True,
+            "upstream_time_epoch": self._upstream_time(),
+            "region": "europe",
+            "credentials": "client_credentials",
+            "snapshot_time_epoch": heard,
+            "snapshot_current": True,
+            "columns": list(AIRSPACE_COLUMNS),
+            "rows": rows,
+            "bookkeeping": {"credits_spent": 4},
+            "unknowns": [],
+        }
+
+    def _triage(self, airport: str) -> Payload:
+        """A triage with every panel field filled, so the walk meets the longest panel."""
+        upstream = self._upstream_time()
+        return {
+            "ok": True,
+            "assessment": {
+                "severity": "elevated",
+                "reasons": [f"{airport}: flight category IFR (in 3 of 3 METARs from the last 2 h)"],
+                "why_not_higher": [
+                    "1 distinct reason(s); high needs 3.",
+                    "Gusts 18 kt, below the 35 kt flag.",
+                    "12 aircraft in the search box, not more than 25.",
+                ],
+                "why_not_lower": [
+                    "Low needs no reason; this triage has 1.",
+                    f"{airport}: flight category IFR (in 3 of 3 METARs from the last 2 h)",
+                ],
+                "unknowns": [],
+                "legs_without_evidence": [],
+            },
+            "counts": {
+                "arrivals": {"count": 7, "received": 7, "unreadable": 0},
+                "departures": {"count": 9, "received": 10, "unreadable": 1},
+                "movements_window_minutes": 60,
+                "aircraft_in_search_box": {
+                    "count": 12,
+                    "received": 12,
+                    "unreadable": 0,
+                    "listed": 12,
+                    "airborne": 9,
+                    "on_ground": 3,
+                    "truncated": False,
+                },
+                "search_radius_nm": 40.0,
+            },
+            "weather": {
+                "category": "IFR",
+                "current": True,
+                "age_s": FRESH_AGE_S if upstream else None,
+                "ceiling": {"ft": 800, "basis": "OVC"},
+                "visibility": {"statute_mi": 2.5, "at_least": False},
+                "wind": {"direction_deg": 240, "variable": False, "speed_kt": 12, "gust_kt": 18},
+            },
+            "legs": {
+                leg: {
+                    "status": "observed",
+                    "source": source,
+                    "age_s": 300 if upstream else None,
+                    "error": None,
+                }
+                for leg, source in (
+                    ("weather", "AviationWeather.gov (NOAA) /metar"),
+                    ("traffic", "OpenSky Network /states/all"),
+                    ("movements", "OpenSky Network /flights/arrival, /flights/departure"),
+                )
+            },
+            "evidence": {"movements_summary": {"arrivals": 7, "departures": 9}},
+        }
+
     def _status(self) -> Payload:
         return {
             "credentials": {"opensky": "client_credentials"},
@@ -116,12 +202,16 @@ class SyntheticSource:
         }
 
     async def call(self, tool: str, arguments: Payload) -> Payload:
-        if tool == "airport_weather":
-            return self._weather(arguments["airport"])
-        if tool == "airport_live_traffic":
-            return self._traffic()
-        if tool == "upstream_status":
-            return self._status()
+        answers: dict[str, Callable[[], Payload]] = {
+            "airport_weather": lambda: self._weather(arguments["airport"]),
+            "airport_live_traffic": self._traffic,
+            "upstream_status": self._status,
+            "weather_overview": lambda: self._overview(arguments["airports"]),
+            "airspace_snapshot": self._airspace,
+            "disruption_triage": lambda: self._triage(arguments["airport"]),
+        }
+        if tool in answers:
+            return answers[tool]()
         # Never an invented result: the states under test do not call the other tools.
         return {
             "ok": False,
@@ -137,8 +227,8 @@ def listed_airports() -> list[Payload]:
     """The airports the real board lists, so the page holds its real names and lengths."""
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
         database = Path(directory) / "airports.sqlite3"
-        build_from_csv(SEED_CSV, database)
-        return AirportDB(database).board(limit=BOARD_SIZE)
+        settings = Settings(_env_file=None, airports_db=database)  # type: ignore[call-arg]
+        return load_airports(settings, WORLD_CSV)
 
 
 def build_app(scenario: str, passcode: str | None) -> FastAPI:

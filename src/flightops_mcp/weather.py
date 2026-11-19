@@ -10,6 +10,7 @@ tool layer must preserve, because "no observation" is not "the airport is fine".
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +23,10 @@ from .telemetry import get_logger
 
 # Flight-category thresholds are advisory: report them, never act on them alone.
 IFR_CATEGORIES = frozenset({"IFR", "LIFR"})
+# The other two flags. The triage's "why not higher" lines quote the same numbers.
+GUST_FLAG_KT = 35
+VISIBILITY_FLAG_SM = 1.5
+SIGNIFICANT_WEATHER = ("TS", "FZ", "FG", "SN", "GR", "IC", "PL", "BLSN", "DS", "SS", "FC")
 
 
 @dataclass(slots=True)
@@ -67,6 +72,10 @@ class WeatherClient:
     async def metar_reports(self, icao: str) -> Reports:
         return await self._observations("metar", icao, hours=2)
 
+    async def metar_reports_many(self, icaos: Sequence[str]) -> Reports:
+        """Several stations in one request. NOAA takes a comma-separated `ids`."""
+        return await self._observations("metar", ",".join(icaos), hours=2)
+
     async def taf_reports(self, icao: str) -> Reports:
         # No `hours` parameter: AviationWeather.gov rejects it on /taf with
         # HTTP 400 "Unexpected query parameter provided" (verified live), while
@@ -111,11 +120,18 @@ class WeatherClient:
                     "temperature_c": _number(item.get("temp")),
                     "dewpoint_c": _number(item.get("dewp")),
                     "wind_dir_deg": _number(item.get("wdir")),
+                    "wind_variable": str(item.get("wdir") or "").strip().upper() == "VRB",
                     "wind_speed_kt": _number(item.get("wspd")),
                     "wind_gust_kt": _number(item.get("wgst")),
                     "visibility_statute_mi": _number(item.get("visib")),
+                    # NOAA writes "6+" for "6 or more": the number is a floor, not a reading.
+                    "visibility_at_least": str(item.get("visib") or "").strip().endswith("+"),
                     "altimeter_hpa": _number(item.get("altim")),
                     "wx_string": item.get("wx_string") or item.get("wxString"),
+                    # None when NOAA sent no `clouds` at all, [] when it sent an empty list:
+                    # "not reported" and "no layers" are different statements.
+                    "clouds": _layers(item.get("clouds")),
+                    "vertical_visibility_ft": _number(item.get("vertVis")),
                     "product": product,
                 }
             )
@@ -140,6 +156,47 @@ def _number(value: object) -> float | None:
     return None
 
 
+def _layers(value: object) -> list[dict[str, Any]] | None:
+    """NOAA's `clouds`, as cover and base in feet. A layer it cannot read is left out."""
+    if not isinstance(value, list):
+        return None
+    layers: list[dict[str, Any]] = []
+    for layer in value:
+        if not isinstance(layer, dict) or not isinstance(layer.get("cover"), str):
+            continue
+        base = _number(layer.get("base"))
+        layers.append({"cover": layer["cover"].strip().upper(), "base_ft": base})
+    return layers
+
+
+# A ceiling is the lowest broken or overcast layer, or a vertical visibility.
+CEILING_COVERS = frozenset({"BKN", "OVC", "OVX"})
+
+
+def ceiling(observation: dict[str, Any]) -> dict[str, Any]:
+    """The ceiling in feet and what it was read from, or why there is no number.
+
+    "No broken or overcast layer" and "not in the report" both give no number, and
+    they mean different things: the first is a ceiling above every reported layer,
+    the second is a ceiling nobody told us about.
+    """
+    clouds = observation.get("clouds")
+    vertical = observation.get("vertical_visibility_ft")
+    covering = [
+        layer
+        for layer in clouds or []
+        if layer.get("cover") in CEILING_COVERS and isinstance(layer.get("base_ft"), int | float)
+    ]
+    if covering:
+        lowest = min(covering, key=lambda layer: float(layer["base_ft"]))
+        return {"ft": int(lowest["base_ft"]), "basis": lowest["cover"]}
+    if isinstance(vertical, int | float):
+        return {"ft": int(vertical), "basis": "VV"}
+    if clouds is None:
+        return {"ft": None, "basis": "not in the report"}
+    return {"ft": None, "basis": "no broken or overcast layer"}
+
+
 def _fmt(value: float) -> str:
     """Render a number the way a METAR reader expects: 45, not 45.0."""
     return f"{value:g}"
@@ -159,15 +216,12 @@ def fleet_impact_flags(observations: list[dict[str, Any]]) -> list[str]:
         if category in IFR_CATEGORIES:
             flags.append(f"{station}: flight category {category}")
         gust = obs.get("wind_gust_kt")
-        if isinstance(gust, int | float) and gust >= 35:
+        if isinstance(gust, int | float) and gust >= GUST_FLAG_KT:
             flags.append(f"{station}: gusts {_fmt(gust)} kt")
         visibility = obs.get("visibility_statute_mi")
-        if isinstance(visibility, int | float) and visibility < 1.5:
+        if isinstance(visibility, int | float) and visibility < VISIBILITY_FLAG_SM:
             flags.append(f"{station}: visibility {_fmt(visibility)} sm")
         wx = obs.get("wx_string")
-        if isinstance(wx, str) and any(
-            token in wx.upper()
-            for token in ("TS", "FZ", "FG", "SN", "GR", "IC", "PL", "BLSN", "DS", "SS", "FC")
-        ):
+        if isinstance(wx, str) and any(token in wx.upper() for token in SIGNIFICANT_WEATHER):
             flags.append(f"{station}: significant weather {wx}")
     return flags
