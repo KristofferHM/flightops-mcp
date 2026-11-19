@@ -1,0 +1,76 @@
+id: absent-empty-triage-two-legs
+group: absent-evidence
+why: 'Weather and traffic have data, movements come back empty: the empty leg is named with its own source, and the IFR seen in two METARs is one reason, not two.'
+question: Is Gothenburg Landvetter disrupted right now?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.weather.read
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  weather:
+    metar:
+      status: 200
+      json:
+      - icaoId: ESGG
+        reportTime: '2026-11-16T08:20:00Z'
+        rawOb: ESGG 160820Z 21012KT 3000 BR OVC007 06/05 Q1002
+        fltCat: IFR
+        wdir: 210
+        wspd: 12
+        visib: 2
+        wxString: BR
+        clouds:
+        - cover: OVC
+          base: 700
+      - icaoId: ESGG
+        reportTime: '2026-11-16T08:50:00Z'
+        rawOb: ESGG 160850Z 21013KT 3000 BR OVC007 06/05 Q1002
+        fltCat: IFR
+        wdir: 210
+        wspd: 13
+        visib: 2
+        wxString: BR
+        clouds:
+        - cover: OVC
+          base: 700
+    taf:
+      status: 200
+      json:
+      - icaoId: ESGG
+        issueTime: '2026-11-16T08:30:00Z'
+        rawTAF: TAF ESGG 160830Z 1609/1709 21012KT 3000 BR OVC007
+  opensky:
+    states:
+      status: 200
+      json:
+        time: 1794819595
+        states:
+        - [4a91f9, 'SAS157  ', Sweden, 1794819592, 1794819592, 12.1, 57.8, 1219.2, false, 118.3, 182.0, 0.0, null, 1219.2, '1000', false, 0]
+        - [3c6dd3, 'DLH3VP  ', Sweden, 1794819592, 1794819592, 12.51, 57.55, 2133.6, false, 118.3, 182.0, 0.0, null, 2133.6, '1000', false, 0]
+        - [4ac9e1, 'SAS431  ', Sweden, 1794819592, 1794819592, 12.29, 57.67, null, true, 0.0, 182.0, 0.0, null, null, '1000', false, 0]
+    arrival:
+      status: 404
+    departure:
+      status: 404
+offline:
+  policy: airport_triage
+  params:
+    airport: Landvetter
+expect:
+  tools:
+    required:
+    - resolve_airport
+    - disruption_triage
+  arguments:
+    disruption_triage:
+      airport: ESGG
+  answer: unknown
+  absent_evidence: empty_result
+  triage:
+    severity: elevated
+    counts: {arrivals: 0, departures: 0, aircraft: 3}
+    legs_with_data: 2

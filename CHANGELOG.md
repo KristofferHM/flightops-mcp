@@ -5,6 +5,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The world on the board.** `data/airports_world.csv` commits OurAirports' 3,270 large and medium airports with
+  scheduled service (343 kB, public domain, source and date in its header and in `docs/REFERENCE-DATA.md`). The
+  board builds from it, the 25-airport seed stays the test fixture, and the reference database gains a `continent`
+  column. `build_airports_db.py` gains `--world`, `--types`, `--scheduled-only`, `--export` and `--dated`.
+- Regions on the board: Europe, North America, South America, Africa, Asia, Oceania and World, each with its airport
+  count, remembered per browser, and four new fixed traffic boxes. The list is searched and paged by the server.
+  The region control says that airport data is worldwide and receiver coverage is not.
+- **`weather_overview`**: the latest METAR for up to 100 airports in one NOAA request, scope `weather.read`, cached
+  60 s. The board colours a region with it instead of one request per airport.
+- **A glossary.** A Documentation tab explains VFR, MVFR, IFR, LIFR, Unknown, ICAO/IATA, METAR/TAF, nm and credits,
+  and says that a colour is weather, never the airport's status. The legend carries a one-line version.
+- **Traffic on by default with credentials**, off with the reason without. The control shows the session's spend,
+  the last hour against a new ceiling (`FLIGHTOPS_DASHBOARD_TRAFFIC_CREDITS_PER_HOUR`, 60) and the refresh interval
+  it allows. A refused refresh stops auto-refresh and the badge says why.
+- **A triage that counts and explains.** `disruption_triage` adds `counts` (arrivals, departures, aircraft in the
+  search box, each with how many rows were readable), `weather` (ceiling, visibility, wind with gusts, category, as
+  values), `legs` (each leg's state, source and age by its own upstream's clock) and `why_not_higher` /
+  `why_not_lower`. The board shows all four.
+- Eval scenarios may set `expect.triage`; three new ones cover a triage with three legs, two legs and weather only.
+
+### Fixed
+- **A triage repeated a reason once per METAR.** Each reason is now listed once, with how many METARs said it, and
+  the ladder counts distinct reasons. One condition seen in four METARs used to read as four reasons and `high`; it
+  is now one reason and `elevated`. `unknown` still outranks `elevated`, and `low` still needs an observation.
+- `AirportDB` closes its read connections, so the database file can be rebuilt on Windows while the process runs.
+
 ### Changed
 - **Freshness is judged by the upstream's clock, never this machine's.** Each data tool reports `upstream_time_epoch`,
   the response's `Date` header to the second, and measures METAR and snapshot ages against it. `as_of`, which was the

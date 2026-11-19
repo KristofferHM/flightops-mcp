@@ -86,7 +86,14 @@ from .runtime import Runtime, get_runtime
 from .schiphol import DIRECTIONS as SCHIPHOL_DIRECTIONS
 from .telemetry import REGISTRY as METRICS_REGISTRY
 from .telemetry import TOOL_CALLS, configure_logging, get_logger
-from .weather import fleet_impact_flags
+from .weather import (
+    GUST_FLAG_KT,
+    IFR_CATEGORIES,
+    VISIBILITY_FLAG_SM,
+    Reports,
+    ceiling,
+    fleet_impact_flags,
+)
 
 # METARs are issued at least hourly, half-hourly at most European airports. One
 # more than 90 minutes old means at least one routine report is missing, and the
@@ -95,6 +102,15 @@ METAR_STALE_AFTER_S: Final = 90 * 60
 
 # The parts of a triage that can observe something, in the order they are reported.
 EVIDENCE_LEGS: Final = ("weather", "traffic", "movements")
+# The triage ladder's thresholds, named once so the ladder and its why-not lines agree.
+BUSY_AIRCRAFT: Final = 25
+HIGH_REASONS: Final = 3
+# One NOAA request per call. A longer `ids` list risks a URL some proxy truncates.
+WEATHER_OVERVIEW_MAX: Final = 100
+WEATHER_SOURCE: Final = {
+    "name": "AviationWeather.gov (NOAA)",
+    "licence": "US Government open data, public domain",
+}
 
 # What `airspace_snapshot` returns per aircraft, in order. Columns, because a repeated
 # key per row is most of the size of a wide answer.
@@ -441,7 +457,15 @@ async def airport_live_traffic(
             "bbox": bbox.as_params(),
             "bbox_area_sq_deg": round(bbox.area_sq_deg, 2),
         },
-        "counts": {"returned": len(snapshot.vectors), "airborne": airborne, "on_ground": on_ground},
+        "counts": {
+            "returned": len(snapshot.vectors),
+            "airborne": airborne,
+            "on_ground": on_ground,
+            # What OpenSky sent, and how much of it was not a readable state vector.
+            # `returned` is lower than `received - unreadable` only when capped.
+            "received": snapshot.received,
+            "unreadable": snapshot.unreadable,
+        },
         "aircraft": [vector.to_payload() for vector in snapshot.vectors],
         "bookkeeping": {
             "credits_spent": snapshot.credits_spent,
@@ -468,7 +492,8 @@ async def airspace_snapshot(region: str, max_aircraft: int = 500) -> dict[str, A
     `airport_live_traffic`, which costs 1 credit.
 
     Args:
-        region: "europe", "north_america" or "world". Free-form boxes are not accepted.
+        region: "europe", "north_america", "south_america", "africa", "asia", "oceania"
+            or "world". Free-form boxes are not accepted.
         max_aircraft: Cap on returned aircraft (1-10000), most recently heard first.
     """
     runtime = get_runtime()
@@ -573,6 +598,7 @@ async def airport_movements(
 
     directions = ["arrival", "departure"] if wanted == "both" else [wanted]
     results: dict[str, list[dict[str, Any]]] = {}
+    received: dict[str, int] = {}
     missing: list[str] = []
     unknowns: list[str] = []
     upstream_time: int | None = None
@@ -585,6 +611,7 @@ async def airport_movements(
                 continue
             raise
         results[which] = [movement.to_payload() for movement in page.movements]
+        received[which] = page.received
         upstream_time = _newest(upstream_time, page.upstream_time)
         if page.unreadable:
             unknowns.append(
@@ -609,6 +636,8 @@ async def airport_movements(
         "window": {"begin_epoch": begin, "end_epoch": end, "minutes": window},
         "movements": results,
         "counts": {which: len(rows) for which, rows in results.items()},
+        # Rows OpenSky sent per direction, readable or not. `counts` holds the readable ones.
+        "received": received,
         "bookkeeping": {
             "credits_spent": 4 * len(results),
             "credits_remaining_upstream": runtime.opensky.last_credits_remaining,
@@ -639,41 +668,10 @@ async def airport_weather(airport: str) -> dict[str, Any]:
     tafs = (await runtime.weather.taf_reports(icao)).items
     # NOAA's clock when it sent the METARs. Their age is measured against it.
     upstream_time = metar_reports.upstream_time
-    flags = fleet_impact_flags(metars)
-
-    unknowns: list[str] = []
-    if not metars:
-        unknowns.append(
-            "No METAR returned. That means NOAA holds no current observation for this "
-            "station, not that conditions are good."
-        )
+    age, unknowns = _metar_age(metars, upstream_time)
     if not tafs:
-        unknowns.append("No TAF returned for this station.")
-    age: float | None = None
-    if metars:
-        observed = [t for t in (_epoch(m.get("observation_time")) for m in metars) if t]
-        if not observed:
-            unknowns.append(
-                "The METAR carries no readable observation time, so whether it describes "
-                "conditions now is unknown."
-            )
-        elif upstream_time is None:
-            unknowns.append(
-                "NOAA's response carried no Date header, so how old the METAR is cannot be "
-                "judged. This server does not substitute its own clock."
-            )
-        else:
-            age = upstream_time - max(observed)
-            if age > METAR_STALE_AFTER_S:
-                unknowns.append(
-                    f"The latest METAR is {_age(age)} old. It is not current conditions, and "
-                    "its impact flags describe the weather then, not now."
-                )
-            elif age < -METAR_STALE_AFTER_S:
-                unknowns.append(
-                    f"The latest METAR is dated {_age(-age)} in the future, so whether it "
-                    "describes conditions now is unknown."
-                )
+        # After "no METAR" when there is one, before any statement about the METAR's age.
+        unknowns.insert(0 if metars else 1, "No TAF returned for this station.")
 
     return {
         "ok": True,
@@ -681,21 +679,115 @@ async def airport_weather(airport: str) -> dict[str, Any]:
         "airport": {"icao": icao, "name": record["name"]},
         "metar": metars,
         "taf": tafs,
-        # Whether the newest METAR describes conditions now. A METAR that is old, dated
-        # ahead of the clock, or whose time cannot be read is shown but proves nothing
-        # about the present. NOAA's report time can sit a few minutes ahead of an
-        # observation, so "ahead" gets the same tolerance as "old".
-        "latest_metar": {
-            "age_s": None if age is None else round(age),
-            "current": age is not None and abs(age) <= METAR_STALE_AFTER_S,
-        },
-        "impact_flags": flags,
+        "latest_metar": _latest_metar(age),
+        "impact_flags": fleet_impact_flags(metars),
         "unknowns": unknowns,
-        "source": {
-            "name": "AviationWeather.gov (NOAA)",
-            "licence": "US Government open data, public domain",
-        },
+        "source": WEATHER_SOURCE,
     }
+
+
+@tool
+async def weather_overview(airports: list[str]) -> dict[str, Any]:
+    """Return the latest METAR for many airports at once, for an overview or a map.
+
+    Needs no credentials and spends no OpenSky credits. One NOAA request covers up to
+    100 airports. No TAF: for one airport's full picture use `airport_weather`.
+
+    Args:
+        airports: ICAO codes, 1-100, e.g. ["ESGG", "EKCH"].
+    """
+    runtime = get_runtime()
+    if not runtime.airports.exists:
+        raise reference_data_missing(str(runtime.airports.path))
+    wanted = list(dict.fromkeys(code.strip().upper() for code in airports if code.strip()))
+    if not wanted or len(wanted) > WEATHER_OVERVIEW_MAX:
+        raise ToolFailure(
+            code="invalid_argument",
+            message=f"airports must list 1 to {WEATHER_OVERVIEW_MAX} ICAO codes",
+            hint="Split a longer list into several calls.",
+        )
+    listed = [code for code in wanted if runtime.airports.get(code) is not None]
+    not_listed = [code for code in wanted if code not in listed]
+    reports = await runtime.weather.metar_reports_many(listed) if listed else Reports()
+    by_station: dict[str, list[dict[str, Any]]] = {}
+    for metar in reports.items:
+        by_station.setdefault(str(metar.get("station_id") or "").upper(), []).append(metar)
+
+    entries: dict[str, Any] = {}
+    for code in listed:
+        metars = by_station.get(code, [])
+        age, unknowns = _metar_age(metars, reports.upstream_time)
+        entries[code] = {
+            "ok": True,
+            "upstream_time_epoch": reports.upstream_time,
+            "metar": metars,
+            "latest_metar": _latest_metar(age),
+            "impact_flags": fleet_impact_flags(metars),
+            "unknowns": unknowns,
+        }
+    return {
+        "ok": True,
+        "upstream_time_epoch": reports.upstream_time,
+        "airports": entries,
+        "not_in_reference_data": not_listed,
+        "counts": {
+            "asked": len(wanted),
+            "with_metar": sum(1 for entry in entries.values() if entry["metar"]),
+            "current": sum(1 for entry in entries.values() if entry["latest_metar"]["current"]),
+        },
+        "unknowns": [
+            f"{code} is not in the reference data, so it was not asked about."
+            for code in not_listed
+        ],
+        "source": WEATHER_SOURCE,
+    }
+
+
+def _latest_metar(age: float | None) -> dict[str, Any]:
+    """Whether the newest METAR describes conditions now.
+
+    A METAR that is old, dated ahead of the clock, or whose time cannot be read is
+    shown but proves nothing about the present. NOAA's report time can sit a few
+    minutes ahead of an observation, so "ahead" gets the same tolerance as "old".
+    """
+    return {
+        "age_s": None if age is None else round(age),
+        "current": age is not None and abs(age) <= METAR_STALE_AFTER_S,
+    }
+
+
+def _metar_age(
+    metars: list[dict[str, Any]], upstream_time: int | None
+) -> tuple[float | None, list[str]]:
+    """The newest METAR's age by NOAA's clock, and what makes it unknowable or not current."""
+    if not metars:
+        return None, [
+            "No METAR returned. That means NOAA holds no current observation for this "
+            "station, not that conditions are good."
+        ]
+    observed = [t for t in (_epoch(m.get("observation_time")) for m in metars) if t]
+    if not observed:
+        return None, [
+            "The METAR carries no readable observation time, so whether it describes "
+            "conditions now is unknown."
+        ]
+    if upstream_time is None:
+        return None, [
+            "NOAA's response carried no Date header, so how old the METAR is cannot be "
+            "judged. This server does not substitute its own clock."
+        ]
+    age = upstream_time - max(observed)
+    if age > METAR_STALE_AFTER_S:
+        return age, [
+            f"The latest METAR is {_age(age)} old. It is not current conditions, and "
+            "its impact flags describe the weather then, not now."
+        ]
+    if age < -METAR_STALE_AFTER_S:
+        return age, [
+            f"The latest METAR is dated {_age(-age)} in the future, so whether it "
+            "describes conditions now is unknown."
+        ]
+    return age, []
 
 
 @tool
@@ -743,8 +835,11 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
         # missing a whole leg must not read as a complete one.
         degraded.append("movements:not_fetched_anonymously")
 
-    flags = weather_payload.get("impact_flags", []) if weather_payload.get("ok") else []
-    reasons.extend(flags)
+    # Each observation that raises severity, with the leg it came from. Two METARs in
+    # the window that both say IFR are one reason seen twice, not two reasons.
+    observed: list[tuple[str, str]] = []
+    if weather_payload.get("ok"):
+        observed.extend(("weather", flag) for flag in weather_payload.get("impact_flags", []))
 
     movements = movements_payload.get("movements", {}) if movements_payload.get("ok") else {}
     arrival_count = len(movements.get("arrival", []))
@@ -753,15 +848,20 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
 
     traffic = traffic_payload.get("counts", {}) if traffic_payload.get("ok") else {}
     aircraft_seen = traffic.get("returned", 0) if traffic else 0
-    if aircraft_seen > 25:
-        reasons.append(f"{aircraft_seen} aircraft within the search box.")
+    if aircraft_seen > BUSY_AIRCRAFT:
+        observed.append(("traffic", f"{aircraft_seen} aircraft within the search box."))
     # Absence of movements is weak evidence on its own: at 03:00 a quiet airport
     # is normal. It only becomes a reason when aircraft are demonstrably flying
     # nearby and yet nothing is arriving or departing.
     if movement_counts_available(movements_payload) and movement_total == 0 and aircraft_seen > 0:
-        reasons.append(
-            f"{aircraft_seen} aircraft active nearby but no arrivals or departures recorded."
+        observed.append(
+            (
+                "movements",
+                f"{aircraft_seen} aircraft active nearby but no arrivals or departures recorded.",
+            )
         )
+    findings = _distinct_reasons(observed, len(weather_payload.get("metar") or []))
+    reasons.extend(finding["reason"] for finding in findings)
 
     silent = _legs_without_evidence(weather_payload, traffic_payload, movements_payload)
     if len(silent) == len(EVIDENCE_LEGS):
@@ -769,11 +869,19 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
             f"No positive evidence from any source ({', '.join(silent)}). Nothing here shows "
             "that operations are normal."
         )
+    has_movements = movement_counts_available(movements_payload)
     severity = _severity(
-        reasons,
-        degraded,
-        movement_counts_available(movements_payload),
-        has_evidence=len(silent) < len(EVIDENCE_LEGS),
+        reasons, degraded, has_movements, has_evidence=len(silent) < len(EVIDENCE_LEGS)
+    )
+    weather = _weather_values(weather_payload)
+    counts = _triage_counts(movements_payload, traffic_payload, radius_nm)
+    why_higher, why_lower = _why_not(
+        severity,
+        reasons=reasons,
+        degraded=degraded,
+        silent=silent,
+        weather=weather,
+        counts=counts,
     )
 
     return {
@@ -790,9 +898,23 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
         "assessment": {
             "severity": severity,
             "reasons": reasons,
-            "unknowns": unknowns,
+            # The same reasons with the leg each came from and how many observations
+            # (METARs, snapshots, windows) said it.
+            "reason_details": findings,
+            # The evidence for the next rung up, and for standing down a rung.
+            "why_not_higher": why_higher,
+            "why_not_lower": why_lower,
+            # Several legs can say the same thing; saying it once is enough.
+            "unknowns": list(dict.fromkeys(unknowns)),
             "legs_without_evidence": silent,
             "advisory_only": True,
+        },
+        "counts": counts,
+        "weather": weather,
+        "legs": {
+            "weather": _weather_leg(weather_payload),
+            "traffic": _traffic_leg(traffic_payload),
+            "movements": _movements_leg(movements_payload, degraded),
         },
         "evidence": {
             "weather": weather_payload.get("metar", []) if weather_payload.get("ok") else None,
@@ -1323,13 +1445,273 @@ def _severity(
     """
     if not has_movements and degraded:
         return "unknown"
-    if len(reasons) >= 3:
+    if len(reasons) >= HIGH_REASONS:
         return "high"
     if reasons:
         return "elevated"
     if degraded or not has_evidence:
         return "unknown"
     return "low"
+
+
+def _distinct_reasons(observed: list[tuple[str, str]], metars: int) -> list[dict[str, Any]]:
+    """Each reason once, in first-seen order, with how many observations said it.
+
+    A weather flag is said once per METAR in the window, so its line names how many of
+    the METARs carried it. The ladder counts these distinct reasons, never the repeats.
+    """
+    seen: dict[tuple[str, str], int] = {}
+    for leg, text in observed:
+        seen[(leg, text)] = seen.get((leg, text), 0) + 1
+    findings: list[dict[str, Any]] = []
+    for (leg, text), times in seen.items():
+        reason = text
+        if leg == "weather":
+            reason = f"{text} (in {times} of {metars} METARs from the last 2 h)"
+        findings.append({"reason": reason, "leg": leg, "observations": times})
+    return findings
+
+
+def _counted(readable: int, received: int, **extra: Any) -> dict[str, Any]:
+    return {"count": readable, "received": received, "unreadable": received - readable, **extra}
+
+
+def _triage_counts(
+    movements: dict[str, Any], traffic: dict[str, Any], radius_nm: float
+) -> dict[str, Any]:
+    """What each counting leg counted, and how much of its answer was readable.
+
+    None for a count that was never made: a failed leg, or a direction not fetched.
+    Zero is a count; None is not one.
+    """
+    rows = (movements.get("movements") or {}) if movements.get("ok") else {}
+    received = movements.get("received") or {}
+    directions: dict[str, Any] = {}
+    for name, which in (("arrivals", "arrival"), ("departures", "departure")):
+        if which in rows:
+            readable = len(rows[which])
+            directions[name] = _counted(readable, int(received.get(which, readable)))
+        else:
+            directions[name] = None
+    aircraft: dict[str, Any] | None = None
+    if traffic.get("ok"):
+        counts = traffic.get("counts") or {}
+        listed = int(counts.get("returned", 0))
+        got = int(counts.get("received", listed))
+        unreadable = int(counts.get("unreadable", 0))
+        aircraft = _counted(
+            got - unreadable,
+            got,
+            listed=listed,
+            airborne=counts.get("airborne"),
+            on_ground=counts.get("on_ground"),
+            truncated=bool((traffic.get("bookkeeping") or {}).get("truncated")),
+        )
+    window = (movements.get("window") or {}).get("minutes") if movements.get("ok") else None
+    return {
+        **directions,
+        "movements_window_minutes": window,
+        # A box around the radius, not a circle: what OpenSky's /states/all accepts.
+        "aircraft_in_search_box": aircraft,
+        "search_radius_nm": max(5.0, min(200.0, radius_nm)),
+    }
+
+
+def _newest_metar(payload: dict[str, Any]) -> dict[str, Any] | None:
+    metars: list[dict[str, Any]] = (payload.get("metar") or []) if payload.get("ok") else []
+    if not metars:
+        return None
+    return max(metars, key=lambda metar: _epoch(metar.get("observation_time")) or 0.0)
+
+
+def _weather_values(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """The newest METAR as values: ceiling, visibility, wind, category. None when absent."""
+    newest = _newest_metar(payload)
+    if newest is None:
+        return None
+    latest = payload.get("latest_metar") or {}
+    return {
+        "station": newest.get("station_id"),
+        "observed_at": newest.get("observation_time"),
+        "age_s": latest.get("age_s"),
+        "current": bool(latest.get("current")),
+        "category": newest.get("flight_category"),
+        "ceiling": ceiling(newest),
+        "visibility": {
+            "statute_mi": newest.get("visibility_statute_mi"),
+            "at_least": bool(newest.get("visibility_at_least")),
+        },
+        "wind": {
+            "direction_deg": newest.get("wind_dir_deg"),
+            "variable": bool(newest.get("wind_variable")),
+            "speed_kt": newest.get("wind_speed_kt"),
+            "gust_kt": newest.get("wind_gust_kt"),
+        },
+        "significant_weather": newest.get("wx_string"),
+        "raw": newest.get("raw_text"),
+    }
+
+
+def _leg(
+    status: str,
+    source: str,
+    upstream: object,
+    data_time: float | None,
+    *,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """One leg's provenance and age. The age is the upstream's clock minus the data's time."""
+    upstream_epoch = _newest(upstream)
+    age = (
+        round(upstream_epoch - data_time)
+        if upstream_epoch is not None and data_time is not None
+        else None
+    )
+    return {
+        "status": status,
+        "source": source,
+        "upstream_time_epoch": upstream_epoch,
+        "data_time_epoch": None if data_time is None else int(data_time),
+        "age_s": age,
+        "error": error,
+    }
+
+
+def _failed_code(payload: dict[str, Any]) -> str:
+    return str((payload.get("error") or {}).get("code", "unknown"))
+
+
+def _weather_leg(payload: dict[str, Any]) -> dict[str, Any]:
+    source = "AviationWeather.gov (NOAA) /metar"
+    if not payload.get("ok"):
+        return _leg("unavailable", source, None, None, error=_failed_code(payload))
+    newest = _newest_metar(payload)
+    observed = _epoch(newest.get("observation_time")) if newest else None
+    current = bool((payload.get("latest_metar") or {}).get("current"))
+    status = "observed" if current else ("empty" if newest is None else "not_current")
+    return _leg(status, source, payload.get("upstream_time_epoch"), observed)
+
+
+def _traffic_leg(payload: dict[str, Any]) -> dict[str, Any]:
+    source = "OpenSky Network /states/all"
+    if not payload.get("ok"):
+        return _leg("unavailable", source, None, None, error=_failed_code(payload))
+    snapshot = _epoch(payload.get("snapshot_time_epoch"))
+    heard = int((payload.get("counts") or {}).get("returned", 0))
+    current = bool(payload.get("snapshot_current"))
+    status = "not_current" if not current and heard else ("observed" if heard else "empty")
+    return _leg(status, source, payload.get("upstream_time_epoch"), snapshot)
+
+
+def _movements_leg(payload: dict[str, Any], degraded: list[str]) -> dict[str, Any]:
+    source = "OpenSky Network /flights/arrival, /flights/departure"
+    if not payload.get("ok"):
+        return _leg("unavailable", source, None, None, error=_failed_code(payload))
+    rows = payload.get("movements") or {}
+    if not rows:
+        why = next((d.split(":", 1)[1] for d in degraded if d.startswith("movements:")), None)
+        return _leg("not_fetched", source, None, None, error=why or "credentials_missing")
+    last_seen = [
+        t for flights in rows.values() for f in flights if (t := _epoch(f.get("last_seen")))
+    ]
+    status = "observed" if last_seen or any(rows.values()) else "empty"
+    return _leg(
+        status, source, payload.get("upstream_time_epoch"), max(last_seen) if last_seen else None
+    )
+
+
+def _headroom(weather: dict[str, Any] | None, counts: dict[str, Any]) -> list[str]:
+    """Measured values that sit below a threshold: the evidence for not going higher."""
+    lines: list[str] = []
+    if weather is not None and weather["current"]:
+        category = weather["category"]
+        if category and category not in IFR_CATEGORIES:
+            lines.append(f"Flight category {category}, not IFR or LIFR.")
+        gust = weather["wind"]["gust_kt"]
+        speed = weather["wind"]["speed_kt"]
+        if isinstance(gust, int | float):
+            if gust < GUST_FLAG_KT:
+                lines.append(f"Gusts {gust:g} kt, below the {GUST_FLAG_KT} kt flag.")
+        elif isinstance(speed, int | float):
+            lines.append(f"Wind {speed:g} kt with no gusts reported.")
+        visibility = weather["visibility"]["statute_mi"]
+        if isinstance(visibility, int | float) and visibility >= VISIBILITY_FLAG_SM:
+            floor = " or more" if weather["visibility"]["at_least"] else ""
+            lines.append(
+                f"Visibility {visibility:g}{floor} sm, not below {VISIBILITY_FLAG_SM:g} sm."
+            )
+        if not weather["significant_weather"]:
+            lines.append("No significant weather group in the METAR.")
+    elif weather is not None:
+        lines.append("The newest METAR is not current, so it cannot rule weather out.")
+    aircraft = counts["aircraft_in_search_box"]
+    if aircraft is not None and aircraft["listed"] <= BUSY_AIRCRAFT:
+        lines.append(
+            f"{aircraft['listed']} aircraft in the search box, not more than {BUSY_AIRCRAFT}."
+        )
+    arrivals, departures = counts["arrivals"], counts["departures"]
+    if arrivals is not None and departures is not None:
+        total = arrivals["count"] + departures["count"]
+        window = counts["movements_window_minutes"]
+        if total:
+            lines.append(
+                f"{arrivals['count']} arrivals and {departures['count']} departures in the "
+                f"last {window} min: traffic is moving."
+            )
+        elif aircraft is not None and aircraft["listed"] == 0:
+            lines.append(
+                "No movements and no aircraft nearby: a quiet hour, not a stoppage with "
+                "aircraft waiting."
+            )
+    return lines
+
+
+def _why_not(
+    severity: str,
+    *,
+    reasons: list[str],
+    degraded: list[str],
+    silent: list[str],
+    weather: dict[str, Any] | None,
+    counts: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Why the severity is not one rung higher, and why it is not one rung lower.
+
+    Each line is a measured value or a missing leg, never an adjective, so a reader can
+    check it against the payload and decide whether to stand down or escalate.
+    """
+    headroom = _headroom(weather, counts)
+    missing = [entry.replace(":", " unavailable: ", 1) for entry in degraded]
+    if severity == "high":
+        return (
+            ["High is the top of this ladder."],
+            [f"{len(reasons)} distinct reasons; high needs {HIGH_REASONS}.", *reasons],
+        )
+    if severity == "elevated":
+        return (
+            [f"{len(reasons)} distinct reason(s); high needs {HIGH_REASONS}.", *headroom],
+            [f"Low needs no reason; this triage has {len(reasons)}.", *reasons],
+        )
+    if severity == "low":
+        return (
+            ["No reason to raise it was observed.", *headroom],
+            ["Low is the bottom of this ladder."],
+        )
+    higher = [f"{leg}." for leg in missing]
+    if reasons:
+        rung = "high" if len(reasons) >= HIGH_REASONS else "elevated"
+        higher.append(
+            f"The legs that answered give {len(reasons)} reason(s), which alone would be "
+            f"{rung}; unknown outranks it while a leg cannot be seen."
+        )
+    else:
+        higher.append("No reason to raise it was observed by the legs that answered.")
+    lower: list[str] = []
+    if len(silent) == len(EVIDENCE_LEGS):
+        lower.append("Low needs positive evidence from at least one leg; none had any.")
+    if degraded:
+        lower.append("Low needs every leg to answer; " + ", ".join(missing) + ".")
+    return higher, lower
 
 
 def log_opensky_mode(settings: Settings) -> None:

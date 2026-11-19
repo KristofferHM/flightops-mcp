@@ -363,6 +363,11 @@ def test_a_triage_in_full() -> None:
         "unknowns": ["radar"],
         "legs_without_evidence": ["traffic"],
         "movements": {"arrivals": "3", "departures": board.MOVEMENTS_NOT_AVAILABLE},
+        "counts": [],
+        "weather": [],
+        "legs": [],
+        "why_not_higher": [],
+        "why_not_lower": [],
     }
 
 
@@ -375,6 +380,11 @@ def test_a_triage_with_no_assessment_is_unknown(payload: dict[str, Any]) -> None
         "unknowns": [],
         "legs_without_evidence": [],
         "movements": {"arrivals": "not available", "departures": "not available"},
+        "counts": [],
+        "weather": [],
+        "legs": [],
+        "why_not_higher": [],
+        "why_not_lower": [],
     }
 
 
@@ -386,6 +396,11 @@ def test_a_failed_triage_in_full() -> None:
         "unknowns": ["Refused."],
         "legs_without_evidence": [],
         "movements": {"arrivals": "not available", "departures": "not available"},
+        "counts": [],
+        "weather": [],
+        "legs": [],
+        "why_not_higher": [],
+        "why_not_lower": [],
     }
 
 

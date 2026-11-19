@@ -163,7 +163,24 @@ async function walk(browser, viewport, servers, passcode) {
   await strip.click();
   await page.locator("#d-title", { hasText: icao }).waitFor();
   await page.locator("#d-traffic", { hasText: "1 heard" }).waitFor();
-  await inspect(page, viewport, "airport selected");
+  // Credentials are configured in this fixture, so the traffic layer starts on by itself.
+  await page.locator("#traffic-on:checked").waitFor({ state: "attached" });
+  await page.locator("#traffic-cost", { hasText: "This session" }).waitFor();
+  await inspect(page, viewport, "airport selected, traffic on");
+
+  await page.getByRole("button", { name: /Run triage/ }).click();
+  await page.locator("#t-higher li").first().waitFor();
+  await page.locator("#t-counts dd").first().waitFor();
+  await inspect(page, viewport, "triage");
+
+  await page.getByLabel("Search airports").fill("Landvetter");
+  await page.locator("#page-note", { hasText: "matching" }).waitFor();
+  await inspect(page, viewport, "search");
+
+  await page.getByRole("tab", { name: "Documentation" }).click();
+  await page.locator("#glossary").waitFor();
+  await inspect(page, viewport, "documentation");
+  await page.getByRole("tab", { name: "Board" }).click();
 
   await context.clearCookies();
   await open(page, servers.empty.base, passcode, viewport);
@@ -188,12 +205,16 @@ async function main() {
     empty: await startServer("empty", passcode),
     noTime: await startServer("no_time", passcode),
   };
-  const browser = await chromium.launch();
+  let browser = null;
   try {
+    // A11Y_CHANNEL=msedge uses an installed Edge instead of Playwright's own Chromium.
+    const channel = process.env.A11Y_CHANNEL;
+    browser = await chromium.launch(channel ? { channel } : {});
     console.log(`axe-core ${AXE_VERSION}, Chromium ${browser.version()}`);
     for (const viewport of VIEWPORTS) await walk(browser, viewport, servers, passcode);
   } finally {
-    await browser.close();
+    // A browser that never started must not leave the three servers running.
+    if (browser) await browser.close();
     servers.data.stop();
     servers.empty.stop();
     servers.noTime.stop();

@@ -9,7 +9,8 @@ The evaluation harness consumes this file, so its shape is a contract:
 * **Result classes, not results.** A step records which tool was called, with
   what, and how it ended (`ok`, an error code, how many unknowns). The payload
   itself is not kept: it carries the server's wall clock, and nothing in an
-  evaluation should depend on that.
+  evaluation should depend on that. A triage adds its severity and its counts
+  (`agent.loop.triage_shape`): numbers, no text and no time.
 * **Nothing secret, nobody who flies.** The body passes through the same
   redaction as the logs before it is hashed. An approval is recorded as who
   decided, when, and for which payload. The grant is never written.

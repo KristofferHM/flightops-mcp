@@ -114,6 +114,7 @@ property of the agent module worth guarding, that the grant is kept out of `repr
 | 5 ([44392875173](https://github.com/KristofferHM/flightops-mcp/actions/runs/44392875173)) | 2293 | 1938 | 355 | `dashboard/board.py` added: 969 mutants, 265 survivors, the other 90 unchanged |
 | 6 ([44395175602](https://github.com/KristofferHM/flightops-mcp/actions/runs/44395175602)) | 2293 | 2188 | 105 | after `tests/test_board_views.py` |
 | 7 ([44397823805](https://github.com/KristofferHM/flightops-mcp/actions/runs/44397823805)) | 2293 | 2193 | **100** | five more missing tests; the ceiling is 100 |
+| 8 ([44522301960](https://github.com/KristofferHM/flightops-mcp/actions/runs/44522301960)) | 2720 | 2609 | 111 | new board display code: 12 missing tests over the ceiling (docs/MUTATION-SURVIVORS.md) |
 
 ### What the self-test costs
 

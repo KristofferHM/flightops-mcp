@@ -9,25 +9,42 @@
 <body>
   <header class="topline">
     <h1>Airport board</h1>
+    <div class="tabs" role="tablist" aria-label="Views">
+      <button id="tab-board" class="tab" type="button" role="tab" aria-selected="true" aria-controls="view-board">Board</button>
+      <button id="tab-docs" class="tab" type="button" role="tab" aria-selected="false" aria-controls="view-docs" tabindex="-1">Documentation</button>
+    </div>
     <p id="banner" class="banner" data-mode="NO DATA" role="status">NO DATA</p>
     <form method="post" action="/logout"><button class="quiet" type="submit">Sign out</button></form>
   </header>
 
-  <main class="layout">
+  <main class="views">
+  <div id="view-board" class="layout" role="tabpanel" aria-labelledby="tab-board">
     <nav class="bay" aria-label="Airports">
-      <h2>Airports</h2>
-      <ul id="strips" class="strips"></ul>
+      <div class="bay-head">
+        <h2 id="list-title">Airports</h2>
+        <label class="search"><span class="visually-hidden">Search airports</span>
+          <input id="search" type="search" placeholder="Search code, name or city" autocomplete="off" maxlength="64">
+        </label>
+      </div>
+      <ul id="strips" class="strips" aria-labelledby="list-title"></ul>
+      <div class="pager">
+        <button id="page-prev" class="quiet" type="button">Previous</button>
+        <span id="page-note" class="note" role="status"></span>
+        <button id="page-next" class="quiet" type="button">Next</button>
+      </div>
     </nav>
 
     <section class="chart" aria-label="Map">
       <div class="chart-tools">
+        <label class="pick">Region <select id="region"></select></label>
         <fieldset class="segmented">
           <legend>Projection</legend>
           <label><input type="radio" name="projection" value="map" checked><span>Map</span></label>
           <label><input type="radio" name="projection" value="globe"><span>Globe</span></label>
         </fieldset>
-        <label class="check"><input id="traffic-on" type="checkbox"> Show traffic (4 credits per refresh)</label>
-        <label class="pick">Region <select id="region"></select></label>
+        <label class="check"><input id="traffic-on" type="checkbox"> Show traffic — 4 credits per refresh</label>
+        <span id="traffic-cost" class="note"></span>
+        <p id="coverage" class="note coverage"></p>
         <span id="traffic-note" class="note" role="status"></span>
       </div>
       <div class="stage">
@@ -35,7 +52,7 @@
           <p data-state="no_data"><span class="source">Weather</span> <span>no data yet</span></p>
         </div>
         <div class="canvas-wrap">
-          <canvas id="map" role="img" aria-label="Map of the listed airports. The airport list holds the same information as text."></canvas>
+          <canvas id="map" role="img" aria-label="Map of the region's airports. The airport list holds the same information as text."></canvas>
           <div id="tip" class="tip" hidden></div>
         </div>
       </div>
@@ -46,6 +63,11 @@
         <span class="key"><i class="mark lifr"></i>LIFR</span>
         <span class="key"><i class="mark unknown"></i>Unknown</span>
         <span class="legend-note">Markers show weather only, not airport status.</span>
+        <p class="legend-foot">
+          VFR ceiling over 3000 ft and visibility over 5 mi · MVFR 1000–3000 ft or 3–5 mi ·
+          IFR 500–1000 ft or 1–3 mi · LIFR below 500 ft or under 1 mi · Unknown: no report
+          heard, not good news. <a id="to-glossary" href="#glossary">Glossary</a>
+        </p>
       </div>
     </section>
 
@@ -66,6 +88,16 @@
           <h3>Triage: <span id="t-severity"></span></h3>
           <ul id="t-reasons"></ul>
           <p id="t-silent" class="sub"></p>
+          <h4>Why not higher</h4>
+          <ul id="t-higher" class="why"></ul>
+          <h4>Why not lower</h4>
+          <ul id="t-lower" class="why"></ul>
+          <h4>Counts</h4>
+          <dl id="t-counts" class="facts compact"></dl>
+          <h4>Weather, as values</h4>
+          <dl id="t-weather" class="facts compact"></dl>
+          <h4>Each source</h4>
+          <dl id="t-legs" class="facts compact"></dl>
         </section>
         <details id="d-gaps" hidden>
           <summary>What this cannot show</summary>
@@ -73,6 +105,52 @@
         </details>
       </div>
     </aside>
+  </div>
+
+  <div id="view-docs" class="docs" role="tabpanel" aria-labelledby="tab-docs" hidden>
+    <article>
+      <h2 class="docs-title">How to read this board</h2>
+      <p>
+        A colour describes <strong>the weather category at that airport, never the airport's
+        status</strong>. A red diamond is low cloud or poor visibility, not a closed airport, and
+        a green circle is not a promise that anything is running.
+      </p>
+
+      <h3 id="glossary" tabindex="-1">Glossary</h3>
+      <table class="glossary">
+        <caption class="visually-hidden">Terms and abbreviations on this board</caption>
+        <thead><tr><th scope="col">Term</th><th scope="col">Meaning</th><th scope="col">Limits</th><th scope="col">Marker</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">VFR</th><td>Visual Flight Rules</td><td>ceiling over 3000 ft and visibility over 5 mi</td><td><i class="mark vfr"></i> green circle</td></tr>
+          <tr><th scope="row">MVFR</th><td>Marginal VFR</td><td>ceiling 1000–3000 ft or visibility 3–5 mi</td><td><i class="mark mvfr"></i> blue square</td></tr>
+          <tr><th scope="row">IFR</th><td>Instrument Flight Rules</td><td>ceiling 500–1000 ft or visibility 1–3 mi</td><td><i class="mark ifr"></i> red diamond</td></tr>
+          <tr><th scope="row">LIFR</th><td>Low IFR</td><td>ceiling below 500 ft or visibility under 1 mi</td><td><i class="mark lifr"></i> pale violet triangle</td></tr>
+          <tr><th scope="row">Unknown</th><td colspan="2">No report heard, or one too old or unreadable. Not a fifth category, and not good news.</td><td><i class="mark unknown"></i> hollow dashed ring</td></tr>
+          <tr><th scope="row">ICAO / IATA</th><td colspan="3">A four-letter location code (ESGG) / a three-letter airport code (GOT)</td></tr>
+          <tr><th scope="row">METAR / TAF</th><td colspan="3">The current observation / the forecast</td></tr>
+          <tr><th scope="row">Ceiling</th><td colspan="3">The lowest broken or overcast cloud layer, or the vertical visibility</td></tr>
+          <tr><th scope="row">nm / sm / kt</th><td colspan="3">Nautical miles (1 nm = 1.852 km) / statute miles / knots</td></tr>
+          <tr><th scope="row">Credit</th><td colspan="3">OpenSky's unit of API cost. The strip at the bottom shows what is spent and what is left.</td></tr>
+          <tr><th scope="row">Severity</th><td colspan="3">A triage's advisory rung: low, elevated or high. Unknown means a source could not be seen, and outranks elevated. Low needs something observed.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Coverage</h3>
+      <p>
+        The airport list is worldwide: the 3,270 large and medium airports with scheduled service
+        in OurAirports. Live traffic is not. OpenSky's receivers are dense over Europe and North
+        America and sparse over Africa, South America and much of Asia, so an empty patch of sky
+        means no receiver heard anything there, not that no aircraft are flying.
+      </p>
+
+      <h3>What traffic costs</h3>
+      <p>
+        Each refresh of the traffic layer costs 4 OpenSky credits, for any region. The layer
+        refreshes no faster than its hourly ceiling allows, and stops with the reason on the map
+        when the ceiling is reached. A triage costs up to 9 credits.
+      </p>
+    </article>
+  </div>
   </main>
 
   <footer class="governance" aria-label="Usage and limits">

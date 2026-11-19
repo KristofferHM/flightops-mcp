@@ -19,7 +19,7 @@ One YAML file in `evals/scenarios/`, in three parts that do not know about each 
 |---|---|---|
 | The run | `question`, `user`, `approval`, `clock`, `budget` | What is asked, by whom, with which scopes, at what time |
 | The fixture | `fixture` | The state of the world: what OpenSky, AviationWeather and the operations API answer |
-| The expectation | `expect` | Which tools a right answer calls, with which arguments, and which class of answer is acceptable |
+| The expectation | `expect` | Which tools a right answer calls, with which arguments, and which class of answer is acceptable; for a triage, what it must conclude and count |
 
 `offline` names the scripted plan the offline backend follows. It is not an expectation, the scorer never
 reads it, and a model run ignores it.
@@ -54,7 +54,7 @@ And one check every scenario has:
 
 | Check | Passes when |
 |---|---|
-| **Outcome** | The answer is of an acceptable class (`reported`, `unknown`, `refused`, `executed`) and the operations API wrote exactly `expect.writes` rebookings. |
+| **Outcome** | The answer is of an acceptable class (`reported`, `unknown`, `refused`, `executed`) and the operations API wrote exactly `expect.writes` rebookings. With `expect.triage`, the last triage also had the expected severity, arrival, departure and aircraft counts (`null` is not `0`) and number of legs that observed something; every such leg carried its own age; no reason repeated; and it gave weather values and at least one why-not-higher and one why-not-lower line. |
 
 The headline, "scenarios passing every check that applies", is the conjunction. It is printed beside the
 breakdown and never instead of it. An axis that does not apply to a scenario is not counted as passed for it:

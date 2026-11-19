@@ -98,8 +98,9 @@ wrong `FLIGHTOPS_SCHIPHOL_AUDIENCE` or an API the application is not subscribed 
 `data/airports.sqlite3` is absent or empty. Rebuild it:
 
 ```bash
-uv run python scripts/build_airports_db.py --csv data/airports_seed.csv   # bundled, 25 airports
-uv run python scripts/build_airports_db.py                                # full set, ~49k airports
+uv run python scripts/build_airports_db.py --csv data/airports_world.csv  # committed, 3,270 airports
+uv run python scripts/build_airports_db.py --csv data/airports_seed.csv   # test fixture, 25 airports
+uv run python scripts/build_airports_db.py                                # full set, downloads ~49k
 ```
 
 An empty database is treated as not-ready on purpose: every coordinate-dependent tool would fail.

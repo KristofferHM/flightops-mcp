@@ -5,7 +5,11 @@
 
   const BOARD_POLL_MS = 30_000;
   const DETAIL_POLL_MS = 120_000;
+  // The fastest the traffic layer refreshes. The server may ask for slower (`cost.interval_s`).
   const TRAFFIC_POLL_MS = 120_000;
+  const LIST_PAGE = 25;
+  const SEARCH_DELAY_MS = 250;
+  const REGION_KEY = "airport-board.region";
   const MAX_ZOOM = 12;
   const HIT_RADIUS_PX = 14;
   // Past this many aircraft at a wide zoom, arrowheads merge into a solid shape.
@@ -54,22 +58,34 @@
     land: null, airports: [], selected: null, detail: null, airspace: [],
     // The time of the traffic layer on screen, and OpenSky's clock when it was sent,
     // as the server gave them. Null when no layer is drawn.
-    trafficSnapshot: null, trafficUpstream: null, boardRequest: 0,
+    trafficSnapshot: null, trafficUpstream: null, boardRequest: 0, listRequest: 0,
     projection: "map", lon: 10, lat: 20, panY: 0, zoom: 1,
     width: 0, height: 0, dirty: true,
+    region: remembered(), offset: 0, query: "",
+    // Whether the traffic checkbox was set by the server's default or by the person.
+    trafficChosen: false, trafficIntervalMs: TRAFFIC_POLL_MS, trafficStopped: false,
   };
   const timers = {};
   let projection = null;
+
+  // The chosen region is a per-browser convenience. Storage can be missing or refused.
+  function remembered() {
+    try { return localStorage.getItem(REGION_KEY) || "europe"; } catch { return "europe"; }
+  }
+  function remember(region) {
+    try { localStorage.setItem(REGION_KEY, region); } catch { /* the choice lasts this page */ }
+  }
 
   // --- polling -----------------------------------------------------------------
   function schedule(name, task, interval) {
     clearTimeout(timers[name]);
     if (document.hidden) return;
     const jitter = 0.85 + Math.random() * 0.3;
+    const wait = typeof interval === "function" ? interval() : interval;
     timers[name] = setTimeout(async () => {
       await task();
       schedule(name, task, interval);
-    }, interval * jitter);
+    }, wait * jitter);
   }
 
   async function api(path, options) {
@@ -86,18 +102,21 @@
     // Only the newest request may paint, or a slow answer could restore a removed layer.
     const request = ++state.boardRequest;
     // Both times go back exactly as the server gave them; the page does no date arithmetic.
+    const region = state.region;
     const query = known(state.trafficSnapshot)
-      ? `?traffic_snapshot=${state.trafficSnapshot}&traffic_upstream=${state.trafficUpstream || 0}`
+      ? `&traffic_snapshot=${state.trafficSnapshot}&traffic_upstream=${state.trafficUpstream || 0}`
       : "";
     try {
-      const board = await api(`/api/board${query}`);
-      if (request !== state.boardRequest) return;
+      const board = await api(`/api/board?region=${encodeURIComponent(region)}${query}`);
+      if (request !== state.boardRequest || region !== state.region) return;
       state.airports = board.airports;
       renderBanner(board.banner.mode, board.banner.label);
       renderLastUpdate(board.last_update);
       renderGovernance(board.governance);
-      renderRegions(board.regions);
-      renderStrips();
+      renderRegions(board.regions, board.region);
+      $("coverage").textContent = board.coverage;
+      renderTrafficControl(board.traffic);
+      refreshList();
       invalidate();
     } catch {
       if (request !== state.boardRequest) return;
@@ -121,14 +140,50 @@
     }
   }
 
+  // One page of the region's airports. The server filters, so the page never holds them all.
+  async function refreshList() {
+    const request = ++state.listRequest;
+    const params = new URLSearchParams({
+      region: state.region, q: state.query, offset: String(state.offset), limit: String(LIST_PAGE),
+    });
+    try {
+      const page = await api(`/api/airports?${params}`);
+      if (request !== state.listRequest) return;
+      state.offset = page.offset;
+      renderStrips(page.items);
+      const first = page.total ? page.offset + 1 : 0;
+      const last = page.offset + page.items.length;
+      $("page-note").textContent = page.query
+        ? `${first}–${last} of ${page.total} matching, ${page.region_total} in region`
+        : `${first}–${last} of ${page.total}`;
+      $("page-prev").disabled = page.offset === 0;
+      $("page-next").disabled = last >= page.total;
+    } catch {
+      if (request !== state.listRequest) return;
+      $("page-note").textContent = "The board server did not answer.";
+    }
+  }
+
   async function refreshTraffic() {
-    if (!$("traffic-on").checked) return;
+    if (!$("traffic-on").checked || state.trafficStopped) return;
     const note = $("traffic-note");
-    const region = $("region").value;
-    const superseded = () => !$("traffic-on").checked || region !== $("region").value;
+    const region = state.region;
+    const superseded = () => !$("traffic-on").checked || region !== state.region;
     try {
       const layer = await api(`/api/traffic/${encodeURIComponent(region)}`);
       if (superseded()) return;
+      if (layer.cost) {
+        renderTrafficCost(layer.cost);
+        state.trafficIntervalMs = Math.max(TRAFFIC_POLL_MS, layer.cost.interval_s * 1000);
+      }
+      if (layer.refused) {
+        // A guard said no. Stop asking; the badge and this note say why.
+        state.trafficStopped = true;
+        clearTimeout(timers.traffic);
+        note.textContent = layer.refused;
+        refreshBoard();
+        return;
+      }
       state.airspace = layer.aircraft;
       state.trafficSnapshot = layer.snapshot_epoch;
       state.trafficUpstream = layer.upstream_epoch;
@@ -152,7 +207,7 @@
   function startPolling() {
     schedule("board", refreshBoard, BOARD_POLL_MS);
     schedule("detail", refreshDetail, DETAIL_POLL_MS);
-    schedule("traffic", refreshTraffic, TRAFFIC_POLL_MS);
+    schedule("traffic", refreshTraffic, () => state.trafficIntervalMs);
   }
 
   document.addEventListener("visibilitychange", () => {
@@ -193,6 +248,8 @@
   const known = (value) => value !== null && value !== undefined;
   const ofBudget = (spent, budget) =>
     known(spent) && known(budget) ? `${spent} of ${budget}` : "Unknown";
+  // OurAirports' two kinds on this board, kept so a reader can tell a hub from a regional field.
+  const TYPE_NAMES = { large_airport: "Large", medium_airport: "Medium" };
   const MODE_NAMES = {
     client_credentials: "Client credentials", anonymous: "Anonymous", none: "None",
   };
@@ -207,13 +264,38 @@
     $("g-left").textContent = known(g.upstream_remaining) ? g.upstream_remaining : "Unknown";
   }
 
-  function renderRegions(regions) {
+  // Each choice says how many airports it will draw. Rebuilt only when that changes.
+  function renderRegions(regions, chosen) {
     const select = $("region");
-    if (select.options.length) return;
-    for (const region of regions) {
-      const option = new Option(region.replace("_", " "), region);
-      select.add(option);
+    const labels = regions.map((region) => `${region.label} (${region.airports})`);
+    const current = [...select.options].map((option) => option.textContent);
+    if (labels.join("|") !== current.join("|")) {
+      select.replaceChildren(...regions.map((region, index) => new Option(labels[index], region.id)));
     }
+    select.value = chosen;
+  }
+
+  function renderTrafficCost(cost) {
+    $("traffic-cost").textContent =
+      `This session: ${cost.session_total} credits · ${cost.hour_spent} of ${cost.hour_ceiling} `
+      + `this hour · refresh every ${Math.round(cost.interval_s / 60)} min`;
+  }
+
+  // On by default only with credentials. Without, it stays off and says why.
+  function renderTrafficControl(traffic) {
+    const box = $("traffic-on");
+    box.disabled = !traffic.available;
+    renderTrafficCost(traffic);
+    state.trafficIntervalMs = Math.max(TRAFFIC_POLL_MS, traffic.interval_s * 1000);
+    if (state.trafficChosen) return;
+    state.trafficChosen = true;
+    if (!traffic.on) {
+      $("traffic-note").textContent = traffic.reason;
+      return;
+    }
+    box.checked = true;
+    $("traffic-note").textContent = traffic.reason;
+    refreshTraffic();
   }
 
   function markClass(marker) {
@@ -221,11 +303,11 @@
       ? `mark ${marker.category.toLowerCase()}` : "mark unknown";
   }
 
-  function renderStrips() {
+  function renderStrips(items) {
     const list = $("strips");
     const focused = document.activeElement && document.activeElement.dataset
       ? document.activeElement.dataset.icao : null;
-    list.replaceChildren(...state.airports.map((airport) => {
+    list.replaceChildren(...items.map((airport) => {
       const item = document.createElement("li");
       const strip = document.createElement("button");
       strip.type = "button";
@@ -244,7 +326,7 @@
       name.textContent = airport.name;
       const weather = document.createElement("span");
       weather.className = "state";
-      weather.textContent = airport.weather.summary;
+      weather.textContent = `${TYPE_NAMES[airport.type] || "Airport"} · ${airport.weather.summary}`;
       strip.append(chip, code, name, weather);
       strip.addEventListener("click", () => select(airport.icao));
       item.append(strip);
@@ -261,6 +343,18 @@
       const item = document.createElement("li");
       item.textContent = text;
       return item;
+    }));
+  }
+
+  // Label and text pairs, as the server worded them.
+  function fillFacts(element, rows) {
+    element.replaceChildren(...rows.flatMap((row) => {
+      const term = document.createElement("dt");
+      term.textContent = row.label;
+      const value = document.createElement("dd");
+      value.textContent = row.text;
+      if (row.state) value.dataset.state = row.state;
+      return [term, value];
     }));
   }
 
@@ -293,7 +387,10 @@
       state.lon = airport.longitude;
       state.lat = airport.latitude;
     }
-    renderStrips();
+    document.querySelectorAll("#strips .strip").forEach((strip) => {
+      if (strip.dataset.icao === icao) strip.setAttribute("aria-current", "true");
+      else strip.removeAttribute("aria-current");
+    });
     invalidate();
     await refreshDetail();
     schedule("detail", refreshDetail, DETAIL_POLL_MS);
@@ -312,6 +409,11 @@
       fillList($("t-reasons"), [...result.reasons, ...result.unknowns]);
       $("t-silent").textContent = result.legs_without_evidence.length
         ? `Nothing observed from: ${result.legs_without_evidence.join(", ")}.` : "";
+      fillList($("t-higher"), result.why_not_higher);
+      fillList($("t-lower"), result.why_not_lower);
+      fillFacts($("t-counts"), result.counts);
+      fillFacts($("t-weather"), result.weather);
+      fillFacts($("t-legs"), result.legs);
       $("d-arrivals").textContent = result.movements.arrivals;
       $("d-departures").textContent = result.movements.departures;
       refreshBoard();
@@ -320,6 +422,8 @@
       $("t-severity").textContent = "Unknown";
       fillList($("t-reasons"), ["The board server did not answer."]);
       $("t-silent").textContent = "";
+      ["t-higher", "t-lower"].forEach((id) => fillList($(id), []));
+      ["t-counts", "t-weather", "t-legs"].forEach((id) => fillFacts($(id), []));
     } finally {
       button.disabled = false;
     }
@@ -441,7 +545,9 @@
     return [l / rad, q / rad];
   }
 
-  const selectedAirport = () => state.airports.find((item) => item.icao === state.selected);
+  // The selection outlives a change of region: the detail carries its own position.
+  const selectedAirport = () => state.airports.find((item) => item.icao === state.selected)
+    || (state.detail && state.detail.icao === state.selected ? state.detail : undefined);
 
   // Range rings are true great-circle distances from the selected airport.
   function drawRangeRings(path, airport) {
@@ -705,7 +811,13 @@
     });
   });
   $("traffic-on").addEventListener("change", () => {
-    if ($("traffic-on").checked) { refreshTraffic(); return; }
+    state.trafficChosen = true;
+    state.trafficStopped = false;
+    if ($("traffic-on").checked) {
+      refreshTraffic();
+      schedule("traffic", refreshTraffic, () => state.trafficIntervalMs);
+      return;
+    }
     state.airspace = [];
     state.trafficSnapshot = null;
     state.trafficUpstream = null;
@@ -713,7 +825,62 @@
     refreshBoard();
     invalidate();
   });
-  $("region").addEventListener("change", refreshTraffic);
+  $("region").addEventListener("change", () => {
+    state.region = $("region").value;
+    remember(state.region);
+    state.offset = 0;
+    state.airports = [];
+    state.airspace = [];
+    state.trafficSnapshot = null;
+    state.trafficStopped = false;
+    refreshBoard();
+    refreshTraffic();
+    invalidate();
+  });
+
+  let searchTimer = null;
+  $("search").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      state.query = $("search").value;
+      state.offset = 0;
+      refreshList();
+    }, SEARCH_DELAY_MS);
+  });
+  $("page-prev").addEventListener("click", () => {
+    state.offset = Math.max(0, state.offset - LIST_PAGE);
+    refreshList();
+  });
+  $("page-next").addEventListener("click", () => {
+    state.offset += LIST_PAGE;
+    refreshList();
+  });
+
+  // --- tabs --------------------------------------------------------------------
+  const TABS = [["tab-board", "view-board"], ["tab-docs", "view-docs"]];
+  function showTab(id, focus) {
+    for (const [tab, panel] of TABS) {
+      const chosen = tab === id;
+      $(tab).setAttribute("aria-selected", String(chosen));
+      $(tab).tabIndex = chosen ? 0 : -1;
+      $(panel).hidden = !chosen;
+    }
+    if (focus) $(id).focus();
+    if (id === "tab-board") resize();
+  }
+  TABS.forEach(([tab], index) => {
+    $(tab).addEventListener("click", () => showTab(tab, false));
+    $(tab).addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+      const step = event.key === "ArrowRight" ? 1 : TABS.length - 1;
+      showTab(TABS[(index + step) % TABS.length][0], true);
+    });
+  });
+  $("to-glossary").addEventListener("click", (event) => {
+    event.preventDefault();
+    showTab("tab-docs", false);
+    $("glossary").focus();
+  });
 
   // --- start -------------------------------------------------------------------
   new ResizeObserver(resize).observe(canvas.parentElement);

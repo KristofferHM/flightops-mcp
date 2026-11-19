@@ -27,18 +27,18 @@ harness from `evals/baseline.json`; nobody edits it.
 <!-- evals:begin -->
 <!-- Written by the harness from evals/baseline.json. Do not edit: CI fails if this block and the baseline disagree. -->
 
-**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-18; **Scenarios:** 61
+**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-19; **Scenarios:** 65
 
 | Axis | Passed | Applies to | Score |
 |---|---:|---:|---:|
-| Tool selection | 61 | 61 | 100.00 % |
-| Argument validity | 57 | 57 | 100.00 % |
+| Tool selection | 65 | 65 | 100.00 % |
+| Argument validity | 61 | 61 | 100.00 % |
 | Refusal correctness | 22 | 22 | 100.00 % |
-| No hallucination | 22 | 22 | 100.00 % |
-| Outcome (answer class, writes) | 61 | 61 | 100.00 % |
-| **Scenarios passing every check that applies** | 61 | 61 | 100.00 % |
+| No hallucination | 24 | 24 | 100.00 % |
+| Outcome (answer class, writes) | 65 | 65 | 100.00 % |
+| **Scenarios passing every check that applies** | 65 | 65 | 100.00 % |
 
-Absent-evidence group (answering confidently when the evidence is not there): **22 scenarios** over 9 kinds: `empty_result` 4, `malformed_payload` 3, `partial_coverage` 2, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 3, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
+Absent-evidence group (answering confidently when the evidence is not there): **24 scenarios** over 9 kinds: `empty_result` 5, `malformed_payload` 3, `partial_coverage` 3, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 3, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
 
 No scenario fails in this run.
 
@@ -145,6 +145,7 @@ Five upstreams, four auth models. The tools do not care which; the governance la
 |---|---|---|---|---|
 | `resolve_airport` | `reference.read` | OurAirports, bundled | free, offline | public, 1 h |
 | `airport_weather` | `weather.read` | AviationWeather.gov | free | public, 60 s |
+| `weather_overview` | `weather.read` | AviationWeather.gov, up to 100 airports per request | free | public, 60 s |
 | `airport_live_traffic` | `traffic.read` | OpenSky `/states/all` | 1–4 credits | public, 10 s |
 | `airport_movements` | `traffic.read` | OpenSky `/flights/*` | 4 credits per direction | public, 60 s |
 | `airspace_snapshot` | `traffic.read` | OpenSky `/states/all`, fixed regions | 4 credits | public, 60 s |
@@ -167,7 +168,7 @@ answered, because they report an action and a record rather than an observation 
 
 ```bash
 uv sync
-uv run python scripts/build_airports_db.py --csv data/airports_seed.csv
+uv run python scripts/build_airports_db.py --csv data/airports_world.csv
 uv run flightops-mcp                                    # stdio, for Claude Desktop or mcp dev
 ```
 

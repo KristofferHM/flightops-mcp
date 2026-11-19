@@ -31,6 +31,7 @@ Tool = Callable[..., Awaitable[Payload]]
 # Read tools only, named one by one. The board has no route to a passenger or a write.
 LIVE_TOOLS: Final[Mapping[str, Tool]] = {
     "airport_weather": srv.airport_weather,
+    "weather_overview": srv.weather_overview,
     "airport_live_traffic": srv.airport_live_traffic,
     "airspace_snapshot": srv.airspace_snapshot,
     "disruption_triage": srv.disruption_triage,

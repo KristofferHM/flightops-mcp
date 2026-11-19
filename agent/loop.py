@@ -154,11 +154,59 @@ def classify(payload: dict[str, Any]) -> dict[str, Any]:
     code = error.get("code") if isinstance(error, dict) else None
     idempotency = payload.get("idempotency")
     replayed = idempotency.get("replayed") if isinstance(idempotency, dict) else None
-    return {
+    result: dict[str, Any] = {
         "class": "ok" if ok else "error",
         "code": None if ok else (code if isinstance(code, str) and code else "unspecified"),
         "unknowns": _unknowns(payload),
         "replayed": replayed if isinstance(replayed, bool) else None,
+    }
+    shape = triage_shape(payload)
+    if shape is not None:
+        result["triage"] = shape
+    return result
+
+
+def _count(entry: Any) -> int | None:
+    count = entry.get("count") if isinstance(entry, dict) else None
+    return count if isinstance(count, int) and not isinstance(count, bool) else None
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _length(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def triage_shape(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """What a triage concluded and counted, as a severity and numbers. None for other tools.
+
+    Still a class and not a result: no text, no timestamps, nothing the server's wall
+    clock decides. It is what lets a scenario check the counts and the why-not lines.
+    """
+    assessment = payload.get("assessment")
+    if not isinstance(assessment, dict):
+        return None
+    counts = _mapping(payload.get("counts"))
+    legs = _mapping(payload.get("legs"))
+    listed = assessment.get("reasons")
+    reasons: list[Any] = listed if isinstance(listed, list) else []
+    observed = [
+        leg for leg in legs.values() if isinstance(leg, dict) and leg.get("status") == "observed"
+    ]
+    return {
+        "severity": assessment.get("severity"),
+        "reasons": len(reasons),
+        "distinct_reasons": len({str(reason) for reason in reasons}),
+        "arrivals": _count(counts.get("arrivals")),
+        "departures": _count(counts.get("departures")),
+        "aircraft": _count(counts.get("aircraft_in_search_box")),
+        "legs_with_data": len(observed),
+        "legs_dated": sum(1 for leg in observed if leg.get("age_s") is not None),
+        "weather_values": isinstance(payload.get("weather"), dict),
+        "why_not_higher": _length(assessment.get("why_not_higher")),
+        "why_not_lower": _length(assessment.get("why_not_lower")),
     }
 
 

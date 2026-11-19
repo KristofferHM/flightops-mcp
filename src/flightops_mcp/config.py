@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     # A rolling 24 h ceiling on what the board and `airspace_snapshot` may spend,
     # on top of the hourly guard above.
     dashboard_daily_credit_budget: int = 1000
+    # The traffic layer's own hourly ceiling. At 4 credits a refresh, 60 is one refresh
+    # every 4 minutes; auto-refresh stops, with the reason on screen, when it is reached.
+    dashboard_traffic_credits_per_hour: int = Field(default=60, ge=0)
     # Where recordings go. Unset means ~/.flightops/recordings; never inside the repo.
     dashboard_recordings_dir: Path | None = None
 

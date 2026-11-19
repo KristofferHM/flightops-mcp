@@ -308,3 +308,45 @@ def test_a_payload_is_reduced_to_how_it_ended(
     result = classify(payload)
 
     assert (result["class"], result["code"], result["unknowns"], result["replayed"]) == expected
+
+
+def test_a_triage_result_carries_its_severity_and_counts_and_nothing_else() -> None:
+    from agent.loop import classify
+
+    payload = {
+        "ok": True,
+        "assessment": {
+            "severity": "elevated",
+            "reasons": ["IFR", "IFR"],
+            "why_not_higher": ["a", "b"],
+            "why_not_lower": ["c"],
+            "unknowns": ["gap"],
+        },
+        "counts": {
+            "arrivals": {"count": 2},
+            "departures": None,
+            "aircraft_in_search_box": {"count": True},
+        },
+        "weather": {"category": "IFR"},
+        "legs": {
+            "weather": {"status": "observed", "age_s": 60},
+            "traffic": {"status": "observed", "age_s": None},
+            "movements": {"status": "unavailable"},
+            "odd": "not a leg",
+        },
+    }
+
+    assert classify(payload)["triage"] == {
+        "severity": "elevated",
+        "reasons": 2,
+        "distinct_reasons": 1,
+        "arrivals": 2,
+        "departures": None,
+        "aircraft": None,
+        "legs_with_data": 2,
+        "legs_dated": 1,
+        "weather_values": True,
+        "why_not_higher": 2,
+        "why_not_lower": 1,
+    }
+    assert "triage" not in classify({"ok": True, "unknowns": []})

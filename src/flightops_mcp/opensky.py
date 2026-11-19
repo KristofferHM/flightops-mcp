@@ -246,9 +246,15 @@ class Movement:
 
 # Fixed, so a caller cannot ask for an antimeridian box or a surprise cost. Every one is
 # over 400 square degrees, which is OpenSky's top tier: 4 credits, however wide.
+# A box cannot cross the antimeridian, so Oceania stops at 180 E: Hawaii, Samoa and
+# French Polynesia are listed on the board but are outside its traffic box.
 AIRSPACE_REGIONS: Final[dict[str, BBox]] = {
     "europe": BBox(lamin=34.0, lomin=-25.0, lamax=72.0, lomax=45.0),
     "north_america": BBox(lamin=15.0, lomin=-170.0, lamax=72.0, lomax=-50.0),
+    "south_america": BBox(lamin=-57.0, lomin=-93.0, lamax=15.0, lomax=-32.0),
+    "africa": BBox(lamin=-36.0, lomin=-26.0, lamax=38.0, lomax=64.0),
+    "asia": BBox(lamin=-11.0, lomin=25.0, lamax=82.0, lomax=180.0),
+    "oceania": BBox(lamin=-48.0, lomin=110.0, lamax=29.0, lomax=180.0),
     "world": BBox(lamin=-90.0, lomin=-180.0, lamax=90.0, lomax=180.0),
 }
 

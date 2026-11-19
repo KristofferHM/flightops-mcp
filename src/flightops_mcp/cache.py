@@ -75,6 +75,8 @@ TOOL_CACHE_HINTS: Final[Mapping[str, CacheHint]] = {
     "resolve_airport": CacheHint(ttl_ms=3_600_000, scope="public"),
     # METARs are issued at most every 30 minutes. A minute old is still current.
     "airport_weather": CacheHint(ttl_ms=60_000, scope="public"),
+    # The same METARs, a hundred airports at a time. The board polls it every 30 s.
+    "weather_overview": CacheHint(ttl_ms=60_000, scope="public"),
     # OpenSky's authenticated resolution is 5 s. Ten seconds is two buckets, and is
     # what keeps fifty agents asking about one airport at one credit, not fifty.
     "airport_live_traffic": CacheHint(ttl_ms=10_000, scope="public"),

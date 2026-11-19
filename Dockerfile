@@ -38,7 +38,7 @@ RUN groupadd --system --gid 1001 flightops \
 WORKDIR /app
 COPY --from=builder --chown=flightops:flightops /app/.venv /app/.venv
 COPY --from=builder --chown=flightops:flightops /app/src /app/src
-COPY --chown=flightops:flightops data/airports_seed.csv /app/data/airports_seed.csv
+COPY --chown=flightops:flightops data/airports_world.csv /app/data/airports_world.csv
 COPY --chown=flightops:flightops scripts/build_airports_db.py /app/scripts/build_airports_db.py
 
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -47,8 +47,8 @@ ENV PATH="/app/.venv/bin:$PATH" \
     FLIGHTOPS_LOG_LEVEL=INFO
 
 # Bake the airport reference database at build time so the image starts with no
-# network dependency. Swap in the full OurAirports CSV by changing --csv here.
-RUN python scripts/build_airports_db.py --csv data/airports_seed.csv --db "$FLIGHTOPS_AIRPORTS_DB" \
+# network dependency: the committed world set, 3,270 scheduled large and medium airports.
+RUN python scripts/build_airports_db.py --csv data/airports_world.csv --db "$FLIGHTOPS_AIRPORTS_DB" \
     && chown -R flightops:flightops /app/data
 
 USER flightops
