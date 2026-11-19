@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import hashlib
 import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -27,6 +28,7 @@ from typing import Any, Final, TypedDict
 import httpx
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.tools import Tool
 from mcp.server.request_state import RequestStateSecurity
 from mcp.types import (
     ClientCapabilities,
@@ -41,7 +43,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from . import __version__
+from . import __version__, progress
+from .airports import REGION_CONTINENTS, USEFUL_TYPES
+from .annotations import annotations_for
 from .auth import (
     AccessToken,
     AuthConfigError,
@@ -83,7 +87,9 @@ from .otel import configure_tracing, tracer, tracing_kind
 from .rebooking import Proposal, approved_digest, build_proposal
 from .resilience import breakers, configure_breakers
 from .runtime import Runtime, get_runtime
+from .schemas import output_schema_for
 from .schiphol import DIRECTIONS as SCHIPHOL_DIRECTIONS
+from .surface import install_reference_surface
 from .telemetry import REGISTRY as METRICS_REGISTRY
 from .telemetry import TOOL_CALLS, configure_logging, get_logger
 from .weather import (
@@ -93,6 +99,12 @@ from .weather import (
     ceiling,
     fleet_impact_flags,
 )
+
+# `search_airports` page sizes. The default keeps one page small enough to read; the
+# maximum keeps 3,270 airports from arriving in one reply.
+SEARCH_DEFAULT_LIMIT: Final = 20
+SEARCH_MAX_LIMIT: Final = 100
+CURSOR_VERSION: Final = 1
 
 # METARs are issued at least hourly, half-hourly at most European airports. One
 # more than 90 minutes old means at least one routine report is missing, and the
@@ -136,7 +148,9 @@ traffic around it.
 Rules that the tools will enforce:
 
 1. Resolve identifiers first. `resolve_airport` is offline and free; it returns \
-ICAO (ident), IATA, name and coordinates. Never guess a coordinate.
+ICAO (ident), IATA, name and coordinates. Never guess a coordinate. To list or \
+browse airports, use `search_airports`, which pages: follow `nextCursor` until \
+it is absent, and do not assume one page is the whole list.
 2. `airport_live_traffic`, `airport_movements`, `airspace_snapshot` and \
 `disruption_triage` spend OpenSky API credits. Prefer one `disruption_triage` call \
 over three separate ones.
@@ -240,12 +254,14 @@ def tool(fn: Any) -> Any:
 
     Registration fails for a tool with no entry in the scope table, so a new tool
     cannot ship unprotected by omission, and likewise for the cache hint table, so
-    a new tool is never cached (or left uncached) by default.
+    a new tool is never cached (or left uncached) by default, and for the
+    annotation table, so a host is never left to guess whether a tool writes.
 
     The cache sits inside `guarded` and, on the HTTP server, inside `scoped`: the
     scope is checked before the cache is consulted, every time.
     """
     Scopes.for_tool(fn.__name__)
+    annotations_for(fn.__name__)
     wrapped: ToolFn = guarded(cached(fn, cache=lambda: get_runtime().cache))
     _TOOLS.append(wrapped)
     return wrapped
@@ -408,6 +424,127 @@ async def resolve_airport(query: str, limit: int = 5) -> dict[str, Any]:
 
 
 @tool
+async def search_airports(
+    query: str = "",
+    region: str | None = None,
+    limit: int = SEARCH_DEFAULT_LIMIT,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """List airports in the bundled reference data, one page at a time, in ICAO order.
+
+    Offline and free, like `resolve_airport`. Use this to browse or enumerate (every
+    airport in a region, every match for a name); use `resolve_airport` to turn one
+    code or name into one airport. A reply holds at most `limit` airports. When more
+    match, it carries `nextCursor`: call again with the same query and region and
+    that cursor for the next page. No `nextCursor` means the list is complete.
+
+    Args:
+        query: Matches an ICAO prefix (ES), an exact IATA code (GOT), or part of an
+            airport or city name. Empty lists everything.
+        region: "europe", "north_america", "south_america", "africa", "asia" or
+            "oceania". Omit for the whole world.
+        limit: Airports per page (1-100, default 20).
+        cursor: The `nextCursor` of the previous page; omit for the first page.
+    """
+    runtime = get_runtime()
+    if not runtime.airports.exists:
+        raise reference_data_missing(str(runtime.airports.path))
+    wanted = (region or "").lower().strip() or None
+    if wanted is not None and wanted not in REGION_CONTINENTS:
+        raise ToolFailure(
+            code="invalid_argument",
+            message=f"region must be one of: {', '.join(REGION_CONTINENTS)}",
+            hint="Omit region to search the whole world.",
+        )
+    if wanted is not None and not runtime.airports.has_continents():
+        raise ToolFailure(
+            code="reference_data_outdated",
+            message="The airport reference was built without continents, so it cannot be "
+            "filtered by region.",
+            hint="Search without a region, or rebuild the reference data.",
+        )
+    needle = query.strip()
+    after = _cursor_position(cursor, needle, wanted)
+    size = max(1, min(SEARCH_MAX_LIMIT, limit))
+    # One row more than the page: whether it exists is whether there is a next page.
+    rows, matching = runtime.airports.page(
+        needle,
+        continent=REGION_CONTINENTS[wanted] if wanted else None,
+        after=after,
+        limit=size + 1,
+    )
+    page, more = rows[:size], len(rows) > size
+    payload: dict[str, Any] = {
+        "ok": True,
+        "query": needle,
+        "region": wanted,
+        "airports": [
+            {
+                "icao": row["ident"],
+                "iata": row["iata"],
+                "name": row["name"],
+                "type": row["type"],
+                "municipality": row["municipality"],
+                "country": row["iso_country"],
+            }
+            for row in page
+        ],
+        "counts": {"returned": len(page), "matching": matching},
+        "unknowns": []
+        if matching
+        else [
+            "No airport in the reference data matches. The bundled snapshot holds "
+            f"{', '.join(sorted(USEFUL_TYPES))} only, so an airport missing from it may "
+            "still exist."
+        ],
+        "source": {
+            "name": "OurAirports",
+            "licence": "Public domain",
+            "kind": "bundled CSV snapshot",
+        },
+    }
+    if more:
+        # The protocol's own word for it, so a host that pages `tools/list` reads it at sight.
+        payload["nextCursor"] = _encode_cursor(page[-1]["ident"], needle, wanted)
+    return payload
+
+
+def _encode_cursor(after: str, query: str, region: str | None) -> str:
+    """An opaque position: the last ident served, bound to the query it was served for.
+
+    `1:ESGG:<digest>`. Plain text on purpose: base64 of a JSON object starts with
+    `eyJ`, which is how a JWT starts, and a cursor must not look like a credential to
+    the redaction pipeline or to anyone reading a transcript.
+
+    Not signed. It points into public reference data, so a forged cursor can only
+    skip ahead in a list the caller could read anyway; the digest of the query and
+    region stops an honest mistake, not an attack.
+    """
+    return f"{CURSOR_VERSION}:{after}:{_query_digest(query, region)}"
+
+
+def _query_digest(query: str, region: str | None) -> str:
+    canonical = json.dumps([query, region], separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()[:16]
+
+
+def _cursor_position(cursor: str | None, query: str, region: str | None) -> str | None:
+    """The ident a cursor resumes after, or None for the first page."""
+    if cursor is None or not cursor.strip():
+        return None
+    version, _, rest = cursor.strip().partition(":")
+    after, _, digest = rest.rpartition(":")
+    if version != str(CURSOR_VERSION) or not after or digest != _query_digest(query, region):
+        raise ToolFailure(
+            code="invalid_cursor",
+            message="cursor is not a nextCursor this tool issued for this query and region.",
+            hint="Pass the nextCursor from the previous page unchanged, with the same query "
+            "and region; or omit cursor to start again from the first page.",
+        )
+    return after
+
+
+@tool
 async def airport_live_traffic(
     airport: str,
     radius_nm: float = 40.0,
@@ -482,7 +619,9 @@ async def airport_live_traffic(
 
 
 @tool
-async def airspace_snapshot(region: str, max_aircraft: int = 500) -> dict[str, Any]:
+async def airspace_snapshot(
+    region: str, max_aircraft: int = 500, ctx: Context[Any, Any] | None = None
+) -> dict[str, Any]:
     """Return aircraft across a whole region, as compact columns, for an overview.
 
     Costs 4 OpenSky credits per uncached call, for every region: each one is in
@@ -504,10 +643,14 @@ async def airspace_snapshot(region: str, max_aircraft: int = 500) -> dict[str, A
             message=f"region must be one of: {', '.join(AIRSPACE_REGIONS)}",
             hint="Regions are fixed. For the area around one airport use airport_live_traffic.",
         )
-    with daily_metered():
-        snapshot = await runtime.opensky.states_in_bbox(
-            bbox, max_vectors=max(1, min(AIRSPACE_MAX_AIRCRAFT, max_aircraft))
-        )
+    # One upstream request, so one notification: a wide box is slow because OpenSky
+    # is, and saying so once is all the progress there honestly is.
+    async with progress.tracked(ctx, total=1):
+        with daily_metered():
+            snapshot = await runtime.opensky.states_in_bbox(
+                bbox, max_vectors=max(1, min(AIRSPACE_MAX_AIRCRAFT, max_aircraft))
+            )
+        await progress.upstream_call(f"OpenSky answered for {wanted}.")
 
     placed = [v for v in snapshot.vectors if v.latitude is not None and v.longitude is not None]
     unknowns, current = _snapshot_unknowns(snapshot, "this region")
@@ -566,6 +709,7 @@ async def airport_movements(
     airport: str,
     direction: str = "both",
     window_minutes: int = 60,
+    ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """List estimated arrivals and/or departures for an airport.
 
@@ -601,22 +745,28 @@ async def airport_movements(
     missing: list[str] = []
     unknowns: list[str] = []
     upstream_time: int | None = None
-    for which in directions:
-        try:
-            page = await runtime.opensky.movements(record["ident"], which, begin=begin, end=end)
-        except ToolFailure as exc:
-            if exc.code == "credentials_missing":
-                missing.append(which)
-                continue
-            raise
-        results[which] = [movement.to_payload() for movement in page.movements]
-        received[which] = page.received
-        upstream_time = _newest(upstream_time, page.upstream_time)
-        if page.unreadable:
-            unknowns.append(
-                f"{page.unreadable} of {page.received} {which} rows in OpenSky's answer were "
-                "not readable flights. The count covers only the readable ones."
+    async with progress.tracked(ctx, total=len(directions)):
+        for which in directions:
+            try:
+                page = await runtime.opensky.movements(record["ident"], which, begin=begin, end=end)
+            except ToolFailure as exc:
+                if exc.code == "credentials_missing":
+                    # Refused before any request was sent: not work, so not progress.
+                    progress.expect(-1)
+                    missing.append(which)
+                    continue
+                raise
+            await progress.upstream_call(
+                f"OpenSky answered for {which}s at {record['ident']}: {page.received} row(s)."
             )
+            results[which] = [movement.to_payload() for movement in page.movements]
+            received[which] = page.received
+            upstream_time = _newest(upstream_time, page.upstream_time)
+            if page.unreadable:
+                unknowns.append(
+                    f"{page.unreadable} of {page.received} {which} rows in OpenSky's answer "
+                    "were not readable flights. The count covers only the readable ones."
+                )
 
     for which in missing:
         unknowns.append(f"{which} data unavailable: OpenSky credentials are not configured.")
@@ -686,7 +836,9 @@ async def airport_weather(airport: str) -> dict[str, Any]:
 
 
 @tool
-async def weather_overview(airports: list[str]) -> dict[str, Any]:
+async def weather_overview(
+    airports: list[str], ctx: Context[Any, Any] | None = None
+) -> dict[str, Any]:
     """Return the latest METAR for many airports at once, for an overview or a map.
 
     Needs no credentials and spends no OpenSky credits. NOAA is asked 50 airports per
@@ -709,7 +861,10 @@ async def weather_overview(airports: list[str]) -> dict[str, Any]:
         )
     listed = [code for code in wanted if runtime.airports.get(code) is not None]
     not_listed = [code for code in wanted if code not in listed]
-    batch = await runtime.weather.metar_batch(listed)
+    # The client plans its requests (one per chunk, two more per halved chunk) and
+    # reports each one it makes.
+    async with progress.tracked(ctx):
+        batch = await runtime.weather.metar_batch(listed)
 
     entries: dict[str, Any] = {}
     for code in listed:
@@ -1758,6 +1913,13 @@ def create_server(
     `_meta` becomes the parent span.
     """
     authenticated = auth is not None
+    # Sorted by name, not registration order. A host puts the tool list near the top
+    # of a model's prompt, and a prompt cache only hits on an identical prefix: an
+    # order that followed import order would change when a module was reorganised.
+    tools = [
+        _published(fn, authenticated=authenticated)
+        for fn in sorted(_TOOLS, key=lambda tool_fn: tool_fn.__name__)
+    ]
     # No tracing middleware is registered here on purpose: `MCPServer` already
     # installs its own `OpenTelemetryMiddleware` as the outermost built-in
     # (`mcp/server/mcpserver/server.py`: "User middleware runs inside the SDK's
@@ -1771,13 +1933,29 @@ def create_server(
         token_verifier=token_verifier,
         request_state_security=request_state_security,
         cache_hints=LIST_CACHE_HINTS,
+        tools=tools,
     )
-    # Sorted by name, not registration order. A host puts the tool list near the top
-    # of a model's prompt, and a prompt cache only hits on an identical prefix: an
-    # order that followed import order would change when a module was reorganised.
-    for fn in sorted(_TOOLS, key=lambda tool_fn: tool_fn.__name__):
-        server.add_tool(scoped(fn) if authenticated else fn)
+    install_reference_surface(server, authenticated=authenticated)
     return server
+
+
+def _published(fn: ToolFn, *, authenticated: bool) -> Tool:
+    """One tool as the protocol shows it: annotated, and with its real output schema.
+
+    The SDK derives `{"type": "object", "additionalProperties": true}` from a
+    `dict[str, Any]` return, which tells a client nothing. Where `schemas.py` has
+    the real shape, it replaces the published schema. The SDK still validates
+    against the derived model (any object), and the real schema is held to the
+    payloads by tests, so a schema mistake cannot turn a good answer into an error.
+    """
+    name: str = fn.__name__
+    published = Tool.from_function(
+        scoped(fn) if authenticated else fn, annotations=annotations_for(name)
+    )
+    schema = output_schema_for(name)
+    if schema is not None:
+        published.fn_metadata.output_schema = schema
+    return published
 
 
 def readiness_checks(runtime: Runtime | None = None) -> dict[str, dict[str, Any]]:

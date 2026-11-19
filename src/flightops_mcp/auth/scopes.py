@@ -41,6 +41,7 @@ class Scopes:
     # the same upstream, the same credits and the same sensitivity.
     _BY_TOOL: Final[Mapping[str, frozenset[str]]] = {
         "resolve_airport": frozenset({REFERENCE_READ}),
+        "search_airports": frozenset({REFERENCE_READ}),
         "airport_weather": frozenset({WEATHER_READ}),
         "weather_overview": frozenset({WEATHER_READ}),
         "airport_live_traffic": frozenset({TRAFFIC_READ}),

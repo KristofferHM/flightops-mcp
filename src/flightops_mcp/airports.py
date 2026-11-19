@@ -75,6 +75,16 @@ CONTINENTS: Final[Mapping[str, str]] = {
     "AS": "Asia",
     "OC": "Oceania",
 }
+# The region words `search_airports` accepts: the same words as `airspace_snapshot`'s
+# regions, so a model that has learnt one vocabulary is not taught a second.
+REGION_CONTINENTS: Final[Mapping[str, str]] = {
+    "europe": "EU",
+    "north_america": "NA",
+    "south_america": "SA",
+    "africa": "AF",
+    "asia": "AS",
+    "oceania": "OC",
+}
 
 
 def _without_comment_header(lines: Iterable[str]) -> Iterator[str]:
@@ -265,6 +275,68 @@ class AirportDB:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def page(
+        self,
+        query: str = "",
+        *,
+        continent: str | None = None,
+        after: str | None = None,
+        limit: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """One page of airports matching `query`, in ident order, and how many match in all.
+
+        Keyset paging on the primary key: a page is "the next `limit` idents after
+        `after`", so a cursor stays meaningful even if a page is fetched twice, and
+        a full walk sees each airport once. An offset would repeat or skip rows if
+        the order were ever not total; ident is unique, so this order is.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        needle = query.strip()
+        if needle:
+            like = _escape_like(needle)
+            clauses.append(
+                "(ident LIKE ? ESCAPE '\\' OR iata = ? OR name LIKE ? ESCAPE '\\' "
+                "OR municipality LIKE ? ESCAPE '\\')"
+            )
+            params.extend([f"{like}%", needle.upper(), f"%{like}%", f"%{like}%"])
+        if continent is not None:
+            clauses.append("continent = ?")
+            params.append(continent)
+        where = _where(clauses)
+        page_where, page_params = where, params
+        if after is not None:
+            page_where, page_params = _where([*clauses, "ident > ?"]), [*params, after]
+        # Only fixed clause text is interpolated; every value is a "?" parameter.
+        with closing(self._connect()) as connection:
+            (total,) = connection.execute(
+                f"SELECT count(*) FROM airports {where}",  # noqa: S608
+                params,
+            ).fetchone()
+            rows = connection.execute(
+                f"SELECT * FROM airports {page_where} ORDER BY ident LIMIT ?",  # noqa: S608
+                [*page_params, limit],
+            ).fetchall()
+        return [dict(row) for row in rows], int(total)
+
+    def idents_with_prefix(self, prefix: str, *, limit: int) -> tuple[list[str], int]:
+        """ICAO idents starting with `prefix`, in order, capped at `limit`; and the full count."""
+        pattern = f"{_escape_like(prefix.strip().upper())}%"
+        with closing(self._connect()) as connection:
+            (total,) = connection.execute(
+                "SELECT count(*) FROM airports WHERE ident LIKE ? ESCAPE '\\'", (pattern,)
+            ).fetchone()
+            rows = connection.execute(
+                "SELECT ident FROM airports WHERE ident LIKE ? ESCAPE '\\' ORDER BY ident LIMIT ?",
+                (pattern, limit),
+            ).fetchall()
+        return [str(row["ident"]) for row in rows], int(total)
+
+    def count(self) -> int:
+        with closing(self._connect()) as connection:
+            (total,) = connection.execute("SELECT count(*) FROM airports").fetchone()
+        return int(total)
+
     def nearest(
         self, lat: float, lon: float, *, limit: int = 5, max_nm: float = 200.0
     ) -> list[dict[str, Any]]:
@@ -281,6 +353,15 @@ class AirportDB:
                 scored.append((distance, record))
         scored.sort(key=lambda pair: pair[0])
         return [record for _, record in scored[:limit]]
+
+
+def _where(clauses: list[str]) -> str:
+    return f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+
+def _escape_like(text: str) -> str:
+    """`text` as a literal inside a LIKE pattern: "%" and "_" in a query are not wildcards."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

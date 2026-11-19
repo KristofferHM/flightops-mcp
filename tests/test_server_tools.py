@@ -28,6 +28,7 @@ from .conftest import FIXTURES, SleepRecorder
 
 EXPECTED_TOOLS = {
     "resolve_airport",
+    "search_airports",
     "airport_live_traffic",
     "airport_movements",
     "airport_weather",

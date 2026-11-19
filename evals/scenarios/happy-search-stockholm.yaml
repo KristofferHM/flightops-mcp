@@ -1,0 +1,25 @@
+id: happy-search-stockholm
+group: happy-path
+why: 'Listing airports is a paged search of the reference, not one resolve per guess.'
+question: Which airports serve Stockholm?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: airport_search
+  params:
+    query: Stockholm
+    region: europe
+expect:
+  tools:
+    required:
+    - search_airports
+    allowed:
+    - resolve_airport
+  arguments:
+    search_airports:
+      query: Stockholm
+  answer: reported

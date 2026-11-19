@@ -174,6 +174,61 @@ def airport_lookup(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Obser
     return f"{found['icao']} (IATA {found['iata'] or 'none'}): {found['name']}."
 
 
+def _search_arguments(params: Mapping[str, Any]) -> dict[str, Any]:
+    arguments: dict[str, Any] = {"query": params.get("query", "")}
+    for name in ("region", "limit"):
+        if name in params:
+            arguments[name] = params[name]
+    return arguments
+
+
+def _where(params: Mapping[str, Any]) -> str:
+    query, region = params.get("query", ""), params.get("region")
+    parts = [f"matching {query!r}" if query else "", f"in {region}" if region else ""]
+    return " ".join(part for part in parts if part) or "in the reference data"
+
+
+def airport_search(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """One page of the airport reference. Says when there is more than the page."""
+    (page,) = yield [("search_airports", _search_arguments(params))]
+    if not page.ok:
+        return f"The airport search could not be read ({page.code}). Nothing was looked up."
+    airports = page.payload.get("airports") or []
+    matching = (page.payload.get("counts") or {}).get("matching")
+    if not airports:
+        return (
+            f"No airport matched {params.get('query', '')!r} in the bundled reference data. "
+            "That is not evidence that no such airport exists."
+        )
+    listed = ", ".join(f"{a['icao']} ({a['name']})" for a in airports)
+    more = " More pages follow." if page.payload.get("nextCursor") else ""
+    return f"{matching} airport(s) {_where(params)}: {listed}.{more}"
+
+
+def airport_catalogue(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Walk every page of a search by its cursors, and count what came back."""
+    arguments = _search_arguments(params)
+    seen: list[str] = []
+    pages = 0
+    cursor: str | None = None
+    while True:
+        call = dict(arguments, cursor=cursor) if cursor else arguments
+        (page,) = yield [("search_airports", call)]
+        if not page.ok:
+            return (
+                f"The airport list could not be read past page {pages} ({page.code}), "
+                f"so it is incomplete: {len(seen)} airport(s) were read."
+            )
+        pages += 1
+        seen.extend(str(a["icao"]) for a in page.payload.get("airports") or [])
+        cursor = page.payload.get("nextCursor")
+        if not cursor:
+            break
+    repeated = len(seen) - len(set(seen))
+    twice = f"{repeated} appeared twice" if repeated else "none twice"
+    return f"{len(set(seen))} airports {_where(params)}, read in {pages} page(s); {twice}."
+
+
 def airport_traffic(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
     """Resolve an airport and count the aircraft heard around it."""
     icao, miss = yield from _resolve(params["airport"])
@@ -359,6 +414,8 @@ POLICIES: Final[dict[str, Policy]] = {
     "rebook_cohort": rebook_cohort,
     "airport_brief": airport_brief,
     "airport_lookup": airport_lookup,
+    "airport_search": airport_search,
+    "airport_catalogue": airport_catalogue,
     "weather_board": weather_board,
     "airport_traffic": airport_traffic,
     "airspace_view": airspace_view,
