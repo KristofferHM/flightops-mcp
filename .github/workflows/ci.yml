@@ -251,22 +251,37 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: A ceiling one lower fails the gate
-        # The step above cannot fail if the gate cannot. Same results, ceiling minus one.
-        # Deliberately not a sample: every mutant of the real run is judged again, so the count
-        # compared is the one that just passed, sitting exactly on the boundary. A re-run over one
-        # module would add mutation time and prove less. Any sample would need at least one
-        # survivor, or `survivors > ceiling - 1` could never be true and a broken gate would pass.
+      - name: A ceiling one lower than the count fails the gate
+        # The step above cannot fail if the gate cannot. Same results, one below the count that just passed.
+        # Deliberately not a sample: every mutant of the real run is judged again, so the count compared is the
+        # one that just passed, sitting exactly on the boundary. A re-run over one module would add mutation time
+        # and prove less. Any sample would need at least one survivor, or `survivors > ceiling` could never be
+        # true and a broken gate would pass.
+        #
+        # The ceiling to lower is the SURVIVOR COUNT, not the configured ceiling. Using the configured ceiling
+        # assumed the count sits exactly on it, so a change that killed a survivor - an improvement - made this
+        # step fail with "the gate passed with the ceiling at 99" and blocked the branch. Measured on
+        # feat/upstream-time, run 44492695166.
         # No --report: the verdict needs no diffs, and reading them was this step's whole cost.
         run: |
           set -euo pipefail
-          ceiling="$(sed -n 's/^ceiling = \([0-9]*\)$/\1/p' pyproject.toml)"
-          sed "s/^ceiling = .*/ceiling = $((ceiling - 1))/" pyproject.toml > lower.toml
-          if uv run python scripts/mutation_gate.py --pyproject lower.toml > lower.out; then
-            echo "::error::the gate passed with the ceiling at $((ceiling - 1))"
+          surviving="$(sed -n 's/^surviving: \([0-9]*\) (ceiling [0-9]*)$/\1/p' mutation-gate.out)"
+          if [ -z "$surviving" ]; then
+            echo "::error::could not read the survivor count out of mutation-gate.out"
             exit 1
           fi
-          grep -E "^FAIL: [0-9]+ mutants survived; the ceiling is $((ceiling - 1))$" lower.out
+          if [ "$surviving" -eq 0 ]; then
+            echo "zero survivors: there is no ceiling below zero, so this step cannot prove the gate can fail."
+            echo "::warning::mutation self-test skipped: no survivors to lower the ceiling under"
+            exit 0
+          fi
+          lower=$((surviving - 1))
+          sed "s/^ceiling = .*/ceiling = $lower/" pyproject.toml > lower.toml
+          if uv run python scripts/mutation_gate.py --pyproject lower.toml > lower.out; then
+            echo "::error::the gate passed with $surviving survivors and the ceiling at $lower"
+            exit 1
+          fi
+          grep -E "^FAIL: $surviving mutants survived; the ceiling is $lower$" lower.out
 
       - name: Keep the survivor report
         if: always()
