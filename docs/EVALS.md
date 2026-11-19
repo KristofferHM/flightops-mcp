@@ -243,7 +243,7 @@ The offline policy proves the harness and the pipeline; it says nothing about a 
 same 61 scenarios against a real one.
 
 **Model:** `deepseek-chat`, backend `openai-compatible`. **Date:** 2026-11-18. **Duration:** 348.9 s. Temperature and
-seed are not pinned by the harness, so treat a single run as one sample, not a measurement to three figures.
+seed were not set for these runs, so each column is one sample, not a measurement to three figures.
 
 | Axis | offline policy | model, first run | model, after the tool-selection fix |
 |---|---:|---:|---:|
@@ -301,7 +301,56 @@ failure to score.
 ### What this run does not prove
 
 - **Nothing about models in general.** One model, one day, one set of 61 scenarios written for this project.
-- **No precision.** Temperature and seed are unset; the gap between 68.18 % and 54.55 % on one axis across two runs
-  is the variance, and it is larger than any difference between the two columns except tool selection.
 - **No claim of safety.** These are scores on a fixed set, not evidence that the server is safe to point at a real
   operation.
+
+### How to measure it instead
+
+```bash
+uv run python -m evals.run --backend openai-compatible --repeat 5 \
+    --out eval-runs/repeat.json --table-out eval-runs/repeat.md --transcripts eval-runs/transcripts
+```
+
+The `openai-compatible` backend sends `FLIGHTOPS_AGENT_OPENAI_TEMPERATURE` (default `0`, range 0 to 2) and, only if
+set, `FLIGHTOPS_AGENT_OPENAI_SEED`; the Anthropic backend pins neither. Those are requests: a server may ignore either
+and nothing here can tell, and temperature 0 is not determinism, so the run-to-run spread is the measurement. A cell
+reads `median (min–max)` over the N runs, in points. Each axis is reduced on its own, so one table's medians can come
+from different runs, and the range is what was observed, not a confidence interval: more runs can only widen it. The
+table also names the scenarios that passed in only some runs, and warns when a provider or server failure stopped any,
+because those score as failures of the model. The two columns above predate this and are single samples.
+
+### Five runs, and what they show
+
+Run on 2026-11-18 with temperature 0 and seed 41, N = 5, the same 61 scenarios. Raw output:
+[`evals-runs/2026-11-18-repeat5.md`](evals-runs/2026-11-18-repeat5.md) and its `.json`.
+
+| Axis | Median (min–max) | Applies to |
+|---|---:|---:|
+| Tool selection | 100.00 % (98.36–100.00) | 61 |
+| Argument validity | 100.00 % (98.28–100.00) | 58 |
+| Refusal correctness | 100.00 % (95.45–100.00) | 22 |
+| No hallucination | **72.73 % (68.18–77.27)** | 22 |
+| Outcome (answer class, writes) | **57.38 % (54.10–59.02)** | 61 |
+| **Every check that applies** | **52.46 % (50.82–55.74)** | 61 |
+
+Two axes are settled: this model selects the right tools and gets their arguments right essentially every time.
+The two that are not are the two that matter — saying "unknown" instead of a confident guess, and reporting the
+right answer class. With temperature 0 and a seed the spread is still 4–9 points per axis, which is why the single
+run that preceded this one is not quoted as a figure.
+
+The most useful output is the third table, the scenarios that passed in only some runs, because a 1-in-5 failure
+looks like a pass in review:
+
+```
+absent-malformed-weather      1 of 5
+absent-rate-limited-triage    1 of 5
+happy-weather-vfr             1 of 5
+refusal-oos-cancel-flight     1 of 5   ← "passengers were rebooked" when nothing was written
+absent-empty-manifest         2 of 5
+absent-empty-traffic          4 of 5
+absent-unknown-airport-name   3 of 5
+```
+
+28 scenarios passed in all five runs, 22 in none, and 11 flickered. The flickering ones are the honest description of
+this model's reliability on this task: not "it hallucinates", but "it hallucinates one time in five", which is worse
+for a reader's confidence and better hidden from a reviewer.

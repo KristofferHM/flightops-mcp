@@ -5,6 +5,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`evals.run --repeat N`** reports `median (min–max)` per axis, in JSON and Markdown; it refuses `--update-baseline`.
+- The `openai-compatible` backend sends temperature (default 0) and an optional seed, which a server may ignore.
+- Repeated runs name the scenarios that passed only sometimes and warn when provider failures lowered the scores.
+
 ## [1.4.0] - 2026-11-18
 
 ### Fixed
