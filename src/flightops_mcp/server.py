@@ -90,7 +90,6 @@ from .weather import (
     GUST_FLAG_KT,
     IFR_CATEGORIES,
     VISIBILITY_FLAG_SM,
-    Reports,
     ceiling,
     fleet_impact_flags,
 )
@@ -105,7 +104,7 @@ EVIDENCE_LEGS: Final = ("weather", "traffic", "movements")
 # The triage ladder's thresholds, named once so the ladder and its why-not lines agree.
 BUSY_AIRCRAFT: Final = 25
 HIGH_REASONS: Final = 3
-# One NOAA request per call. A longer `ids` list risks a URL some proxy truncates.
+# Airports per call. The client splits a call into NOAA-sized chunks (`METAR_CHUNK`).
 WEATHER_OVERVIEW_MAX: Final = 100
 WEATHER_SOURCE: Final = {
     "name": "AviationWeather.gov (NOAA)",
@@ -690,8 +689,10 @@ async def airport_weather(airport: str) -> dict[str, Any]:
 async def weather_overview(airports: list[str]) -> dict[str, Any]:
     """Return the latest METAR for many airports at once, for an overview or a map.
 
-    Needs no credentials and spends no OpenSky credits. One NOAA request covers up to
-    100 airports. No TAF: for one airport's full picture use `airport_weather`.
+    Needs no credentials and spends no OpenSky credits. NOAA is asked 50 airports per
+    request. An airport it did not answer for has its own entry with `ok: false` and
+    the reason; the others are unaffected. No TAF: for one airport's full picture use
+    `airport_weather`.
 
     Args:
         airports: ICAO codes, 1-100, e.g. ["ESGG", "EKCH"].
@@ -708,37 +709,55 @@ async def weather_overview(airports: list[str]) -> dict[str, Any]:
         )
     listed = [code for code in wanted if runtime.airports.get(code) is not None]
     not_listed = [code for code in wanted if code not in listed]
-    reports = await runtime.weather.metar_reports_many(listed) if listed else Reports()
-    by_station: dict[str, list[dict[str, Any]]] = {}
-    for metar in reports.items:
-        by_station.setdefault(str(metar.get("station_id") or "").upper(), []).append(metar)
+    batch = await runtime.weather.metar_batch(listed)
 
     entries: dict[str, Any] = {}
     for code in listed:
-        metars = by_station.get(code, [])
-        age, unknowns = _metar_age(metars, reports.upstream_time)
+        failure = batch.failed.get(code)
+        if failure is not None:
+            # This airport alone: the others in its chunk keep their answers.
+            entries[code] = {
+                "ok": False,
+                "error": {
+                    "code": failure.code,
+                    "message": failure.message,
+                    "hint": "Its weather is unknown. That says nothing about conditions there.",
+                },
+            }
+            continue
+        reports = batch.reports[code]
+        age, unknowns = _metar_age(reports.items, reports.upstream_time)
         entries[code] = {
             "ok": True,
             "upstream_time_epoch": reports.upstream_time,
-            "metar": metars,
+            "metar": reports.items,
             "latest_metar": _latest_metar(age),
-            "impact_flags": fleet_impact_flags(metars),
+            "impact_flags": fleet_impact_flags(reports.items),
             "unknowns": unknowns,
         }
+    answered = [entry for entry in entries.values() if entry["ok"]]
+    unknowns = [
+        f"{code} is not in the reference data, so it was not asked about." for code in not_listed
+    ]
+    if batch.failed:
+        unknowns.append(
+            f"{len(batch.failed)} of {len(listed)} airports got no answer from NOAA; "
+            "each one's entry says why."
+        )
     return {
         "ok": True,
-        "upstream_time_epoch": reports.upstream_time,
+        # Each entry carries its own chunk's time; this is the newest of them.
+        "upstream_time_epoch": _newest(*(r.upstream_time for r in batch.reports.values())),
         "airports": entries,
         "not_in_reference_data": not_listed,
         "counts": {
             "asked": len(wanted),
-            "with_metar": sum(1 for entry in entries.values() if entry["metar"]),
-            "current": sum(1 for entry in entries.values() if entry["latest_metar"]["current"]),
+            "with_metar": sum(1 for entry in answered if entry["metar"]),
+            "current": sum(1 for entry in answered if entry["latest_metar"]["current"]),
+            "failed": len(batch.failed),
+            "requests": batch.requests,
         },
-        "unknowns": [
-            f"{code} is not in the reference data, so it was not asked about."
-            for code in not_listed
-        ],
+        "unknowns": unknowns,
         "source": WEATHER_SOURCE,
     }
 

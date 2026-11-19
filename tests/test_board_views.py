@@ -82,6 +82,7 @@ def test_fade_keeps_two_decimals() -> None:
 def test_a_reported_airport_in_full() -> None:
     assert board.weather_view(metar(600)) == {
         "state": "reported",
+        "no_observation": False,
         "category": "VFR",
         "age_s": 600,
         "upstream_time": NOW,
@@ -101,6 +102,7 @@ def test_a_failed_weather_call_in_full() -> None:
 
     assert board.weather_view(payload) == {
         "state": "unknown",
+        "no_observation": False,
         "category": None,
         "age_s": None,
         "upstream_time": None,
@@ -115,6 +117,7 @@ def test_a_failed_weather_call_in_full() -> None:
 def test_a_failure_without_a_usable_error_still_says_unknown(error: Any) -> None:
     assert board.weather_view({"ok": False, "error": error}) == {
         "state": "unknown",
+        "no_observation": False,
         "category": None,
         "age_s": None,
         "upstream_time": None,
@@ -128,6 +131,7 @@ def test_a_failure_without_a_usable_error_still_says_unknown(error: Any) -> None
 def test_an_answer_with_nothing_in_it_claims_nothing() -> None:
     assert board.weather_view({"ok": True}) == {
         "state": "unknown",
+        "no_observation": True,
         "category": None,
         "age_s": None,
         "upstream_time": None,
@@ -423,6 +427,7 @@ def test_a_current_metar_without_an_upstream_time_in_full() -> None:
 
     assert board.weather_view(payload) == {
         "state": "unknown",
+        "no_observation": False,
         "category": None,
         "age_s": None,
         "upstream_time": None,

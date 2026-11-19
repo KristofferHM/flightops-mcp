@@ -164,6 +164,9 @@ class BoardService:
         self._source = source
         self._airports = {airport["ident"]: airport for airport in airports}
         self._views: dict[str, Payload] = {}
+        # The newest snapshot's neighbour lines, by the airport they annotate. Kept
+        # apart from `_views`, so no count or marker can read one as a report.
+        self._neighbours: dict[str, Payload] = {}
         self.traffic = TrafficSpend(traffic_ceiling_per_hour, clock=clock)
         # The newest refusal of a traffic refresh, shown on the badge until one succeeds.
         self._traffic_refused: str | None = None
@@ -231,6 +234,10 @@ class BoardService:
         listed = self._region(region)
         views = await self._overview([airport["ident"] for airport in listed])
         self._views.update(views)
+        found = board.neighbours(listed, views)
+        for airport in listed:
+            self._neighbours.pop(airport["ident"], None)
+        self._neighbours.update(found)
         status = await self._source.call("upstream_status", {})
         governance = board.governance(status)
         weather = list(views.values())
@@ -260,7 +267,7 @@ class BoardService:
                     "type": record.get("type"),
                     "latitude": record["latitude"],
                     "longitude": record["longitude"],
-                    "weather": {"summary": view["summary"]},
+                    "weather": self._summary(record["ident"], view),
                     "marker": board.marker(view),
                 }
                 for record, view in ((r, views[r["ident"]]) for r in listed)
@@ -289,7 +296,7 @@ class BoardService:
                     "municipality": airport.get("municipality"),
                     "country": airport.get("iso_country"),
                     "type": airport.get("type"),
-                    "weather": {"summary": view["summary"]},
+                    "weather": self._summary(airport["ident"], view),
                     "marker": board.marker(view),
                 }
             )
@@ -302,6 +309,13 @@ class BoardService:
             "limit": limit,
             "items": items,
         }
+
+    def _summary(self, ident: str, view: Payload) -> Payload:
+        """The airport's weather line: its own, or the neighbour's labelled as one."""
+        neighbour = self._neighbours.get(ident) if view.get("no_observation") else None
+        if neighbour is None:
+            return {"summary": view["summary"], "neighbour": None}
+        return {"summary": neighbour["text"], "neighbour": neighbour}
 
     async def detail(self, icao: str) -> Payload:
         """The selected airport: weather and the aircraft heard around it."""
@@ -323,7 +337,7 @@ class BoardService:
             "type": record.get("type"),
             "latitude": record["latitude"],
             "longitude": record["longitude"],
-            "weather": weather,
+            "weather": {**weather, **self._summary(ident, weather)},
             "marker": board.marker(weather),
             "traffic": board.traffic_view(traffic),
             "movements": {"arrivals": "not requested", "departures": "not requested"},
