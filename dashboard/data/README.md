@@ -40,3 +40,38 @@ the repository's own licence (`LICENSE`). No third-party database was copied. Op
    is three capital letters, that none repeats, and that every row has a name and a two-letter country.
 
 Nothing else needs to change: the table is read once when the board first parses a callsign.
+
+# `operator_designators.csv`: air forces
+
+`dashboard/operator.py` sorts each aircraft into airline, general aviation, military or unknown, **from the
+callsign alone**: the board's source sends no aircraft type. This table holds the designators that make a callsign
+military. **An entry is present only when its class is certain**, so a designator that is not here falls through to
+the airline table, then to the registration shapes, then to unknown, instead of being guessed. The order is
+`docs/DASHBOARD.md`, "Who is flying".
+
+| Column | Meaning |
+|---|---|
+| `designator` | The three-letter ICAO operator designator. The file is sorted by it. |
+| `class` | `military`. |
+| `note` | The operator. |
+
+None of these designators is in `airlines.csv`, which leaves military callers out on purpose (above).
+
+## Source
+
+Compiled by hand for this repository on 2026-11-20 from ICAO Doc 8585 designators: the air forces whose
+designator is certain and commonly heard over Europe and North America. Business-aviation operators (NetJets,
+VistaJet, Flexjet) are not here: their callsigns are airline-shaped, and from the callsign alone they read as
+airlines, which the board says rather than hides.
+
+## Licence
+
+As `airlines.csv`: facts assembled for this repository, under the repository's own licence. No third-party
+database was copied.
+
+## To add a designator
+
+1. Confirm the designator and the air force from ICAO Doc 8585 or the air force's own publications.
+2. Add one row in sorted position.
+3. Run `uv run pytest tests/test_operator_class.py`. It checks the header, the sort order, the class and that no
+   designator repeats or is also in `airlines.csv`.

@@ -14,6 +14,8 @@
   const REGION_KEY = "airport-board.region";
   const UNKNOWN_KEY = "airport-board.unknown";
   const AIRCRAFT_KEY = "airport-board.aircraft";
+  // Per tab session, not per browser like the toggles above, and dropped on a region change.
+  const CLASS_KEY = "airport-board.operator-class";
   const MAX_ZOOM = 12;
   const HIT_RADIUS_PX = 14;
   // Past this many aircraft at a wide zoom, arrowheads merge into a solid shape.
@@ -88,6 +90,9 @@
     showUnknown: rememberedToggle(),
     // Aircraft: the reader's choices, the newest selection, the focus and its follower.
     choice: rememberedChoice(), aircraftQuery: "", selection: null,
+    // Who is flying: the region's counts as the server gave them, and the chip chosen.
+    // A render filter only: it is never sent, so the server's answer cannot depend on it.
+    classes: null, operatorClass: sessionChoice(),
     focus: null, focusData: null, follow: false, followHeard: null, followNote: "",
     track: null, trails: new Map(),
     // What approaches the selected airport: the server's set, the one lit, and tracks paid for.
@@ -108,6 +113,15 @@
   function rememberedToggle() {
     const value = remembered(UNKNOWN_KEY, "");
     return value === "1" ? true : value === "0" ? false : null;
+  }
+  function sessionChoice() {
+    try { return sessionStorage.getItem(CLASS_KEY) || ""; } catch { return ""; }
+  }
+  function rememberClass(value) {
+    try {
+      if (value) sessionStorage.setItem(CLASS_KEY, value);
+      else sessionStorage.removeItem(CLASS_KEY);
+    } catch { /* the choice lasts this page */ }
   }
   function rememberedChoice() {
     try {
@@ -288,6 +302,8 @@
     } catch {
       if (superseded()) return;
       state.airspace = [];
+      state.classes = null;
+      renderClasses();
       state.trafficSnapshot = 0;
       state.trafficUpstream = 0;
       note.textContent = "Unknown: the board server did not answer";
@@ -315,7 +331,9 @@
   function applyLayer(layer) {
     state.airspace = layer.aircraft || [];
     state.selection = layer.selection;
+    state.classes = layer.operator_classes || null;
     collectTrails(state.airspace);
+    renderClasses();
     renderSelection(layer.selection);
     applyFocus(layer.selection ? layer.selection.focus : null);
     // An answer asked for before the airport changed describes the old airport: not drawn.
@@ -575,6 +593,63 @@
     }
   });
 
+  // --- who is flying: the class chips -------------------------------------------
+  // The chosen class, or "" for all. Only while chips are on screen: a filter the reader
+  // cannot see must not hide anything.
+  const classFilter = () => (state.classes ? state.operatorClass : "");
+  const inClass = (aircraft) => {
+    const chosen = classFilter();
+    return !chosen || aircraft.operator_class === chosen;
+  };
+
+  function chip(label, count, value) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quiet";
+    button.dataset.class = value;
+    button.setAttribute("aria-pressed", String(state.operatorClass === value));
+    button.textContent = `${label} ${count.toLocaleString("en")}`;
+    button.addEventListener("click", () => chooseClass(value));
+    return button;
+  }
+
+  // Every number here is the server's (dashboard/operator.py). The page only counts what it
+  // drew, to say when the cap, not the class, is why fewer are on the map.
+  function renderClasses() {
+    const box = $("classes");
+    const classes = state.classes;
+    box.hidden = !classes;
+    if (!classes) return;
+    if (state.operatorClass && !(state.operatorClass in classes.counts)) state.operatorClass = "";
+    const chips = [chip("All", classes.all, "")];
+    for (const [value, count] of Object.entries(classes.counts)) {
+      // A class with none in the region gets no chip, unless it is the one chosen.
+      if (count || value === state.operatorClass) chips.push(chip(classes.labels[value], count, value));
+    }
+    $("class-chips").replaceChildren(...chips);
+    const notes = [classes.classification_text];
+    const chosen = state.operatorClass;
+    if (chosen) {
+      const drawn = state.airspace.filter(inClass).length;
+      const inRegion = classes.counts[chosen];
+      const label = classes.labels[chosen];
+      notes.push(drawn < inRegion
+        ? `${label}: ${inRegion.toLocaleString("en")} in the region, ${drawn.toLocaleString("en")} `
+          + "among the aircraft drawn — the cap and the filters on the right decide which."
+        : `${label}: showing ${drawn.toLocaleString("en")}.`);
+    }
+    $("class-note").textContent = notes.join(" ");
+  }
+
+  function chooseClass(value) {
+    state.operatorClass = value;
+    rememberClass(value);
+    renderClasses();
+    renderSelection(state.selection);
+    renderInbound(state.inbound);
+    invalidate();
+  }
+
   // --- aircraft: the selection, the focus, the follower ------------------------
   function renderSelection(selection) {
     if (!selection) {
@@ -599,11 +674,11 @@
     airline.value = chosen;
     const focus = $("a-focus");
     const picks = [new Option("none", "")];
-    for (const aircraft of state.airspace) {
+    for (const aircraft of state.airspace.filter(inClass)) {
       const label = (aircraft.callsign || "").trim() || aircraft.icao24;
       picks.push(new Option(`${label} · ${aircraft.icao24}`, aircraft.icao24));
     }
-    if (state.focus && !state.airspace.some((a) => a.icao24 === state.focus)) {
+    if (state.focus && !state.airspace.some((a) => a.icao24 === state.focus && inClass(a))) {
       picks.push(new Option(`${state.focus} · outside the selection`, state.focus));
     }
     focus.replaceChildren(...picks);
@@ -1138,7 +1213,8 @@
     let height = "altitude not reported";
     if (aircraft.on_ground) height = "on the ground";
     else if (known(aircraft.altitude_m)) height = `${Math.round(aircraft.altitude_m).toLocaleString("en")} m`;
-    return `${name}: ${height}. Select to focus.`;
+    const kind = aircraft.operator_class ? `, ${aircraft.operator_class}` : "";
+    return `${name}: ${height}${kind}. Select to focus.`;
   }
 
   // Drawn where it was last reported and faded by age. Never moved between polls.
@@ -1256,7 +1332,9 @@
   }
 
   // --- what approaches the selected airport ------------------------------------
-  const inboundIds = () => new Set(state.inbound ? state.inbound.aircraft.map((a) => a.icao24) : []);
+  // The approaching aircraft the class filter lets through. The rest are neither listed nor drawn.
+  const inboundShown = () => (state.inbound ? state.inbound.aircraft.filter(inClass) : []);
+  const inboundIds = () => new Set(inboundShown().map((a) => a.icao24));
 
   // The one lit: the one under the pointer, else the selected one if it is approaching.
   function inboundLit() {
@@ -1285,7 +1363,8 @@
     const lit = inboundLit();
     context.save();
     context.strokeStyle = INK.focus;
-    for (const aircraft of state.inbound.aircraft) {
+    const shown = inboundShown();
+    for (const aircraft of shown) {
       const observed = state.inboundTracks.get(aircraft.icao24);
       const extra = lit === aircraft.icao24 ? LIT_EXTRA : 0;
       context.globalAlpha = lit && !extra ? FADED : 0.85;
@@ -1307,7 +1386,7 @@
       context.stroke();
     }
     context.restore();
-    for (const aircraft of state.inbound.aircraft) {
+    for (const aircraft of shown) {
       if (aircraft.icao24 === state.focus) continue;
       // Faded beside the lit one; dimmed like every other aircraft beside a selected one.
       const faded = lit ? lit !== aircraft.icao24 : Boolean(state.focus);
@@ -1341,7 +1420,18 @@
     return item;
   }
 
-  // Every word here was decided by the server (dashboard/inbound.py), except the legend's.
+  // What the class filter hides, counted over every candidate (`inbound.classes`), not only
+  // the nearest few the server sent: those would undercount it.
+  function inboundHiddenText(inbound) {
+    const chosen = classFilter();
+    if (!chosen) return "";
+    const kept = (inbound.classes || {})[chosen] || 0;
+    const hidden = inbound.candidates - kept;
+    return hidden > 0 ? `${hidden} more approaching, hidden by the filter` : "";
+  }
+
+  // Every word here was decided by the server (dashboard/inbound.py), except the legend's
+  // and the filter's hidden count.
   function renderInbound(inbound) {
     state.inbound = inbound;
     if (state.inboundHover && !inboundIds().has(state.inboundHover)) state.inboundHover = null;
@@ -1352,6 +1442,7 @@
     if (!inbound) {
       $("i-summary").textContent = $("traffic-on").checked ? "No traffic layer is held yet." : INBOUND_OFF;
       $("i-dropped").textContent = "";
+      $("i-hidden").textContent = "";
       $("i-rule").textContent = "";
       $("i-list").replaceChildren();
       tracks.hidden = true;
@@ -1360,9 +1451,10 @@
     }
     $("i-summary").textContent = inbound.text;
     $("i-dropped").textContent = inbound.dropped || "";
+    $("i-hidden").textContent = inboundHiddenText(inbound);
     $("i-rule").textContent = inbound.rule;
     if (inbound.board_text) $("i-board-note").textContent = inbound.board_text;
-    $("i-list").replaceChildren(...inbound.aircraft.map(inboundItem));
+    $("i-list").replaceChildren(...inboundShown().map(inboundItem));
     tracks.textContent = inbound.price.text;
     tracks.hidden = inbound.price.count === 0;
     invalidate();
@@ -1449,10 +1541,12 @@
     if (cells) drawClusters(cells);
     if (state.focus) drawTransit(path);
     if (layer) {
-      const dense = state.airspace.length > DENSE_AIRCRAFT && state.zoom < DETAIL_ZOOM;
+      // The class filter is applied here, at drawing, for the map and the globe alike.
+      const drawn = state.airspace.filter(inClass);
+      const dense = drawn.length > DENSE_AIRCRAFT && state.zoom < DETAIL_ZOOM;
       const dim = Boolean(state.focus);
       const approaching = inboundIds();
-      state.airspace.forEach((aircraft) => {
+      drawn.forEach((aircraft) => {
         if (aircraft.icao24 !== state.focus && !approaching.has(aircraft.icao24)) {
           drawAircraft(aircraft, dense, dim, true);
         }
@@ -1596,6 +1690,8 @@
     state.airspace = [];
     state.trafficSnapshot = null;
     state.trafficUpstream = null;
+    state.classes = null;
+    renderClasses();
     $("traffic-note").textContent = "";
     renderSelection(null);
     renderInbound(null);
@@ -1613,8 +1709,13 @@
     state.airspace = [];
     state.trafficSnapshot = null;
     state.trafficStopped = false;
-    // A region change is the one thing a selection does not survive.
+    // A region change is the one thing a selection does not survive. Nor does the class
+    // filter: the chips count the old region's sky.
     clearSelection("region changed");
+    state.operatorClass = "";
+    rememberClass("");
+    state.classes = null;
+    renderClasses();
     renderInbound(null);
     state.inboundTracks.clear();
     refreshBoard();

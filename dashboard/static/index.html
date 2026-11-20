@@ -50,6 +50,10 @@
         </span>
         <p id="coverage" class="note coverage"></p>
         <span id="traffic-note" class="note" role="status"></span>
+        <div id="classes" class="chips" role="group" aria-label="Show aircraft by who is flying" hidden>
+          <span id="class-chips" class="chip-row"></span>
+          <p id="class-note" class="note" role="status"></p>
+        </div>
       </div>
       <div class="stage">
         <div id="last-update" class="last-update" role="group" aria-label="Age of the data shown" data-state="no_data">
@@ -150,6 +154,7 @@
           <h3 id="i-title">Approaching</h3>
           <p id="i-summary" class="note" role="status"></p>
           <p id="i-dropped" class="note warn"></p>
+          <p id="i-hidden" class="note warn"></p>
           <p id="i-rule" class="sub"></p>
           <ol id="i-list" class="inbound-list"></ol>
           <div class="aircraft-actions">
@@ -208,6 +213,10 @@
           <tr><th scope="row">nm / sm / kt</th><td colspan="3">Nautical miles (1 nm = 1.852 km) / statute miles / knots</td></tr>
           <tr><th scope="row">Credit</th><td colspan="3">OpenSky's unit of API cost. The strip at the bottom shows what is spent and what is left.</td></tr>
           <tr><th scope="row">Severity</th><td colspan="3">A triage's advisory rung: low, elevated or high. Unknown means a source could not be seen, and outranks elevated. Low needs something observed.</td></tr>
+          <tr><th scope="row">Airline</th><td colspan="3">A callsign that is a known airline designator followed by a flight number.</td></tr>
+          <tr><th scope="row">General aviation</th><td colspan="3">A callsign that is an aircraft registration, such as SE-MOY or N12345.</td></tr>
+          <tr><th scope="row">Military</th><td colspan="3">A callsign that starts with a known air-force designator.</td></tr>
+          <tr><th scope="row">Unknown (aircraft)</th><td colspan="3">Nothing above matched. Not a fifth kind of operator: no evidence either way.</td></tr>
         </tbody>
       </table>
 
@@ -228,6 +237,14 @@
         flight has ended, and never a schedule. <strong>Destination</strong> has no source: it needs
         a schedule provider, and none is configured. The airline is derived from the callsign's
         first three letters through a bundled table; a code the table does not hold is shown bare.
+      </p>
+      <p>
+        The chips above the map sort the sky by who is flying, from the callsign alone: OpenSky
+        sends no aircraft type, and the note under the chips says so. The inspector names the rule
+        that decided. A business jet with an airline-shaped callsign reads as an airline, a
+        helicopter under its registration as general aviation, and a designator the tables do not
+        hold stays unknown rather than being guessed. The counts describe the whole region; a chip
+        changes what is drawn, never what is fetched.
       </p>
       <p>
         Choose what is drawn by sorting first and filtering second. The cap draws at most that many,

@@ -26,6 +26,8 @@ from flightops_mcp.airports import haversine_nm
 from flightops_mcp.opensky import STATES_STALE_AFTER_S
 from flightops_mcp.server import METAR_STALE_AFTER_S
 
+from . import operator
+
 FLIGHT_CATEGORIES: Final = frozenset({"VFR", "MVFR", "IFR", "LIFR"})
 NONE_HEARD: Final = "none heard, coverage not proven"
 MOVEMENTS_NOT_AVAILABLE: Final = "not available yet today"
@@ -403,9 +405,12 @@ def _aircraft(entry: Payload, now: float | None) -> Payload:
     heard = entry.get("last_contact")
     age = round(now - heard) if now and heard else None
     altitude = _measure(entry.get("baro_altitude_m"))
+    found, evidence = operator.classify(entry.get("callsign"))
     return {
         "icao24": entry.get("icao24"),
         "callsign": entry.get("callsign"),
+        "operator_class": found,
+        "class_evidence": evidence,
         "latitude": entry.get("latitude"),
         "longitude": entry.get("longitude"),
         "on_ground": entry.get("on_ground"),
@@ -433,8 +438,11 @@ def traffic_view(payload: Payload) -> Payload:
             "credentials": payload.get("credentials"),
             "freshness": None,
             "aircraft": [],
+            "operator_classes": None,
             "unknowns": [str(error.get("message", "Traffic could not be read."))],
         }
+    now = upstream_time(payload)
+    aircraft = [_aircraft(a, now) for a in payload.get("aircraft") or []]
     count = int((payload.get("counts") or {}).get("returned", 0))
     current = bool(payload.get("snapshot_current"))
     if count == 0:
@@ -443,7 +451,6 @@ def traffic_view(payload: Payload) -> Payload:
         state, summary = "heard", f"{count} heard"
     else:
         state, summary = "stale", f"{count} heard in a snapshot that is not current"
-    now = upstream_time(payload)
     return {
         "state": state,
         "count": count,
@@ -451,7 +458,8 @@ def traffic_view(payload: Payload) -> Payload:
         "hint": None,
         "credentials": payload.get("credentials"),
         "freshness": payload.get("freshness"),
-        "aircraft": [_aircraft(a, now) for a in payload.get("aircraft") or []],
+        "aircraft": aircraft,
+        "operator_classes": operator.counts(aircraft),
         "unknowns": list(payload.get("unknowns") or []),
     }
 
@@ -472,6 +480,7 @@ def airspace_view(payload: Payload) -> Payload:
             "snapshot_epoch": 0,
             "upstream_epoch": 0,
             "aircraft": [],
+            "operator_classes": None,
             "unknowns": [str(error.get("message", "Traffic could not be read."))],
         }
     columns = payload["columns"]
@@ -499,6 +508,8 @@ def airspace_view(payload: Payload) -> Payload:
         # snapshot against OpenSky's clock. 0 when the answer carried no `Date`.
         "upstream_epoch": now or 0,
         "aircraft": aircraft,
+        # Over the whole region, so the chips' counts describe the sky, not the view.
+        "operator_classes": operator.counts(aircraft),
         "unknowns": list(payload.get("unknowns") or []),
     }
 
@@ -512,6 +523,7 @@ def refused_view(reason: str) -> Payload:
         "snapshot_epoch": 0,
         "upstream_epoch": 0,
         "aircraft": [],
+        "operator_classes": None,
         "unknowns": [reason],
         "refused": reason,
     }

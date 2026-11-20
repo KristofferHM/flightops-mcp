@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 import pytest
 
-from dashboard import aircraft, board
+from dashboard import aircraft, board, operator
 from dashboard.aircraft import Selection, select
 from dashboard.app import create_app
 from dashboard.gate import Gate
@@ -119,7 +119,7 @@ def test_the_inspector_names_a_known_airline_and_leaves_an_unknown_bare() -> Non
 
 
 def test_the_bundled_table_is_well_formed_and_documented() -> None:
-    with aircraft.AIRLINE_TABLE.open(encoding="utf-8", newline="") as handle:
+    with operator.AIRLINE_TABLE.open(encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     codes = [row["designator"] for row in rows]
 
@@ -128,7 +128,7 @@ def test_the_bundled_table_is_well_formed_and_documented() -> None:
     assert len(codes) == len(set(codes))
     assert all(re.fullmatch(r"[A-Z]{3}", code) for code in codes)
     assert all(row["name"].strip() and re.fullmatch(r"[A-Z]{2}", row["country"]) for row in rows)
-    readme = (aircraft.AIRLINE_TABLE.parent / "README.md").read_text(encoding="utf-8")
+    readme = (operator.AIRLINE_TABLE.parent / "README.md").read_text(encoding="utf-8")
     assert "Licence" in readme and "To add a designator" in readme
 
 
@@ -283,6 +283,7 @@ def test_the_focused_aircraft_is_kept_outside_the_cap_and_the_filter() -> None:
     assert labels == [
         "Callsign",
         "Airline",
+        "Class",
         "ICAO24",
         "Altitude",
         "Speed",
