@@ -221,6 +221,8 @@ jobs:
     name: mutation (auth, credit ledger, approval, board)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: write   # only to publish the rolling mutation-baseline release asset
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
@@ -292,6 +294,39 @@ jobs:
             mutation-report.md
             mutmut.out
           if-no-files-found: warn
+
+      - name: Keep mutmut's own cache
+        # The cache is the mutation baseline another repository can seed from: mutmut stores one row per
+        # mutant keyed by the source it was cut from, and skips the rows it already has. A killed mutant
+        # stays killed under a superset of the same tests, so a fork that keeps every test here and adds
+        # more only has to re-run the survivors. Uploaded on every run; published below only from main.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mutmut-cache
+          path: .mutmut-cache
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish the cache as a rolling baseline
+        # A release asset rather than a cross-repository artifact download: this repository is public, so
+        # the consumer needs no token and no access grant to fetch it. `--clobber` makes it rolling, so the
+        # asset always matches the newest main. The manifest is the other half: the hashes of every mutated
+        # file and every selected test, so a consumer can tell whether the cache is a baseline for its tree.
+        if: always() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f .mutmut-cache ]; then
+            echo "::warning::no .mutmut-cache to publish"
+            exit 0
+          fi
+          uv run python scripts/mutation_baseline.py --manifest mutation-baseline.json
+          gh release view mutation-baseline > /dev/null 2>&1 \
+            || gh release create mutation-baseline \
+                 --title "Mutation baseline (rolling)" \
+                 --notes "mutmut's cache from the newest run on main, and a manifest of the files it was made from. Seeded by another repository so it can skip mutants this one has already killed. A result for a source line that has since changed is not carried: those mutants are re-cut and re-run."
+          gh release upload mutation-baseline .mutmut-cache mutation-baseline.json --clobber
 
   # The board's accessibility claim, enforced. A browser is the price: contrast, focus order and
   # sideways overflow only exist once a page is laid out, so no static check can see them.
