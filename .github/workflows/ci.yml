@@ -296,15 +296,15 @@ jobs:
           if-no-files-found: warn
 
       - name: Keep mutmut's own cache
-        # The cache is the mutation baseline another repository can seed from: mutmut stores one row per
-        # mutant keyed by the source it was cut from, and skips the rows it already has. A killed mutant
-        # stays killed under a superset of the same tests, so a fork that keeps every test here and adds
-        # more only has to re-run the survivors. Uploaded on every run; published below only from main.
+        # mutmut 3 has no `.mutmut-cache` file: its cache is the `mutants/` directory — one `.meta` per
+        # mutated source carrying each mutant's verdict, plus `mutmut-stats.json`. A fork that restores
+        # this directory gets every unchanged function skipped by hash and every changed one re-tested.
+        # Uploaded on every run; published below only from main.
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mutmut-cache
-          path: .mutmut-cache
+          path: mutants/
           if-no-files-found: warn
           retention-days: 30
 
@@ -317,16 +317,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ ! -f .mutmut-cache ]; then
-            echo "::warning::no .mutmut-cache to publish"
-            exit 0
+          if [ ! -d mutants ]; then
+            echo "::error::no mutants/ directory: the run produced no cache, so there is nothing to publish"
+            exit 1
           fi
+          tar czf mutants.tar.gz mutants
           uv run python scripts/mutation_baseline.py --manifest mutation-baseline.json
           gh release view mutation-baseline > /dev/null 2>&1 \
             || gh release create mutation-baseline \
                  --title "Mutation baseline (rolling)" \
-                 --notes "mutmut's cache from the newest run on main, and a manifest of the files it was made from. Seeded by another repository so it can skip mutants this one has already killed. A result for a source line that has since changed is not carried: those mutants are re-cut and re-run."
-          gh release upload mutation-baseline .mutmut-cache mutation-baseline.json --clobber
+                 --notes "mutmut's mutants/ directory from the newest run on main, and a manifest of the files it was made from. Restore the directory to skip mutants this run already judged; the hashes let a consumer refuse a cache made from a different tree."
+          gh release upload mutation-baseline mutants.tar.gz mutation-baseline.json --clobber
 
   # The board's accessibility claim, enforced. A browser is the price: contrast, focus order and
   # sideways overflow only exist once a page is laid out, so no static check can see them.
