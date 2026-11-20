@@ -308,6 +308,9 @@ script sends pointer events, so the draw time is the measure. Two runs, 2026-11-
 - **The cap is not what costs.** Reprojecting the coastline and graticule each frame does; above 400 aircraft at a
   wide zoom they are drawn as small squares, which are cheaper than arrows. A lower default would not buy 30 fps,
   so the default stays at 200: past that, the picture is clutter (at 1,000 a continent is a speckle).
+- A third run, later on 2026-11-20 with the test suite running on the same machine, put the globe's p95 at 500
+  aircraft under budget: 22.1 ms at 1440 × 900 and 29.5 ms at 390 × 844. So the claim is "not reliably", not
+  "never": over three runs that p95 ranged 22.1–41.7 ms.
 - What each looks like: at 200, separate arrows with room between them; at 500, Europe's airways read as bands of
   squares; at 1,000, a solid speckle over Europe in which no single aircraft can be followed without focus.
 
