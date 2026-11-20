@@ -768,7 +768,7 @@
   }
 
   // The far side of the globe is not drawn, and its markers cannot be picked. Airports and
-  // aircraft both pass through here, so both are culled by the same test (board.on_near_side).
+  // aircraft both pass through here, so both are culled by the same test.
   function place(lon, lat) {
     if (!known(lon) || !known(lat)) return null;
     if (state.projection === "globe"
@@ -1063,7 +1063,7 @@
   }
 
   // Where an aircraft is drawn. On the globe it is lifted radially by its altitude: its
-  // ground point scaled outward from the centre by 1 + lift (board.orthographic). Culled by
+  // ground point scaled outward from the centre by 1 + lift (board.globe_lift). Culled by
   // where it is over the ground, through `place`, like an airport.
   function aircraftPoint(aircraft) {
     const surface = place(aircraft.longitude, aircraft.latitude);

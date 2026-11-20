@@ -10,7 +10,6 @@ from __future__ import annotations
 import copy
 import csv
 import inspect
-import math
 import random
 import re
 from pathlib import Path
@@ -429,24 +428,24 @@ def test_the_lift_is_proportional_to_altitude_and_clamped(
     assert board.globe_lift(altitude) == lift
 
 
-def test_an_aircraft_is_lifted_radially_by_its_altitude() -> None:
-    # On the limb, seen from (0, 0): x is the radius plus the lift.
-    assert board.orthographic(0.0, 90.0, 12_000.0, 0.0, 0.0) == (1.035, 0.0)
-    # 60 N, 6 km up, seen from (0, 0): straight up the screen by sin 60 times 1.0175.
-    x, y = board.orthographic(60.0, 0.0, 6000.0, 0.0, 0.0)  # type: ignore[misc]
-    assert x == 0.0
-    assert y == pytest.approx(math.sin(math.radians(60)) * 1.0175, abs=1e-6)
-    # An unknown altitude is drawn on the surface, not at an invented height.
-    assert board.orthographic(60.0, 0.0, None, 0.0, 0.0) == pytest.approx(
-        (0.0, math.sin(math.radians(60))), abs=1e-6
-    )
+def test_the_page_lifts_an_aircraft_radially_and_an_unknown_altitude_not_at_all() -> None:
+    """The globe's projection runs in the page, so the page's code is what is held here.
 
+    Lifting a point radially in 3-D is, once projected orthographically, scaling its ground
+    point outward from the projection's centre by `1 + lift`. A missing lift draws it on the
+    surface. Python once kept its own copy of this projection; nothing called it, and its
+    limb test had already drifted from the page's.
+    """
+    script = (STATIC / "board.js").read_text(encoding="utf-8")
+    point = re.search(r"function aircraftPoint\(aircraft\) \{(.*?)\n  \}", script, re.S)
 
-def test_a_far_side_aircraft_is_culled_whatever_its_altitude() -> None:
-    assert board.orthographic(0.0, 180.0, 12_000.0, 0.0, 0.0) is None
-    assert board.orthographic(0.0, 90.5, 12_000.0, 0.0, 0.0) is None
-    assert board.on_near_side(0.0, 90.0, 0.0, 0.0) is True
-    assert board.on_near_side(89.0, 10.0, -1.5, 10.0) is False
+    assert point is not None
+    body = point.group(1)
+    assert "if (!surface) return null;" in body
+    assert "!aircraft.lift) return { surface, at: surface };" in body
+    assert "const [cx, cy] = projection.translate();" in body
+    assert "const k = 1 + aircraft.lift;" in body
+    assert "at: [cx + (surface[0] - cx) * k, cy + (surface[1] - cy) * k]" in body
 
 
 def test_the_page_culls_aircraft_with_the_airports_rule() -> None:
@@ -496,16 +495,31 @@ def test_the_view_is_a_circle_that_crosses_the_antimeridian() -> None:
     assert in_view == 2
 
 
-@pytest.mark.parametrize(
-    ("zoom", "cell"), [(1.0, 10.0), (1.99, 10.0), (2.0, 5.0), (3.0, 2.5), (3.99, 2.5), (4.0, None)]
-)
-def test_clusters_shrink_as_the_reader_zooms_in(zoom: float, cell: float | None) -> None:
-    assert board.cluster_level(zoom) == cell
+def test_clusters_shrink_as_the_reader_zooms_in() -> None:
+    """The page picks the cell per frame from the levels the payload carries (`display`)."""
+    script = (STATIC / "board.js").read_text(encoding="utf-8")
+    cell = re.search(r"function clusterCell\(\) \{(.*?)\n  \}", script, re.S)
+
+    assert cell is not None
+    assert (
+        "for (const [below, cell] of state.display.cluster_levels) "
+        "if (state.zoom < below) return cell;"
+    ) in cell.group(1)
+    # Strictly finer as the zoom rises, and individual airports from the last level on.
+    zooms = [below for below, _ in board.CLUSTER_LEVELS]
+    cells = [size for _, size in board.CLUSTER_LEVELS]
+    assert zooms == sorted(zooms) and cells == sorted(cells, reverse=True)
+    assert len(set(cells)) == len(cells)
 
 
-@pytest.mark.parametrize(("zoom", "shown"), [(1.0, False), (3.9, False), (4.0, True), (12.0, True)])
-def test_unknowns_are_hidden_by_default_only_at_wide_zoom(zoom: float, shown: bool) -> None:
-    assert board.unknown_shown_by_default(zoom) is shown
+def test_unknowns_are_hidden_by_default_only_at_wide_zoom() -> None:
+    """Shown by default from the payload's zoom on, until the reader chooses."""
+    script = (STATIC / "board.js").read_text(encoding="utf-8")
+    shown = re.search(r"function unknownShown\(\) \{(.*?)\n  \}", script, re.S)
+
+    assert shown is not None
+    assert "if (state.showUnknown !== null) return state.showUnknown;" in shown.group(1)
+    assert "state.zoom >= state.display.unknown_shown_from_zoom" in shown.group(1)
 
 
 def _entry(ident: str, lat: float, lon: float, category: str | None) -> dict[str, Any]:
@@ -660,6 +674,7 @@ async def test_a_world_poll_asks_about_600_airports_and_draws_under_120_markers(
     assert sum(c["reported"] + c["unknown"] for c in snapshot["clusters"]["10"]) == 600
     assert set(snapshot["clusters"]) == {"10", "5", "2.5"}
     assert snapshot["display"]["cluster_levels"] == [[2.0, 10.0], [3.0, 5.0], [4.0, 2.5]]
+    assert snapshot["display"]["unknown_shown_from_zoom"] == board.UNKNOWN_SHOWN_FROM_ZOOM
 
 
 async def test_an_airport_without_a_report_is_trimmed_to_where_it_is() -> None:

@@ -14,7 +14,7 @@ tools themselves.
 ```bash
 uv sync                                                              # install
 uv run python scripts/build_airports_db.py --csv data/airports_world.csv  # reference data (3,270)
-uv run pytest                                                        # suite (1728 tests, must stay 0 skipped)
+uv run pytest                                                        # suite (1752 tests, must stay 0 skipped)
 uv run ruff check . && uv run ruff format --check .                   # lint
 uv run mypy src services agent evals dashboard                       # strict types
 uv run flightops-mcp                                                 # stdio server

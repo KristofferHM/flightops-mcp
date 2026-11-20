@@ -227,19 +227,6 @@ def airports_in_view(
     return inside[: max(0, cap)], len(inside)
 
 
-def cluster_level(zoom: float) -> float | None:
-    """The cell size in degrees airports are grouped by at this zoom, or None for none."""
-    for below, cell in CLUSTER_LEVELS:
-        if zoom < below:
-            return cell
-    return None
-
-
-def unknown_shown_by_default(zoom: float) -> bool:
-    """Whether airports without a report are drawn before the reader has chosen."""
-    return zoom >= UNKNOWN_SHOWN_FROM_ZOOM
-
-
 def cluster_text(counts: Mapping[str, int], unknown: int, show_unknown: bool) -> str:
     """`● 42 VFR · ◆ 11 IFR`, the worst-first counts a cluster's tooltip reads out."""
     parts = [
@@ -405,35 +392,6 @@ def angular_distance_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> 
     dlat, dlon = p2 - p1, math.radians(lon2 - lon1)
     h = math.sin(dlat / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlon / 2) ** 2
     return math.degrees(2 * math.asin(min(1.0, math.sqrt(h))))
-
-
-def on_near_side(lat: float, lon: float, centre_lat: float, centre_lon: float) -> bool:
-    """Whether a point is on the globe's visible hemisphere.
-
-    The page applies this rule each frame (`place` in board.js) to airports and aircraft
-    alike: an aircraft is culled by where it is over the ground, not by how high it is.
-    """
-    # A hair of tolerance: a point exactly on the limb is visible, and floating point
-    # puts it a billionth of a degree either side.
-    return angular_distance_deg(lat, lon, centre_lat, centre_lon) <= 90.0 + 1e-9
-
-
-def orthographic(
-    lat: float, lon: float, altitude_m: float | None, centre_lat: float, centre_lon: float
-) -> tuple[float, float] | None:
-    """Where the globe draws an aircraft, on a unit sphere, north up. None on the far side.
-
-    The surface point is scaled outward from the centre by `1 + lift`: lifting a point
-    radially in 3-D is exactly that scaling once it is projected orthographically.
-    """
-    if not on_near_side(lat, lon, centre_lat, centre_lon):
-        return None
-    phi, lam = math.radians(lat), math.radians(lon - centre_lon)
-    phi0 = math.radians(centre_lat)
-    x = math.cos(phi) * math.sin(lam)
-    y = math.cos(phi0) * math.sin(phi) - math.sin(phi0) * math.cos(phi) * math.cos(lam)
-    scale = 1.0 + (globe_lift(altitude_m) or 0.0)
-    return round(x * scale, 6), round(y * scale, 6)
 
 
 def _heard_utc(epoch: object) -> str | None:

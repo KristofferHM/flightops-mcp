@@ -147,8 +147,8 @@ With traffic on, the aircraft are drawn on both projections, at the position Ope
 - **Globe**: the same marks, each lifted radially by its altitude, `radius × (1 + min(alt, 12 km) / 12 km × 0.035)`,
   with a thin stem down to where it is over the ground. A missing altitude is not lifted and is drawn hollow, so it
   cannot pass for 0. Lifting a point radially is, once projected orthographically, scaling its ground point outward
-  from the centre (`board.orthographic`). It is culled by where it is over the ground, by the same `place` test as
-  the airports (`board.on_near_side`).
+  from the centre (`aircraftPoint` in `board.js`). It is culled by where it is over the ground, by the same `place`
+  test as the airports. Both run in the page each frame; the lift itself is `board.globe_lift`.
 
 What a reader sees on the globe: over a busy region the arrows stand slightly proud of the coastline on short
 stems; near the limb the lift shows most, so aircraft over Scandinavia, seen from 20° N, fan visibly outward from

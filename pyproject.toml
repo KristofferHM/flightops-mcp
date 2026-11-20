@@ -152,6 +152,10 @@ pytest_add_cli_args_test_selection = [
     "tests/test_board_views.py",
     "tests/test_board_world.py",
     "tests/test_board_neighbours.py",
+    # The aircraft branch's board tests. Missing from this list, they never ran against a
+    # mutant: 151 of the 204 new survivors of run 44688906150 die once they do.
+    "tests/test_aircraft_layer.py",
+    "tests/test_board_arithmetic.py",
     # A static scan of the source text for clients without the passthrough guard. mutmut's
     # instrumented copy contains every mutant side by side, including those that drop the
     # guard, so the scan fails before any mutant runs. It still runs in the normal suite.
@@ -160,9 +164,9 @@ pytest_add_cli_args_test_selection = [
 ]
 pytest_add_cli_args = ["-p", "no:cacheprovider"]
 
-# The survivor ceiling scripts/mutation_gate.py enforces: the 99 survivors of run 8 (CI 44522301960)
-# that remain after its 12 missing tests were written, each judged in docs/MUTATION-SURVIVORS.md.
-# Lowered when a survivor is killed, never raised to let a new one through without a line in
-# docs/QUALITY.md.
+# The survivor ceiling scripts/mutation_gate.py enforces: the 99 judged after run 8 (CI 44522301960),
+# plus the 7 behaviour-identical survivors of run 9 (CI 44688906150), each judged in
+# docs/MUTATION-SURVIVORS.md. Lowered when a survivor is killed, never raised to let a new one
+# through without a line in docs/QUALITY.md.
 [tool.mutation-gate]
-ceiling = 99
+ceiling = 106

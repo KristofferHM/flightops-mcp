@@ -92,7 +92,7 @@ money answer, or a stale board reported as live, and nowhere else.
 |---|---|
 | Tool | `mutmut` 3.8. It records which tests run each function and runs only those per mutant, in a forked process, so this scope takes minutes. `cosmic-ray` reruns the whole test command per mutant, which here would be hours. |
 | Scope | `src/flightops_mcp/auth/*`, `src/flightops_mcp/credits.py`, `agent/approval.py`, `dashboard/board.py` |
-| Tests | the 18 files in `[tool.mutmut]` in `pyproject.toml`, with the derandomized `mutation` hypothesis profile |
+| Tests | the 22 files in `[tool.mutmut]` in `pyproject.toml`, with the derandomized `mutation` hypothesis profile |
 | Where | the `mutation` CI job, Linux only (mutmut forks per mutant; Windows has no fork) |
 | Budget | `timeout 35m` on the run, 45 minutes on the job. Run 7 took 6 min 10 s. |
 | Gate | `scripts/mutation_gate.py`: fails above `[tool.mutation-gate] ceiling`, on any mutant left unchecked (a run cut short is a lower bound, not a pass), and on zero mutants. A second step proves a ceiling one lower fails, over the same complete results. |
@@ -115,6 +115,7 @@ property of the agent module worth guarding, that the grant is kept out of `repr
 | 6 ([44395175602](https://github.com/KristofferHM/flightops-mcp/actions/runs/44395175602)) | 2293 | 2188 | 105 | after `tests/test_board_views.py` |
 | 7 ([44397823805](https://github.com/KristofferHM/flightops-mcp/actions/runs/44397823805)) | 2293 | 2193 | **100** | five more missing tests; the ceiling is 100 |
 | 8 ([44522301960](https://github.com/KristofferHM/flightops-mcp/actions/runs/44522301960)) | 2720 | 2609 | 111 | new board display code: 12 missing tests over the ceiling (docs/MUTATION-SURVIVORS.md) |
+| 9 ([44688906150](https://github.com/KristofferHM/flightops-mcp/actions/runs/44688906150)) | 3195 | 2892 | 303 | the aircraft branch: its test file was not in the selection (151 of the 204 new survivors die once it is), four functions had no caller; ceiling 106 (docs/MUTATION-SURVIVORS.md) |
 
 ### What the self-test costs
 
@@ -184,15 +185,21 @@ future-tolerance boundary in the badge, an undated METAR outranking a dated one,
 that cannot show on a UTC host. There, unlike in the refusals below, the words are the behaviour, so
 `tests/test_board_views.py` asserts whole views.
 
-### The 100 that remain
+### The 106 that remain
 
 All of them are judged in `docs/MUTATION-SURVIVORS.md`. 58 are prose: the wording or case of a message or
 hint. A test asserts that every refusal *has* a message and a hint; pinning the words would make a test
-that breaks on every edit. The other 42 are behaviour-identical: header-name case, which HTTP ignores;
+that breaks on every edit. The other 48 are behaviour-identical: header-name case, which HTTP ignores;
 logger names, which are not rendered; defaults for absent claims; a `>= 400` after the branch that took
-400; the cache fast path that the locked path repeats; the ten in `dashboard/board.py`; and the rest listed
-there. The ceiling is 100: the earlier 90 plus those ten. It goes down when one of these is killed, and it
-does not go up without a row in that file.
+400; the cache fast path that the locked path repeats; sixteen in `dashboard/board.py`; and the rest listed
+there. The ceiling was 100: the earlier 90 plus those ten, then 99 when one moved and was killed. Run 9 added
+seven, each behaviour-identical and argued in that file; one of them, `root-clamp`, rests on evidence rather than
+proof, and says so. The ceiling is 106. It goes down when one of these is killed, and it does not go up without
+a row in that file.
+
+**A test file outside the selection is a test that does not exist, for this gate.** Run 9's 303 survivors were
+mostly that: the aircraft branch's tests were written, passed, and were never run against a mutant. When a test
+file is added for code in the mutation scope, it goes into `[tool.mutmut]` in the same commit.
 
 ## 4. Secret and dependency scans
 
