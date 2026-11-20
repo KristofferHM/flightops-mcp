@@ -19,6 +19,7 @@ geometry, and it says so:
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Collection, Sequence
 from typing import Any, Final
 
@@ -26,6 +27,7 @@ from flightops_mcp.airports import haversine_nm
 from flightops_mcp.opensky import TRACK_COST
 
 from .aircraft import MS_TO_KT, airline, bearing_deg
+from .operator import UNKNOWN
 
 Payload = dict[str, Any]
 
@@ -197,6 +199,9 @@ def inbound_view(
         "board": "asked" if asked else "not_asked",
         "board_text": None if asked else BOARD_NOT_ASKED,
         "aircraft": drawn,
+        # Over every candidate, not only the drawn: the page's class filter says how many it
+        # hides from these, and the nearest few would undercount it.
+        "classes": dict(Counter(row.get("operator_class") or UNKNOWN for row in picked)),
         "price": price(len(drawn)),
     }
 

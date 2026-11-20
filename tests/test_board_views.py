@@ -14,11 +14,34 @@ from typing import Any
 
 import pytest
 
-from dashboard import board
+from dashboard import board, operator
 
 NOW = int(datetime(2026, 11, 14, 23, 30, tzinfo=UTC).timestamp())
 LIMIT = board.METAR_STALE_AFTER_S
 FRESHNESS = {"most_recent_only": True, "time_resolution_s": 10}
+
+
+def classes(airlines: int) -> dict[str, Any]:
+    """The chips' counts for a layer of `airlines` SAS aircraft, graded callsign only."""
+    return {
+        "all": airlines,
+        "counts": {
+            "airline": airlines,
+            "general aviation": 0,
+            "military": 0,
+            "unknown": 0,
+        },
+        "labels": {
+            "airline": "Airline",
+            "general aviation": "GA",
+            "military": "Military",
+            "unknown": "Unknown",
+        },
+        "classification": "callsign only",
+        "classification_text": operator.GRADE_TEXT,
+    }
+
+
 ENTRY = {
     "icao24": "abc123",
     "callsign": "SAS1",
@@ -31,6 +54,9 @@ ENTRY = {
 DRAWN = {
     "icao24": "abc123",
     "callsign": "SAS1",
+    # From the callsign alone: OpenSky sends no aircraft type.
+    "operator_class": "airline",
+    "class_evidence": "callsign SAS1",
     "latitude": 57.7,
     "longitude": 12.3,
     "on_ground": False,
@@ -232,6 +258,7 @@ def test_a_traffic_answer_in_full(
         "credentials": "anonymous",
         "freshness": FRESHNESS,
         "aircraft": aircraft,
+        "operator_classes": classes(len(aircraft)),
         "unknowns": ["gap"],
     }
 
@@ -257,6 +284,7 @@ def test_a_failed_traffic_call_in_full() -> None:
         "credentials": "none",
         "freshness": None,
         "aircraft": [],
+        "operator_classes": None,
         "unknowns": ["Refused."],
     }
 
@@ -314,6 +342,7 @@ def test_an_airspace_answer_in_full(
         "snapshot_epoch": NOW,
         "upstream_epoch": NOW,
         "aircraft": aircraft,
+        "operator_classes": classes(len(aircraft)),
         "unknowns": ["gap"],
     }
 
@@ -328,6 +357,7 @@ def test_a_failed_airspace_call_in_full() -> None:
         "snapshot_epoch": 0,
         "upstream_epoch": 0,
         "aircraft": [],
+        "operator_classes": None,
         "unknowns": ["Refused."],
     }
 

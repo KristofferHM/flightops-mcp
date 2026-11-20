@@ -525,6 +525,7 @@ def test_a_refused_layer_draws_nothing_and_claims_no_time() -> None:
         "snapshot_epoch": 0,
         "upstream_epoch": 0,
         "aircraft": [],
+        "operator_classes": None,
         "unknowns": ["Stopped."],
         "refused": "Stopped.",
     }

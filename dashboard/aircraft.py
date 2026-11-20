@@ -17,28 +17,25 @@ secondary. Every decision is here, where a test can hold it:
 
 from __future__ import annotations
 
-import csv
-import functools
 import math
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Final, Literal
 
 from flightops_mcp.airports import haversine_nm
 from flightops_mcp.opensky import AIRCRAFT_FLIGHTS_COST
 
 from . import board
+from .operator import airline_table
 
 Payload = dict[str, Any]
 Sort = Literal["distance", "altitude", "callsign", "last_heard", "speed"]
 Band = Literal["low", "mid", "high"]
 Phase = Literal["airborne", "ground"]
 
-AIRLINE_TABLE: Final = Path(__file__).parent / "data" / "airlines.csv"
 # An ICAO flight identification: a three-letter operator designator, then a flight
 # number that starts with a digit. `RYR` alone is the designator with no number.
 CALLSIGN: Final = re.compile(r"([A-Z]{3})(\d[A-Z0-9]{0,3})?")
@@ -80,13 +77,6 @@ NM_PER_KM: Final = 1 / 1.852
 
 
 # --- the airline, derived from the callsign ------------------------------------------
-@functools.cache
-def airline_table(path: Path = AIRLINE_TABLE) -> dict[str, tuple[str, str]]:
-    """ICAO designator -> (name, country). Read once. See dashboard/data/README.md."""
-    with path.open(encoding="utf-8", newline="") as handle:
-        return {row["designator"]: (row["name"], row["country"]) for row in csv.DictReader(handle)}
-
-
 def designator(callsign: object) -> str | None:
     """The ICAO airline designator a callsign starts with, or None if it is not one.
 
@@ -339,6 +329,14 @@ def _airline_text(callsign: object) -> str:
     return f"{derived['name']} ({derived['designator']}, {derived['country']}), from the callsign"
 
 
+def _class_text(entry: Payload) -> str:
+    """`general aviation (callsign SE-MOY)`. The evidence is the point: it can be argued with."""
+    found = entry.get("operator_class")
+    if found is None:
+        return "not classified"
+    return f"{found} ({entry.get('class_evidence') or 'nothing matched'})"
+
+
 def _row_text(label: str, text: str, mono: bool = False) -> Payload:
     return {"label": label, "text": text, "mono": mono}
 
@@ -358,6 +356,7 @@ def aircraft_rows(entry: Payload, origin: Payload | None) -> list[Payload]:
     rows = [
         _row_text("Callsign", (entry.get("callsign") or "").strip() or "not sent", mono=True),
         _row_text("Airline", _airline_text(entry.get("callsign"))),
+        _row_text("Class", _class_text(entry)),
         _row_text("ICAO24", str(entry.get("icao24") or ""), mono=True),
         _row_text("Altitude", altitude_text),
         _row_text(

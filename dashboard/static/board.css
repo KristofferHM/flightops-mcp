@@ -265,6 +265,12 @@ a { color: var(--amber); }
   font-size: 13px;
 }
 .aircraft-tools .note { margin-top: 6px; font-family: var(--font-mono); }
+/* Who is flying. A chip filters what is drawn; its count describes the region. */
+.chips { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-row button { min-height: 32px; padding: 3px 10px; font-size: 13px; }
+.chip-row button[aria-pressed="true"] { color: var(--void); background: var(--amber); border-color: var(--amber); font-weight: 600; }
+.chips .note:empty { display: none; }
 .note.warn { color: var(--amber); }
 .note.warn:empty { display: none; }
 

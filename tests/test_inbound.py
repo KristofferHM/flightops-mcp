@@ -597,7 +597,7 @@ def test_approaching_aircraft_rise_above_the_others_and_the_lit_one_thickens() -
     lines = body("drawInbound")
 
     assert "!approaching.has(aircraft.icao24)" in draw
-    assert draw.index("state.airspace.forEach") < draw.index("drawInbound(path);")
+    assert draw.index("drawn.forEach") < draw.index("drawInbound(path);")
     assert "context.arc(point.at[0], point.at[1], INBOUND_RING_PX" in lines
     assert "const extra = lit === aircraft.icao24 ? LIT_EXTRA : 0;" in lines
     assert "context.globalAlpha = lit && !extra ? FADED : 0.85;" in lines

@@ -252,6 +252,43 @@ two live snapshots used to choose the table (Europe and North America, 2026-11-1
 
 The rest show their three letters: mostly business, cargo, charter and military operators.
 
+### Who is flying
+
+`dashboard/operator.py` gives every aircraft an `operator_class` and a `class_evidence`, the rule that decided, which
+the inspector prints beside the airline (`general aviation (callsign SE-MOY)`). The vocabulary:
+
+| Class | Rule | Evidence |
+|---|---|---|
+| military | a designator in `data/operator_designators.csv`, then a flight number | `callsign RCH4521` |
+| airline | a designator in `data/airlines.csv`, then a flight number | `callsign SAS1396` |
+| general aviation | a registration in its country's shape (`SEMOY`, `GABCD`, `N12345`, `CFABC`) | `callsign SE-MOY` |
+| unknown | nothing above | `nothing matched` |
+
+The rules run in that order and the first that matches decides. **The grade is `callsign only`, always.** OpenSky's
+`states/all` carries no aircraft type and no emitter category, so the callsign is the only evidence. Every layer says so
+in `operator_classes.classification`, and the page prints `classification_text` under the chips. What this grade can
+claim: an airline-shaped callsign under a known designator, a registration, an air force. What it cannot claim:
+
+* A business jet under an operator's designator reads as an airline (`NJE123`, NetJets).
+* A helicopter, a glider or a business jet under its registration reads as general aviation.
+* A ground transmitter that broadcasts a callsign (`TWR`) cannot be told from an aircraft. It is classed unknown,
+  which claims nothing, rather than left out on a guess.
+* **No promotion.** A designator neither table holds stays unknown (`DOC05`, an air-ambulance helicopter in fact). It
+  is never guessed into a class because the operator sounds like one.
+
+**The chips.** A row above the map, `All n · Airline n · GA n · Military n · Unknown n`, with a chip only for a class
+present in the region. The counts are `operator_classes`, computed over the whole held
+layer, so they describe the region, not the view: neither a chip, the cap nor the filters on the right move them.
+Choosing a chip is a render decision, like the unknown toggle. It is never sent to the server, no route takes it, and
+no payload field changes (`test_filtering_by_class_changes_no_payload_field`). It applies to the map, the globe, the
+Focus list and the approaching list together. When fewer of a class are drawn than the region holds, the note under the
+chips says so, because then the cap and the filters decided, not the class.
+
+The approaching list says what the chip hides: `4 more approaching, hidden by the filter`. That count is taken from
+`inbound.classes`, which counts every candidate the server found, not only the nearest few it sends, which would
+undercount it. The choice is kept in `sessionStorage` for the tab's session and dropped when the region changes, because
+the chips count the old region's sky.
+
 ### Clutter and frame time, measured
 
 `node scripts/measure_frames.mjs` serves the real page over 1,202 synthetic aircraft, sets the cap, and drags each

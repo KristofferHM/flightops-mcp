@@ -168,6 +168,12 @@ async function walk(browser, viewport, servers, passcode) {
   await page.locator("#traffic-cost", { hasText: "This session" }).waitFor();
   await inspect(page, viewport, "airport selected, traffic on");
 
+  // A class chip pressed: its filled style is scanned too, then the filter is let go.
+  await page.locator("#class-chips button").nth(1).click();
+  await page.locator("#class-chips button[aria-pressed='true']").nth(0).waitFor();
+  await inspect(page, viewport, "class filter chosen");
+  await page.locator("#class-chips button").first().click();
+
   // Every new control is reached by Tab, in the page's own order.
   await page.locator("#a-selection", { hasText: "showing" }).waitFor();
   await page.locator("#unknown-on").focus();
