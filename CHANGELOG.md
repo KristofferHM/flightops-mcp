@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`aircraft_track`**: one aircraft's observed path from OpenSky `/tracks/all` (4 credits, its own bucket,
+  measured), and on request OpenSky's ADS-B arrival estimate from `/flights/aircraft` (30 credits, measured,
+  client credentials only), given only for a record of the observed flight. `destination` is always
+  `no_source`. Scope `traffic.read`, cached 60 s, two eval scenarios; baseline 70/70.
+- **Aircraft on the board, in both projections.** On the globe each aircraft is lifted by its altitude
+  (12 km = 3.5 % of the radius) on a stem to its ground point, and culled by the airports' far-side test. A
+  missing altitude is drawn hollow and sorts last, never as 0. Sort (distance, altitude, callsign, last heard,
+  speed), filters (airport + radius, derived airline, altitude band, airborne/ground, callsign), a deterministic
+  cap (default 200) that says what it left out, focus with a trail of positions heard while the page is open,
+  the transit drawn along great circles, and follow mode that lets go by itself and says why. All decisions in
+  `dashboard/aircraft.py`; re-selecting reads the held layer and spends nothing.
+- **A legible wide view.** Weather is asked for the 600 airports nearest the centre of the view, not the whole
+  region; airports without a report arrive trimmed to code, name and place, and are hidden at wide zoom by a
+  remembered toggle whose hidden count is always shown; below zoom 4 airports are clustered in 10°, 5° and 2.5°
+  cells by majority category with a badge for a worse one. A live world poll fell from 900 KB to 173 KB
+  (24 KB gzipped) and draws 30–56 markers at zoom 1. Airport codes no longer overlap.
+- `dashboard/data/airlines.csv`: 163 ICAO designators, compiled by hand, naming 81.9 % of airline-shaped
+  callsigns over two live snapshots. `scripts/measure_frames.mjs` measures clutter and frame time.
+
+### Fixed
+- The page's first poll now waits for the first frame, so it asks about the view on screen instead of a default.
 - **The protocol surface around the tools** (`docs/PROTOCOL.md`). Every tool carries annotations from a closed
   table (`annotations.py`); a tool without an entry fails registration, as one without a scope does.
   `propose_rebooking` is `destructiveHint: true, idempotentHint: true`; the rest are `readOnlyHint: true`.

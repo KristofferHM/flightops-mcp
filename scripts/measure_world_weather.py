@@ -3,7 +3,10 @@
 `PYTHONPATH=. uv run python scripts/measure_world_weather.py [--region world] [--log FILE]`
 
 It builds the board exactly as `python -m dashboard` does, asks for one snapshot, and
-counts what reached aviationweather.gov through a transport that only observes. The
+counts what reached aviationweather.gov through a transport that only observes. Since the
+board asks only for the airports nearest the view (`board.WEATHER_LOOKUP_CAP`), one poll
+measures that many; each airport's line is read from the board's list, which keeps the
+reason that the map's trimmed entry leaves out. The
 numbers in `docs/DASHBOARD.md` ("Weather requests, measured") come from this script.
 It prints no response bodies: a request's status, its id count and its latency are
 enough to tell a batch limit from a rate limit.
@@ -96,10 +99,17 @@ async def measure(
         started = time.perf_counter()
         snapshot = await service.snapshot(region)
         wall = time.perf_counter() - started
+        asked = {a["icao"] for a in snapshot["airports"]}
+        total = service.airport_list(region, "", 0, 1)["total"]
+        listed = [
+            item
+            for offset in range(0, total, 50)
+            for item in service.airport_list(region, "", offset, 50)["items"]
+        ]
     finally:
         await runtime.aclose()
         set_runtime(None)
-    airports = snapshot["airports"]
+    airports = [item for item in listed if item["icao"] in asked]
     kinds = Counter(classify(a["weather"]) for a in airports)
     failures = Counter(
         a["weather"]["summary"]
@@ -109,6 +119,7 @@ async def measure(
     return {
         "region": region,
         "airports": len(airports),
+        "region_airports": total,
         "requests": len(transport.log),
         "statuses": dict(Counter(str(entry["status"]) for entry in transport.log)),
         "wall_s": round(wall, 1),

@@ -50,7 +50,9 @@ _ERRORS: Final[dict[str, type[httpx.TransportError]]] = {
 }
 _SECTIONS: Final[dict[str, frozenset[str]]] = {
     "weather": frozenset({"metar", "taf"}),
-    "opensky": frozenset({"credentials", "token", "states", "arrival", "departure"}),
+    "opensky": frozenset(
+        {"credentials", "token", "states", "arrival", "departure", "tracks", "flights"}
+    ),
     "schiphol": frozenset({"credentials", "token", "flights"}),
     "ops": frozenset({"manifests", "seats", "passengers", "rebookings"}),
 }
@@ -89,6 +91,8 @@ def build(fixture: Mapping[str, Any]) -> tuple[Upstreams, Manifests | None]:
             _response(opensky, "states"),
             _response(opensky, "arrival"),
             _response(opensky, "departure"),
+            _response(opensky, "tracks"),
+            _response(opensky, "flights"),
         ),
         opensky_token=_response(opensky, "token") or defaults.opensky_token,
         opensky_credentials=credentials,
@@ -144,9 +148,20 @@ def _weather(metar: Respond | None, taf: Respond | None) -> Respond:
     return handler
 
 
-def _opensky(states: Respond | None, arrival: Respond | None, departure: Respond | None) -> Respond:
+def _opensky(
+    states: Respond | None,
+    arrival: Respond | None,
+    departure: Respond | None,
+    tracks: Respond | None = None,
+    flights: Respond | None = None,
+) -> Respond:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        # OpenSky's documented answer for "nothing for this aircraft" on both is 404.
+        if path.endswith("/tracks/all"):
+            return tracks(request) if tracks else httpx.Response(404)
+        if path.endswith("/flights/aircraft"):
+            return flights(request) if flights else httpx.Response(404)
         if path.endswith("/flights/arrival"):
             return arrival(request) if arrival else httpx.Response(200, json=[])
         if path.endswith("/flights/departure"):

@@ -204,12 +204,9 @@ async def test_the_board_shows_the_line_and_keeps_the_marker_and_banner() -> Non
     esgt = by_code["ESGT"]
     assert esgt["weather"]["summary"].startswith("No report at ESGT — ESGG (18 nm away)")
     assert esgt["weather"]["neighbour"]["icao"] == "ESGG"
-    assert esgt["marker"] == {
-        "kind": "unknown",
-        "category": None,
-        "label": "Unknown",
-        "scope": "weather",
-    }
+    # Still Unknown on the map: a trimmed entry carries no marker, only the line.
+    assert "marker" not in esgt
+    assert by_code["ESGG"]["marker"]["category"] == "VFR"
     assert by_code["ESGG"]["weather"]["neighbour"] is None
     # The banner counts airports with their own report: one, not two.
     assert snapshot["banner"]["label"] == "LIVE: 1 of 2 with a current METAR"
@@ -252,5 +249,6 @@ async def test_a_later_snapshot_withdraws_a_line_that_no_longer_holds() -> None:
     snapshot = await service.snapshot("europe")
 
     esgt = next(a for a in snapshot["airports"] if a["icao"] == "ESGT")
-    assert esgt["weather"] == {"summary": "Unknown: no METAR returned", "neighbour": None}
+    # No line, so nothing but the airport itself.
+    assert set(esgt) == {"icao", "name", "latitude", "longitude"}
     assert service.airport_list("europe", "ESGT")["items"][0]["weather"]["neighbour"] is None

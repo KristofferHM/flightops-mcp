@@ -22,7 +22,7 @@ async def test_the_data_scenario_is_a_live_board_with_every_marker_kind() -> Non
     assert board["banner"]["mode"] == "LIVE"
     assert board["last_update"]["lines"][0]["text"] == "Last update 4 min ago"
     assert len(board["airports"]) > 1
-    categories = {airport["marker"]["category"] for airport in board["airports"]}
+    categories = {(a.get("marker") or {}).get("category") for a in board["airports"]}
     assert {"VFR", None} <= categories
 
 
@@ -33,7 +33,7 @@ async def test_the_empty_scenario_is_the_no_data_yet_state() -> None:
     assert board["banner"]["mode"] == "NO DATA"
     assert board["last_update"]["state"] == "no_data"
     assert board["last_update"]["lines"][0]["text"] == "no data yet"
-    assert {airport["marker"]["kind"] for airport in board["airports"]} == {"unknown"}
+    assert not any("marker" in airport for airport in board["airports"])
 
 
 async def test_the_no_time_scenario_claims_no_age() -> None:
@@ -51,7 +51,7 @@ async def test_the_no_time_scenario_claims_no_age() -> None:
             }
         ],
     }
-    assert {airport["marker"]["kind"] for airport in board["airports"]} == {"unknown"}
+    assert not any("marker" in airport for airport in board["airports"])
 
 
 async def test_a_selected_airport_has_weather_and_traffic() -> None:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import random
 import sys
 import tempfile
 import threading
@@ -29,7 +30,7 @@ from dashboard.app import create_app
 from dashboard.gate import LOCAL_BIND, Gate
 from dashboard.service import BoardService
 from flightops_mcp.config import Settings
-from flightops_mcp.server import AIRSPACE_COLUMNS
+from flightops_mcp.server import AIRSPACE_COLUMNS, DESTINATION_NO_SOURCE, WAYPOINT_COLUMNS
 
 Payload = dict[str, Any]
 
@@ -47,9 +48,13 @@ class SyntheticSource:
 
     recorded_at: None = None
 
-    def __init__(self, scenario: str, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self, scenario: str, clock: Callable[[], float] = time.time, aircraft: int = 0
+    ) -> None:
         self._scenario = scenario
         self._clock = clock
+        # Extra synthetic aircraft for measuring clutter and frame time (docs/DASHBOARD.md).
+        self._extra = aircraft
 
     def _as_of(self) -> str:
         return datetime.fromtimestamp(self._clock(), UTC).isoformat()
@@ -118,10 +123,11 @@ class SyntheticSource:
 
     def _airspace(self) -> Payload:
         heard = int(self._clock()) - 20
-        rows = [
+        rows: list[list[Any]] = [
             ["4ca1f2", "TEST1", 57.7, 12.3, 3000.0, False, 200.0, 90.0, heard],
             ["4ca1f3", "TEST2", 52.3, 4.8, 9000.0, False, 230.0, 180.0, heard],
         ]
+        rows.extend(self._crowd(heard))
         return {
             "ok": True,
             "upstream_time_epoch": self._upstream_time(),
@@ -132,6 +138,59 @@ class SyntheticSource:
             "columns": list(AIRSPACE_COLUMNS),
             "rows": rows,
             "bookkeeping": {"credits_spent": 4},
+            "unknowns": [],
+        }
+
+    def _crowd(self, heard: int) -> list[list[Any]]:
+        """`--aircraft` more, seeded, over Europe, with every gap the real feed has."""
+        rng = random.Random(1183)  # noqa: S311 - a seeded fixture, not a secret
+        prefixes = ("SAS", "NOZ", "RYR", "DLH", "BAW", "QQQ")
+        rows = []
+        for n in range(self._extra):
+            altitude = None if n % 11 == 0 else round(rng.uniform(0, 12_000))
+            rows.append(
+                [
+                    f"{0x500000 + n:06x}",
+                    f"{prefixes[n % len(prefixes)]}{100 + n}",
+                    round(rng.uniform(36, 70), 4),
+                    round(rng.uniform(-20, 40), 4),
+                    altitude,
+                    n % 17 == 0,
+                    round(rng.uniform(60, 260), 1),
+                    None if n % 23 == 0 else round(rng.uniform(0, 360)),
+                    heard - rng.randint(0, 150),
+                ]
+            )
+        return rows
+
+    def _track(self, icao24: str, estimate: bool) -> Payload:
+        """A transit of eight waypoints ending where the aircraft is, no estimate on record."""
+        now = int(self._clock())
+        path = [
+            [now - 3600 + 450 * n, 55.0 + n * 0.35, 8.0 + n * 0.6, 9000.0, 40.0, False]
+            for n in range(8)
+        ]
+        return {
+            "ok": True,
+            "upstream_time_epoch": self._upstream_time(),
+            "icao24": icao24,
+            "transit": {
+                "state": "observed",
+                "callsign": "TEST1",
+                "columns": list(WAYPOINT_COLUMNS),
+                "waypoints": path,
+                "first_waypoint_epoch": path[0][0],
+                "last_waypoint_epoch": path[-1][0],
+                "received": len(path),
+                "unreadable": 0,
+            },
+            "estimated_arrival": (
+                {"state": "no_record_for_this_flight", "previous_flight": None}
+                if estimate
+                else {"state": "not_requested"}
+            ),
+            "destination": {"state": "no_source", "text": DESTINATION_NO_SOURCE},
+            "bookkeeping": {"credits_spent": 34 if estimate else 4},
             "unknowns": [],
         }
 
@@ -209,6 +268,9 @@ class SyntheticSource:
             "weather_overview": lambda: self._overview(arguments["airports"]),
             "airspace_snapshot": self._airspace,
             "disruption_triage": lambda: self._triage(arguments["airport"]),
+            "aircraft_track": lambda: self._track(
+                arguments["icao24"], bool(arguments.get("estimate_arrival"))
+            ),
         }
         if tool in answers:
             return answers[tool]()
@@ -231,8 +293,8 @@ def listed_airports() -> list[Payload]:
         return load_airports(settings, WORLD_CSV)
 
 
-def build_app(scenario: str, passcode: str | None) -> FastAPI:
-    service = BoardService(SyntheticSource(scenario), listed_airports())
+def build_app(scenario: str, passcode: str | None, aircraft: int = 0) -> FastAPI:
+    service = BoardService(SyntheticSource(scenario, aircraft=aircraft), listed_airports())
     return create_app(service, Gate(passcode))
 
 
@@ -246,9 +308,10 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenario", choices=SCENARIOS, required=True)
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--aircraft", type=int, default=0, help="extra synthetic aircraft")
     args = parser.parse_args(argv)
     threading.Thread(target=_exit_when_parent_closes_stdin, daemon=True).start()
-    app = build_app(args.scenario, os.environ.get("A11Y_PASSCODE"))
+    app = build_app(args.scenario, os.environ.get("A11Y_PASSCODE"), args.aircraft)
     uvicorn.run(app, host=LOCAL_BIND, port=args.port, log_level="warning")
 
 

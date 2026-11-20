@@ -8,20 +8,28 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import Annotated, Any, Final
+from pathlib import Path as FilePath
+from typing import Annotated, Any, Final, Literal
 from urllib.parse import parse_qs, urlsplit
 
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from .aircraft import CAPS, DEFAULT_CAP, RADII_NM, Selection
 from .board import MAX_SNAPSHOT_EPOCH
 from .gate import COOKIE_NAME, LOCAL_HOSTS, SESSION_TTL_S, Gate, host_name
-from .service import DEFAULT_REGION, LIST_PAGE, LIST_PAGE_MAX, BoardService, UnknownBoardItem
+from .service import (
+    DEFAULT_REGION,
+    LIST_PAGE,
+    LIST_PAGE_MAX,
+    BoardService,
+    UnknownBoardItem,
+    View,
+)
 
-STATIC: Final = Path(__file__).parent / "static"
+STATIC: Final = FilePath(__file__).parent / "static"
 MAX_LOGIN_BODY: Final = 4096
 OPEN_PATHS: Final = frozenset({"/login", "/login.css", "/healthz", "/favicon.ico"})
 # Everything is served from here. This is also what keeps a CDN from creeping back in:
@@ -157,11 +165,19 @@ def create_app(
 
     @app.get("/api/board")
     async def api_board(
+        *,
         region: Annotated[str, Query(max_length=32)] = DEFAULT_REGION,
         traffic_snapshot: Annotated[int | None, Query(ge=0, le=MAX_SNAPSHOT_EPOCH)] = None,
         traffic_upstream: Annotated[int | None, Query(ge=0, le=MAX_SNAPSHOT_EPOCH)] = None,
+        lat: Annotated[float | None, Query(ge=-90, le=90)] = None,
+        lon: Annotated[float | None, Query(ge=-180, le=180)] = None,
+        radius: Annotated[float | None, Query(gt=0, le=180)] = None,
     ) -> dict[str, Any]:
-        return await service.snapshot(region, traffic_snapshot, traffic_upstream)
+        # A view needs all three figures; a partial one is ignored, not guessed at.
+        view = None
+        if lat is not None and lon is not None and radius is not None:
+            view = View(lat, lon, radius)
+        return await service.snapshot(region, traffic_snapshot, traffic_upstream, view)
 
     @app.get("/api/airports")
     async def api_airports(
@@ -180,9 +196,64 @@ def create_app(
     async def api_triage(icao: str) -> dict[str, Any]:
         return await service.triage(icao)
 
-    @app.get("/api/traffic/{region}")
-    async def api_traffic(region: str) -> dict[str, Any]:
-        return await service.airspace(region)
-
+    _traffic_routes(app, service)
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app
+
+
+def _selection(
+    request: Request,
+    *,
+    airport: Annotated[str | None, Query(max_length=8)] = None,
+    radius_nm: int | None = None,
+    airline: Annotated[str | None, Query(pattern="^[A-Z]{3}$")] = None,
+    band: Literal["low", "mid", "high"] | None = None,
+    phase: Literal["airborne", "ground"] | None = None,
+    q: Annotated[str, Query(max_length=16)] = "",
+    sort: Literal["distance", "altitude", "callsign", "last_heard", "speed"] = "distance",
+    cap: int = DEFAULT_CAP,
+    focus: Annotated[str | None, Query(pattern="^[0-9a-f]{6}$")] = None,
+) -> Selection:
+    """The reader's aircraft choices, from the query string, checked against the board."""
+    # Only the choices the page offers, so a query string cannot ask for more.
+    if (radius_nm is not None and radius_nm not in RADII_NM) or cap not in CAPS:
+        raise HTTPException(422, f"radius_nm must be one of {RADII_NM}, cap one of {CAPS}")
+    service: BoardService = request.app.state.board_service
+    return service.selection(
+        airport,
+        radius_nm=float(radius_nm) if radius_nm is not None else None,
+        airline=airline,
+        band=band,
+        phase=phase,
+        query=q,
+        sort=sort,
+        cap=cap,
+        focus=focus,
+    )
+
+
+# Module level, because annotations here are strings resolved against this module.
+Chosen = Annotated[Selection, Depends(_selection)]
+
+
+def _traffic_routes(app: FastAPI, service: BoardService) -> None:
+    """The traffic layer: one route that spends, two that read what it holds."""
+    app.state.board_service = service
+
+    @app.get("/api/traffic/{region}")
+    async def api_traffic(region: str, choice: Chosen) -> dict[str, Any]:
+        """A refresh: spends credits, within the layer's ceiling."""
+        return await service.airspace(region, choice)
+
+    @app.get("/api/traffic/{region}/selection")
+    async def api_traffic_selection(region: str, choice: Chosen) -> dict[str, Any]:
+        """The held layer under new choices. Spends nothing."""
+        return service.reselect(region, choice)
+
+    @app.get("/api/traffic/{region}/aircraft/{icao24}/track")
+    async def api_track(
+        region: str,
+        icao24: Annotated[str, Path(pattern="^[0-9a-fA-F]{6}$")],
+        estimate: bool = False,
+    ) -> dict[str, Any]:
+        return await service.track(region, icao24, estimate=estimate)

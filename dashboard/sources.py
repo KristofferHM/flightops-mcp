@@ -34,6 +34,7 @@ LIVE_TOOLS: Final[Mapping[str, Tool]] = {
     "weather_overview": srv.weather_overview,
     "airport_live_traffic": srv.airport_live_traffic,
     "airspace_snapshot": srv.airspace_snapshot,
+    "aircraft_track": srv.aircraft_track,
     "disruption_triage": srv.disruption_triage,
     "upstream_status": srv.upstream_status,
 }

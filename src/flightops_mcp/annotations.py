@@ -43,6 +43,7 @@ TOOL_ANNOTATIONS: Final[Mapping[str, ToolAnnotations]] = {
     "airport_live_traffic": _read("Live traffic near an airport", open_world=True),
     "airport_movements": _read("Airport arrivals and departures", open_world=True),
     "airspace_snapshot": _read("Regional airspace snapshot", open_world=True),
+    "aircraft_track": _read("One aircraft's observed path", open_world=True),
     "disruption_triage": _read("Airport disruption triage", open_world=True),
     "schiphol_flights": _read("Schiphol published schedule", open_world=True),
     "flight_passenger_impact": _read("Passenger impact counts", open_world=True),

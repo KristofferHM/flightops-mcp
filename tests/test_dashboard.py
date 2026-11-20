@@ -226,9 +226,9 @@ async def test_no_metar_and_no_aircraft_never_renders_as_weather(
     triage = (await open_board.post("/api/airport/ESGG/triage")).json()
 
     (airport,) = overview["airports"]
-    assert airport["marker"]["kind"] == "unknown"
-    assert airport["marker"]["category"] is None
-    assert airport["marker"]["label"] == "Unknown"
+    # Without a report the map gets the airport and nothing that could pass for weather.
+    assert set(airport) == {"icao", "name", "latitude", "longitude"}
+    assert overview["hidden"]["text"] == "1 hidden — no report heard"
     assert overview["banner"] == {"mode": "NO DATA", "label": "NO DATA"}
     assert detail["traffic"]["summary"] == "none heard, coverage not proven"
     assert detail["movements"]["arrivals"] == "not requested"
@@ -251,8 +251,9 @@ def test_the_page_can_only_colour_the_four_categories() -> None:
         "IFR",
         "LIFR",
     ]
-    assert 'airport.marker.kind === "weather" ? CATEGORY' in script
-    assert "drawUnknown(x, y, UNKNOWN_RADIUS * scale)" in script
+    assert 'airport.marker && airport.marker.kind === "weather" ? airport.marker.category' in script
+    # Anything without one of the four categories falls through to the dashed ring.
+    assert "if (!style) { drawUnknown(x, y, r); return; }" in script
 
 
 def test_movement_and_triage_views_cover_their_failures() -> None:

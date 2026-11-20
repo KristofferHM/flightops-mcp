@@ -35,6 +35,12 @@ DRAWN = {
     "longitude": 12.3,
     "on_ground": False,
     "track": 90.0,
+    # Not in the answer, so not known: never 0.
+    "altitude_m": None,
+    "velocity_ms": None,
+    "lift": None,
+    "last_contact": NOW - 30,
+    "heard_utc": "23:29:30Z",
     "age_s": 30,
     "fade": 0.75,
 }

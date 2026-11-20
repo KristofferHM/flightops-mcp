@@ -27,16 +27,16 @@ harness from `evals/baseline.json`; nobody edits it.
 <!-- evals:begin -->
 <!-- Written by the harness from evals/baseline.json. Do not edit: CI fails if this block and the baseline disagree. -->
 
-**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-19; **Scenarios:** 68
+**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-19; **Scenarios:** 70
 
 | Axis | Passed | Applies to | Score |
 |---|---:|---:|---:|
-| Tool selection | 68 | 68 | 100.00 % |
-| Argument validity | 64 | 64 | 100.00 % |
-| Refusal correctness | 22 | 22 | 100.00 % |
+| Tool selection | 70 | 70 | 100.00 % |
+| Argument validity | 66 | 66 | 100.00 % |
+| Refusal correctness | 23 | 23 | 100.00 % |
 | No hallucination | 24 | 24 | 100.00 % |
-| Outcome (answer class, writes) | 68 | 68 | 100.00 % |
-| **Scenarios passing every check that applies** | 68 | 68 | 100.00 % |
+| Outcome (answer class, writes) | 70 | 70 | 100.00 % |
+| **Scenarios passing every check that applies** | 70 | 70 | 100.00 % |
 
 Absent-evidence group (answering confidently when the evidence is not there): **24 scenarios** over 9 kinds: `empty_result` 5, `malformed_payload` 3, `partial_coverage` 3, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 3, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
 
@@ -150,6 +150,7 @@ Five upstreams, four auth models. The tools do not care which; the governance la
 | `airport_live_traffic` | `traffic.read` | OpenSky `/states/all` | 1–4 credits | public, 10 s |
 | `airport_movements` | `traffic.read` | OpenSky `/flights/*` | 4 credits per direction | public, 60 s |
 | `airspace_snapshot` | `traffic.read` | OpenSky `/states/all`, fixed regions | 4 credits | public, 60 s |
+| `aircraft_track` | `traffic.read` | OpenSky `/tracks/all`; optionally `/flights/aircraft` | 4 credits (own bucket); +30 for the arrival estimate | public, 60 s |
 | `disruption_triage` | `weather.read` + `traffic.read` | the three above, composed | ~9 credits, less from cache | never (its parts are) |
 | `schiphol_flights` | `schedule.read` | Schiphol v4 (**mock-verified only**) | 1 request per page | public, 60 s |
 | `flight_passenger_impact` | `passengers.read` | ops API, as the user | free | **private**, 30 s |
