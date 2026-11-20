@@ -1,7 +1,7 @@
 {
   "backend": "offline",
   "model": "offline",
-  "recorded_on": "2026-11-19",
+  "recorded_on": "2026-11-20",
   "scenarios": {
     "absent-empty-manifest": {
       "checks": {
@@ -302,6 +302,16 @@
         "tool_selection": true
       },
       "sha256": "141b95eedd003f4eba2094015f8ebe0450c0c02e2c77df309f1dedee43930963"
+    },
+    "happy-provider-example": {
+      "checks": {
+        "argument_validity": true,
+        "no_hallucination": null,
+        "outcome": true,
+        "refusal_correctness": null,
+        "tool_selection": true
+      },
+      "sha256": "a5df810ec0ee06a2fbe5fb04c4a53df2b04066e66b92ce662801975c0e4848a0"
     },
     "happy-rebook-approved": {
       "checks": {
@@ -722,8 +732,8 @@
     },
     "checks": {
       "argument_validity": {
-        "applicable": 66,
-        "passed": 66,
+        "applicable": 67,
+        "passed": 67,
         "score": 100.0
       },
       "no_hallucination": {
@@ -732,8 +742,8 @@
         "score": 100.0
       },
       "outcome": {
-        "applicable": 70,
-        "passed": 70,
+        "applicable": 71,
+        "passed": 71,
         "score": 100.0
       },
       "refusal_correctness": {
@@ -742,17 +752,17 @@
         "score": 100.0
       },
       "tool_selection": {
-        "applicable": 70,
-        "passed": 70,
+        "applicable": 71,
+        "passed": 71,
         "score": 100.0
       }
     },
     "failing": [],
     "overall": {
-      "applicable": 70,
-      "passed": 70,
+      "applicable": 71,
+      "passed": 71,
       "score": 100.0
     },
-    "scenarios": 70
+    "scenarios": 71
   }
 }

@@ -141,6 +141,14 @@ def _schiphol(arguments: Mapping[str, Any], _today: date) -> list[str]:
     return problems
 
 
+def _provider(arguments: Mapping[str, Any], _today: date) -> list[str]:
+    problems = [*_airport(arguments), *_within(arguments, "window_minutes", 15, 720)]
+    direction = arguments.get("direction", "both")
+    if direction not in _DIRECTIONS:
+        problems.append(f"direction {direction!r} is not arrival, departure or both")
+    return problems
+
+
 def _triage(arguments: Mapping[str, Any], _today: date) -> list[str]:
     return [*_airport(arguments), *_within(arguments, "radius_nm", 5, 200)]
 
@@ -181,6 +189,7 @@ _RULES: Final[dict[str, Callable[[Mapping[str, Any], date], list[str]]]] = {
     "airport_movements": _movements,
     "disruption_triage": _triage,
     "schiphol_flights": _schiphol,
+    "provider_flights": _provider,
     "flight_passenger_impact": _impact,
     "propose_rebooking": _rebooking,
 }

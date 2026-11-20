@@ -34,7 +34,7 @@ from flightops_mcp.telemetry import REGISTRY
 from .authkit import JwksEndpoint, authenticated_as, signing_key
 from .conftest import FakeClock
 from .harness import remote_settings, serve, tool_payload
-from .test_server_tools import EXPECTED_TOOLS, install
+from .test_server_tools import ALL_TOOLS, EXPECTED_TOOLS, install
 
 KEY = signing_key("key-cache")
 PUBLIC = CacheHint(ttl_ms=10_000, scope="public")
@@ -62,7 +62,7 @@ def metric(name: str, **labels: str) -> float:
 
 # --- the policy table ------------------------------------------------------------
 def test_every_tool_has_a_cache_decision_as_it_has_a_scope() -> None:
-    assert set(TOOL_CACHE_HINTS) == set(Scopes._BY_TOOL) == EXPECTED_TOOLS  # noqa: SLF001
+    assert set(TOOL_CACHE_HINTS) == set(Scopes._BY_TOOL) == ALL_TOOLS  # noqa: SLF001
     with pytest.raises(UncachedToolError):
         hint_for("a_tool_nobody_decided_about")
 

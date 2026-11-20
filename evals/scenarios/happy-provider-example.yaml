@@ -1,0 +1,28 @@
+id: happy-provider-example
+group: happy-path
+why: 'A bring-your-own provider (licence class D), here the labelled example fixture. The answer must say the flights are invented and carry the provider''s attribution.'
+question: What does our own schedule provider list at Landvetter in the next two hours?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.reference.read
+  - flightops.schedule.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  provider:
+    example: true
+offline:
+  policy: provider_schedule
+  params:
+    airport: Landvetter
+expect:
+  tools:
+    required:
+    - provider_flights
+    allowed:
+    - resolve_airport
+  arguments:
+    provider_flights:
+      airport: ESGG
+  answer: reported

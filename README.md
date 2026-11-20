@@ -27,16 +27,16 @@ harness from `evals/baseline.json`; nobody edits it.
 <!-- evals:begin -->
 <!-- Written by the harness from evals/baseline.json. Do not edit: CI fails if this block and the baseline disagree. -->
 
-**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-19; **Scenarios:** 70
+**Model:** `offline` (a scripted policy, not a model); **Date:** 2026-11-20; **Scenarios:** 71
 
 | Axis | Passed | Applies to | Score |
 |---|---:|---:|---:|
-| Tool selection | 70 | 70 | 100.00 % |
-| Argument validity | 66 | 66 | 100.00 % |
+| Tool selection | 71 | 71 | 100.00 % |
+| Argument validity | 67 | 67 | 100.00 % |
 | Refusal correctness | 23 | 23 | 100.00 % |
 | No hallucination | 24 | 24 | 100.00 % |
-| Outcome (answer class, writes) | 70 | 70 | 100.00 % |
-| **Scenarios passing every check that applies** | 70 | 70 | 100.00 % |
+| Outcome (answer class, writes) | 71 | 71 | 100.00 % |
+| **Scenarios passing every check that applies** | 71 | 71 | 100.00 % |
 
 Absent-evidence group (answering confidently when the evidence is not there): **24 scenarios** over 9 kinds: `empty_result` 5, `malformed_payload` 3, `partial_coverage` 3, `rate_limited` 2, `stale_data` 2, `unauthenticated_read` 3, `unknown_airport` 2, `unknown_flight` 1, `upstream_error` 3.
 
@@ -297,6 +297,12 @@ request from a doubled middleware; and the seven server defects the first eval b
 | [AviationWeather.gov](https://aviationweather.gov/data/api/) (NOAA) | METAR, TAF | US Government open data, public domain |
 | [OurAirports](https://ourairports.com/data/) | airports | Public domain |
 | [Schiphol Public Flight API](https://developer.schiphol.nl) | scheduled flights at AMS | Schiphol developer terms; requires a registered application. Not exercised live by this project |
+| [adsb.lol](https://api.adsb.lol/docs) | live traffic near an airport, opt-in | Open Database License (ODbL) 1.0: commercial use permitted with attribution; a derived database used publicly is offered under ODbL |
 
 This project is the personal-use case: no commercial deployment, no redistribution of upstream data.
+Every source has a licence class (A public domain, B open with obligations, C commercial terms, D
+customer-supplied), and `FLIGHTOPS_EDITION` decides which classes a process may serve. The default, `demo`,
+stamps `commercial_use: not-permitted` on every payload and a strip on the board. `commercial` and `byo` refuse
+to start with a class-C source configured. The checked terms, the editions, the unit costs and the do-not list
+are in [`docs/COMMERCIAL.md`](docs/COMMERCIAL.md).
 The plan and what each phase proved: [`ROADMAP.md`](ROADMAP.md). What changed when: [`CHANGELOG.md`](CHANGELOG.md).

@@ -41,6 +41,9 @@ EXPECTED_TOOLS = {
     "flight_passenger_impact",
     "propose_rebooking",
 }
+# Every registered tool. The demo lists EXPECTED_TOOLS; `provider_flights` is listed only
+# where a customer's provider is configured (provenance.py), so the tables hold one more.
+ALL_TOOLS = EXPECTED_TOOLS | {"provider_flights"}
 
 # The instant the fixtures below describe: ten minutes after their METAR.
 FIXTURE_NOW = int(datetime(2026, 11, 14, 23, 30, tzinfo=UTC).timestamp())

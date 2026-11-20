@@ -124,12 +124,62 @@ _PII_KEYS = frozenset(
 _BEARER_RE = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-~+/]{8,}=*")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b")
 _REDACTED = "[REDACTED]"
+# Loggers that write a request's full URL, query string included, at INFO.
+_URL_LOGGERS = ("httpx", "httpcore")
+
+
+class _SecretValues:
+    """Credential values known by value, not by key: a BYO provider's API keys.
+
+    A provider may put its key in a query string, which no key-based rule can see,
+    and `httpx` logs every request URL. Each value is registered before its first
+    request is made, and scrubbed from structlog events and from those loggers.
+    Empty until a value is registered, so a process without one logs as before.
+    """
+
+    values: frozenset[str] = frozenset()
+
+
+class _ScrubSecretValues(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if _SecretValues.values:
+            message = record.getMessage()
+            scrubbed = _scrub(message)
+            if scrubbed != message:
+                record.msg, record.args = scrubbed, ()
+        return True
+
+
+_SCRUB_FILTER = _ScrubSecretValues()
+
+
+def register_secret_values(values: Any) -> None:
+    """Never log these strings, wherever they appear. Values under 4 characters are ignored.
+
+    A short value would scrub common words out of unrelated log lines.
+    """
+    fresh = {str(value) for value in values if value and len(str(value)) >= 4}
+    if not fresh - _SecretValues.values:
+        return
+    _SecretValues.values = _SecretValues.values | fresh
+    for name in _URL_LOGGERS:
+        logger = logging.getLogger(name)
+        if _SCRUB_FILTER not in logger.filters:
+            logger.addFilter(_SCRUB_FILTER)
+
+
+def _scrub(text: str) -> str:
+    # Longest first, so a value that contains another is removed whole.
+    for secret in sorted(_SecretValues.values, key=len, reverse=True):
+        text = text.replace(secret, _REDACTED)
+    return text
 
 
 def _redact_value(value: Any) -> Any:
     if isinstance(value, str):
         value = _BEARER_RE.sub(r"\1" + _REDACTED, value)
-        return _JWT_RE.sub(_REDACTED, value)
+        value = _JWT_RE.sub(_REDACTED, value)
+        return _scrub(value) if _SecretValues.values else value
     if isinstance(value, dict):
         return {k: _redact_keyed(k, v) for k, v in value.items()}
     if isinstance(value, list | tuple):

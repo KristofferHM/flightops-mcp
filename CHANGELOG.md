@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Licence classes and editions** (`docs/COMMERCIAL.md`). `licences.py` is a closed registry of every data
+  source: class A–D, licence, attribution, obligations, whether it may be cached or redistributed. Each adapter
+  calls `licensed("...")` at import, so a source without an entry is an `ImportError` naming it.
+  `FLIGHTOPS_EDITION=demo|commercial|byo` is checked once at startup. `commercial` (classes A, B) and `byo`
+  (A, B, D) refuse to start with a class-C credential set, naming the variable, the class and the licence. A
+  tool the edition cannot serve is not listed, and answers `not_in_edition` before any upstream is asked.
+- **Every payload says what it is built from.** `edition` and `commercial_use` on every payload, failures
+  included. `sources[]` (name, class, licence, attribution, fetch time) on every success, with the same fields
+  merged into a single-source payload's `source` block. `upstream_status` lists the class of every configured
+  source. The demo's payloads differ from their bodies by exactly these fields, asserted for 11 calls.
+- **adsb.lol** (class B, ODbL 1.0, opt-in with `FLIGHTOPS_ADSBLOL_ENABLED`). It answers `airport_live_traffic`
+  in OpenSky's units, so the payload means the same with either source, and it has a local hourly ceiling.
+- **Bring your own provider.** `ProviderAdapter` declares a class-D licence, a `fetch`, a normaliser and a quota.
+  `provider_flights` serves it uncached, with its credentials read from the environment at call time and
+  scrubbed from logs by value. A labelled example fixture sits behind `FLIGHTOPS_BYO_EXAMPLE_PROVIDER`. An
+  adapter registers from outside the package with no edit to `server.py`, `board.py` or `cache.py`. One eval
+  scenario; baseline 71/71.
+- **The board says what it may do.** The demo shows a strip saying it is not licensed for commercial use. The
+  footer lists the attribution of the payloads behind what is on screen, so ODbL's line appears exactly when
+  adsb.lol served part of the page. `/licences` (board and MCP HTTP server, unauthenticated) states what the
+  deployment may and may not do, each source's terms, and the ODbL derived-database notice. `--replay` is
+  refused outside the demo.
 - **`aircraft_track`**: one aircraft's observed path from OpenSky `/tracks/all` (4 credits, its own bucket,
   measured), and on request OpenSky's ADS-B arrival estimate from `/flights/aircraft` (30 credits, measured,
   client credentials only), given only for a record of the observed flight. `destination` is always

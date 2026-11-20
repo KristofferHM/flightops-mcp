@@ -47,6 +47,30 @@ def _closed(properties: Mapping[str, Schema], *, optional: tuple[str, ...] = ())
     }
 
 
+# Stamped on every payload, failures included (server.py, `_with_edition`).
+_EDITION: Final[Schema] = {
+    "enum": ["demo", "commercial", "byo"],
+    "description": "Which edition answered. demo is never a licensed product.",
+}
+_COMMERCIAL_USE: Final[Schema] = {"enum": ["not-permitted", "permitted"]}
+_LICENCE_CLASS: Final[Schema] = {
+    "enum": ["A", "B", "C", "D"],
+    "description": "A public domain, B open with obligations, C commercial terms, "
+    "D customer-supplied (docs/COMMERCIAL.md).",
+}
+# The licence fields `provenance.stamp` adds to a single-source payload's `source`.
+_LICENCE_FIELDS: Final[Mapping[str, Schema]] = {
+    "licence_class": _LICENCE_CLASS,
+    "licence_name": _STRING,
+    "attribution": {**_STRING, "description": "Repeat this when quoting the data."},
+    "fetched_at": {**_STRING, "description": "When this server built the answer, ISO 8601."},
+}
+_SOURCES: Final[Schema] = {
+    "description": "Every source this answer was built from, with its licence.",
+    "type": "array",
+    "items": _closed({"name": _STRING, **_LICENCE_FIELDS}),
+}
+
 _FAILURE: Final[Schema] = _closed(
     {
         "ok": {"const": False},
@@ -60,7 +84,10 @@ _FAILURE: Final[Schema] = _closed(
             },
             optional=("hint", "retry_after_s", "details"),
         ),
-    }
+        "edition": _EDITION,
+        "commercial_use": _COMMERCIAL_USE,
+    },
+    optional=("edition", "commercial_use"),
 )
 
 # Added by the cache to a payload it served instead of the tool (`cache.py`).
@@ -137,7 +164,12 @@ _RESOLVE_AIRPORT: Final[Schema] = _closed(
                 }
             ),
         },
-        "source": _closed({"name": _STRING, "licence": _STRING, "kind": _STRING}),
+        "source": _closed(
+            {"name": _STRING, "licence": _STRING, "kind": _STRING, **_LICENCE_FIELDS}
+        ),
+        "sources": _SOURCES,
+        "edition": _EDITION,
+        "commercial_use": _COMMERCIAL_USE,
         "cache": _CACHE_BLOCK,
     },
     optional=("cache",),
@@ -161,7 +193,10 @@ _AIRPORT_WEATHER: Final[Schema] = _closed(
         ),
         "impact_flags": _STRINGS,
         "unknowns": _UNKNOWNS,
-        "source": _closed({"name": _STRING, "licence": _STRING}),
+        "source": _closed({"name": _STRING, "licence": _STRING, **_LICENCE_FIELDS}),
+        "sources": _SOURCES,
+        "edition": _EDITION,
+        "commercial_use": _COMMERCIAL_USE,
         "cache": _CACHE_BLOCK,
     },
     optional=("cache",),
@@ -305,6 +340,9 @@ _DISRUPTION_TRIAGE: Final[Schema] = _closed(
             }
         ),
         "source": _closed({"weather": _STRING, "traffic_and_movements": _STRING}),
+        "sources": _SOURCES,
+        "edition": _EDITION,
+        "commercial_use": _COMMERCIAL_USE,
     }
 )
 

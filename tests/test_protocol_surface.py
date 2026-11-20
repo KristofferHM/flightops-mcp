@@ -35,7 +35,7 @@ from flightops_mcp.surface import AIRPORT_INDEX_URI, AIRPORT_TEMPLATE, COMPLETIO
 
 from .authkit import JwksEndpoint, signing_key
 from .harness import RemoteServer, remote_settings, serve, tool_payload
-from .test_server_tools import EXPECTED_TOOLS, LIFR_METAR, VFR_METAR, call, install
+from .test_server_tools import ALL_TOOLS, EXPECTED_TOOLS, LIFR_METAR, VFR_METAR, call, install
 
 KEY = signing_key("key-1")
 WORLD_CSV = Path(__file__).parent.parent / "data" / "airports_world.csv"
@@ -125,7 +125,7 @@ async def test_only_the_reference_and_process_state_are_a_closed_world(settings:
 
 
 def test_the_annotation_table_covers_exactly_the_tools() -> None:
-    assert set(TOOL_ANNOTATIONS) == set(Scopes._BY_TOOL) == EXPECTED_TOOLS  # noqa: SLF001
+    assert set(TOOL_ANNOTATIONS) == set(Scopes._BY_TOOL) == ALL_TOOLS  # noqa: SLF001
 
 
 def test_a_tool_without_annotations_cannot_be_registered(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/board.css">
 </head>
 <body>
+  <!--edition-strip-->
   <header class="topline">
     <h1>Airport board</h1>
     <div class="tabs" role="tablist" aria-label="Views">
@@ -239,6 +240,10 @@
     <div><span>Cache hit rate</span><b id="g-cache">Unknown</b></div>
     <div><span>OpenSky credits left</span><b id="g-left">Unknown</b></div>
   </footer>
+  <section class="attribution" aria-label="Data sources and licences">
+    <ul id="attribution"></ul>
+    <a href="/licences">Licences, and what this deployment may do</a>
+  </section>
 
   <script src="/static/vendor/internmap.min.js"></script>
   <script src="/static/vendor/d3-array.min.js"></script>

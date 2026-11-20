@@ -46,6 +46,7 @@ TOOL_ANNOTATIONS: Final[Mapping[str, ToolAnnotations]] = {
     "aircraft_track": _read("One aircraft's observed path", open_world=True),
     "disruption_triage": _read("Airport disruption triage", open_world=True),
     "schiphol_flights": _read("Schiphol published schedule", open_world=True),
+    "provider_flights": _read("Flights from your own provider", open_world=True),
     "flight_passenger_impact": _read("Passenger impact counts", open_world=True),
     # The only write. Destructive: it moves passengers off a flight they were booked
     # on, which nothing in this server can undo. Idempotent, and honestly so: the

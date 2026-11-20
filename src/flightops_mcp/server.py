@@ -44,7 +44,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from . import __version__, progress
+from . import __version__, progress, provenance
 from .airports import REGION_CONTINENTS, USEFUL_TYPES
 from .annotations import annotations_for
 from .auth import (
@@ -65,6 +65,7 @@ from .auth.approval import (
 )
 from .cache import LIST_CACHE_HINTS, cached
 from .config import Settings
+from .edition import DEMO_PLAN, EditionPlan, EditionRefusedError, check_edition
 from .errors import (
     ToolFailure,
     authentication_required,
@@ -72,6 +73,7 @@ from .errors import (
     not_found,
     reference_data_missing,
 )
+from .licences import CHECKED_ON, CLASS_MEANING, source_record
 from .opensky import (
     AIRCRAFT_FLIGHTS_COST,
     AIRCRAFT_FLIGHTS_WINDOW_S,
@@ -91,6 +93,7 @@ from .opensky import (
 )
 from .ops import TIGHT_CONNECTION_MINUTES, DownstreamTokenRejected, normalise_flight, summarise
 from .otel import configure_tracing, tracer, tracing_kind
+from .providers import FlightsRequest, ProviderError
 from .rebooking import Proposal, approved_digest, build_proposal
 from .resilience import breakers, configure_breakers
 from .runtime import Runtime, get_runtime
@@ -163,6 +166,15 @@ SAME_FLIGHT_TOLERANCE_S: Final = 900
 ESTIMATE_BASIS: Final = (
     "Estimated by OpenSky from the first and last ADS-B positions, not a schedule."
 )
+# What a triage leg names as its source. A leg with no source in this edition says so.
+TRAFFIC_LEG_SOURCE: Final = "OpenSky Network /states/all"
+MOVEMENTS_LEG_SOURCE: Final = "OpenSky Network /flights/arrival, /flights/departure"
+NO_LEG_SOURCE: Final = "none in this edition"
+_TRAFFIC_LEG_SOURCE: Final[dict[str | None, str]] = {
+    "opensky": TRAFFIC_LEG_SOURCE,
+    "adsblol": "adsb.lol /v2/point",
+    None: NO_LEG_SOURCE,
+}
 DESTINATION_NO_SOURCE: Final = (
     "No source. A transponder broadcasts position, not intent; a destination needs a "
     "schedule provider, and none is configured."
@@ -247,7 +259,7 @@ def guarded(fn: Any) -> Any:
                 span.set_attribute("mcp.tool.outcome", exc.code)
                 span.set_attribute("mcp.tool.ok", False)
                 span.set_status(Status(StatusCode.ERROR, exc.code))
-                return exc.to_payload()
+                return _with_edition(exc.to_payload())
             except Exception as exc:  # noqa: BLE001 - a tool must never crash the session
                 TOOL_CALLS.labels(tool=fn.__name__, outcome="internal_error").inc()
                 _log.exception(
@@ -256,13 +268,16 @@ def guarded(fn: Any) -> Any:
                 span.record_exception(exc)
                 span.set_attribute("mcp.tool.outcome", "internal_error")
                 span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
-                return ToolFailure(
-                    code="internal_error",
-                    message="The tool hit an unexpected internal error and did not complete.",
-                    hint=(
-                        "Report this rather than retrying blindly; the server log holds the detail."
-                    ),
-                ).to_payload()
+                return _with_edition(
+                    ToolFailure(
+                        code="internal_error",
+                        message="The tool hit an unexpected internal error and did not complete.",
+                        hint=(
+                            "Report this rather than retrying blindly; the server log holds the "
+                            "detail."
+                        ),
+                    ).to_payload()
+                )
             if isinstance(result, InputRequiredResult):
                 # Neither success nor failure: the tool stopped to ask, and did nothing.
                 TOOL_CALLS.labels(tool=fn.__name__, outcome="input_required").inc()
@@ -271,7 +286,41 @@ def guarded(fn: Any) -> Any:
             TOOL_CALLS.labels(tool=fn.__name__, outcome="ok").inc()
             span.set_attribute("mcp.tool.outcome", "ok")
             span.set_attribute("mcp.tool.ok", bool(result.get("ok", True)))
-            return result
+            return _with_edition(result)
+
+    return wrapper
+
+
+def _with_edition(payload: dict[str, Any]) -> dict[str, Any]:
+    """Say which edition answered, on every payload, failures included.
+
+    A demo answer must never pass for a licensed one, in a transcript or a screenshot.
+    """
+    plan = get_runtime().edition
+    payload["edition"] = plan.edition
+    payload["commercial_use"] = plan.commercial_use
+    return payload
+
+
+def _licensed(fn: ToolFn) -> ToolFn:
+    """Refuse a tool this edition may not serve; stamp the sources of one it may.
+
+    Inside the cache, so a cached answer keeps the time it was fetched, not the time
+    it was served again.
+    """
+    name: str = fn.__name__
+    route = provenance.route_for(name)
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> ToolResult:
+        runtime = get_runtime()
+        plan = runtime.edition
+        if not provenance.available(name, plan):
+            raise provenance.not_in_edition(name, plan)
+        result = await fn(*args, **kwargs)
+        if isinstance(result, dict) and result.get("ok") is True:
+            provenance.stamp(result, route(plan) or (), plan, _iso_now(runtime.clock))
+        return result
 
     return wrapper
 
@@ -281,15 +330,28 @@ def tool(fn: Any) -> Any:
 
     Registration fails for a tool with no entry in the scope table, so a new tool
     cannot ship unprotected by omission, and likewise for the cache hint table, so
-    a new tool is never cached (or left uncached) by default, and for the
-    annotation table, so a host is never left to guess whether a tool writes.
+    a new tool is never cached (or left uncached) by default, for the
+    annotation table, so a host is never left to guess whether a tool writes, and
+    for the source table, so no tool serves data whose licence nobody looked up.
 
     The cache sits inside `guarded` and, on the HTTP server, inside `scoped`: the
     scope is checked before the cache is consulted, every time.
     """
-    Scopes.for_tool(fn.__name__)
-    annotations_for(fn.__name__)
-    wrapped: ToolFn = guarded(cached(fn, cache=lambda: get_runtime().cache))
+    name: str = fn.__name__
+    Scopes.for_tool(name)
+    annotations_for(name)
+    licensed = _licensed(fn)
+    through_cache = cached(licensed, cache=lambda: get_runtime().cache)
+
+    @functools.wraps(fn)
+    async def held_or_not(*args: Any, **kwargs: Any) -> ToolResult:
+        # A class-D answer is never held past its request (provenance.may_cache).
+        if provenance.may_cache(name, get_runtime().edition):
+            answer: ToolResult = await through_cache(*args, **kwargs)
+            return answer
+        return await licensed(*args, **kwargs)
+
+    wrapped: ToolFn = guarded(held_or_not)
     _TOOLS.append(wrapped)
     return wrapped
 
@@ -316,7 +378,7 @@ def scoped(fn: ToolFn) -> ToolFn:
             failure = insufficient_scope(name, Scopes.for_tool(name), missing)
         TOOL_CALLS.labels(tool=name, outcome=failure.code).inc()
         _log.warning("tool_refused", tool=name, code=failure.code, details=failure.details)
-        return failure.to_payload()
+        return _with_edition(failure.to_payload())
 
     return wrapper
 
@@ -351,11 +413,14 @@ def _newest(*epochs: object) -> int | None:
     return max(known) if known else None
 
 
-def _snapshot_unknowns(snapshot: StatesSnapshot, where: str) -> tuple[list[str], bool]:
+def _snapshot_unknowns(
+    snapshot: StatesSnapshot, where: str, upstream: str = "OpenSky"
+) -> tuple[list[str], bool]:
     """What a traffic snapshot cannot show, and whether it describes the present.
 
-    "The present" is OpenSky's clock when it answered, from its `Date` header. This
-    machine's clock is not used: a host running minutes fast made every snapshot stale.
+    "The present" is the upstream's clock when it answered, from its `Date` header.
+    This machine's clock is not used: a host running minutes fast made every snapshot
+    stale.
     """
     now = snapshot.upstream_time
     unknowns: list[str] = []
@@ -366,7 +431,7 @@ def _snapshot_unknowns(snapshot: StatesSnapshot, where: str) -> tuple[list[str],
         )
     if snapshot.unreadable:
         unknowns.append(
-            f"{snapshot.unreadable} of {snapshot.received} rows in OpenSky's answer were not "
+            f"{snapshot.unreadable} of {snapshot.received} rows in {upstream}'s answer were not "
             "readable state vectors. The counts cover only the readable ones, so they are a "
             "lower bound, not the number of aircraft."
         )
@@ -374,13 +439,13 @@ def _snapshot_unknowns(snapshot: StatesSnapshot, where: str) -> tuple[list[str],
     if snapshot.time is None or snapshot.time <= 0:
         if snapshot.vectors:
             unknowns.append(
-                "OpenSky's answer carries no snapshot time, so how current these positions "
+                f"{upstream}'s answer carries no snapshot time, so how current these positions "
                 "are is unknown."
             )
     elif now is None:
         if snapshot.vectors:
             unknowns.append(
-                "OpenSky's response carried no Date header, so how old this snapshot is "
+                f"{upstream}'s response carried no Date header, so how old this snapshot is "
                 "cannot be judged. This server does not substitute its own clock."
             )
     elif now - snapshot.time > STATES_STALE_AFTER_S:
@@ -597,6 +662,8 @@ async def airport_live_traffic(
         )
     radius = max(5.0, min(200.0, radius_nm))
     bbox = BBox.around(record["latitude"], record["longitude"], radius)
+    if runtime.edition.traffic_source == "adsblol":
+        return await _adsblol_traffic(runtime, record, radius, bbox, max_aircraft)
     snapshot = await runtime.opensky.states_in_bbox(
         bbox, max_vectors=max(1, min(200, max_aircraft))
     )
@@ -641,6 +708,59 @@ async def airport_live_traffic(
             "name": "OpenSky Network",
             "endpoint": "/states/all",
             "licence": OPENSKY_LICENCE,
+        },
+    }
+
+
+async def _adsblol_traffic(
+    runtime: Runtime, record: dict[str, Any], radius: float, bbox: BBox, max_aircraft: int
+) -> dict[str, Any]:
+    """`airport_live_traffic` answered by adsb.lol: the same payload, its own provenance.
+
+    The same box and the same units, so a reader compares like with like. What differs
+    is said: no credits are spent, the requests are counted instead, and the coverage
+    is adsb.lol's feeders', not OpenSky's receivers'.
+    """
+    snapshot = await runtime.adsblol.states_in_bbox(
+        bbox, max_vectors=max(1, min(200, max_aircraft))
+    )
+    airborne = sum(1 for vector in snapshot.vectors if not vector.on_ground)
+    unknowns, snapshot_current = _snapshot_unknowns(snapshot, "this box", "adsb.lol")
+    return {
+        "ok": True,
+        "upstream_time_epoch": snapshot.upstream_time,
+        "credentials": runtime.adsblol.credentials_mode,
+        "freshness": runtime.adsblol.freshness(),
+        "snapshot_time_epoch": snapshot.time,
+        "snapshot_current": snapshot_current,
+        "airport": {"icao": record["ident"], "name": record["name"]},
+        "search": {
+            "radius_nm": radius,
+            "bbox": bbox.as_params(),
+            "bbox_area_sq_deg": round(bbox.area_sq_deg, 2),
+        },
+        "counts": {
+            "returned": len(snapshot.vectors),
+            "airborne": airborne,
+            "on_ground": len(snapshot.vectors) - airborne,
+            "received": snapshot.received,
+            "unreadable": snapshot.unreadable,
+        },
+        "aircraft": [vector.to_payload() for vector in snapshot.vectors],
+        "bookkeeping": {
+            "credits_spent": 0,
+            "credits_remaining_upstream": None,
+            "truncated": snapshot.truncated,
+            "notes": snapshot.notes,
+            "unit": "requests",
+            "requests_this_hour": runtime.adsblol.requests_this_hour,
+            "local_budget_per_hour": runtime.adsblol.budget_per_hour,
+        },
+        "unknowns": unknowns,
+        "source": {
+            "name": "adsb.lol",
+            "endpoint": "/v2/point",
+            "licence": "Open Database License (ODbL) 1.0",
         },
     }
 
@@ -1191,6 +1311,7 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
         unknowns.extend(payload.get("unknowns", []))
 
     mode = runtime.opensky.credentials_mode
+    plan = runtime.edition
     if (
         mode == "anonymous"
         and movements_payload.get("ok")
@@ -1278,8 +1399,12 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
         "weather": weather,
         "legs": {
             "weather": _weather_leg(weather_payload),
-            "traffic": _traffic_leg(traffic_payload),
-            "movements": _movements_leg(movements_payload, degraded),
+            "traffic": _traffic_leg(traffic_payload, _TRAFFIC_LEG_SOURCE[plan.traffic_source]),
+            "movements": _movements_leg(
+                movements_payload,
+                degraded,
+                MOVEMENTS_LEG_SOURCE if plan.allows("opensky") else NO_LEG_SOURCE,
+            ),
         },
         "evidence": {
             "weather": weather_payload.get("metar", []) if weather_payload.get("ok") else None,
@@ -1297,7 +1422,19 @@ async def disruption_triage(airport: str, radius_nm: float = 40.0) -> dict[str, 
             "weather": "AviationWeather.gov (NOAA)",
             "traffic_and_movements": "OpenSky Network",
         },
+        # The licence records of the legs that answered: what this triage was built from.
+        "sources": _served_by(weather_payload, movements_payload, traffic_payload),
     }
+
+
+def _served_by(*payloads: dict[str, Any]) -> list[dict[str, Any]]:
+    """The source records of the payloads that answered, each source once."""
+    records: dict[str, dict[str, Any]] = {}
+    for payload in payloads:
+        if payload.get("ok"):
+            for record in payload.get("sources") or []:
+                records.setdefault(record["name"], record)
+    return list(records.values())
 
 
 @tool
@@ -1389,6 +1526,85 @@ async def schiphol_flights(direction: str = "both", window_minutes: int = 120) -
 
 
 @tool
+async def provider_flights(
+    airport: str,
+    direction: str = "both",
+    window_minutes: int = 120,
+    provider: str | None = None,
+) -> dict[str, Any]:
+    """Flights at an airport from the customer's own licensed schedule provider.
+
+    Listed only where the operator has plugged in a provider (Cirium, OAG, an AODB):
+    its data is the customer's, under the customer's licence. Nothing it returns is
+    cached or kept. A schedule is what the provider says, not an observation.
+
+    Args:
+        airport: ICAO code, e.g. ESGG.
+        direction: "arrival", "departure", or "both".
+        window_minutes: How far ahead of now to look, in minutes (15-720).
+        provider: Which provider, when more than one is configured.
+    """
+    runtime = get_runtime()
+    record = _require_airport(runtime, airport)
+    names = sorted(runtime.edition.providers)
+    chosen = provider.strip().lower() if provider else (names[0] if len(names) == 1 else "")
+    if chosen not in runtime.edition.providers:
+        raise ToolFailure(
+            code="invalid_argument",
+            message=f"provider must be one of: {', '.join(names)}",
+            hint="Name the provider; when only one is configured it may be left out.",
+        )
+    wanted = direction.lower().strip()
+    if wanted not in {"arrival", "departure", "both"}:
+        raise ToolFailure(
+            code="invalid_argument",
+            message="direction must be 'arrival', 'departure' or 'both'",
+            hint="Use 'both' if you are unsure.",
+        )
+    window = max(15, min(720, window_minutes))
+    # A request parameter, asked for before the provider has answered: a local clock.
+    begin = int(runtime.data_clock())
+    request = FlightsRequest(
+        icao=record["ident"],
+        iata=record.get("iata"),
+        directions=("arrival", "departure") if wanted == "both" else (wanted,),  # type: ignore[arg-type]
+        begin_epoch=begin,
+        end_epoch=begin + window * 60,
+    )
+    flights = await runtime.providers.flights(chosen, request)
+    adapter = runtime.edition.providers[chosen]
+    unknowns: list[str] = []
+    if not flights:
+        unknowns.append(
+            "The provider listed no flights in this window. That is a quiet period or a gap "
+            "in its schedule; it is not evidence that nothing is moving."
+        )
+    if adapter.name == "example":
+        unknowns.append(
+            "These flights come from the example fixture provider. They are invented, not real."
+        )
+    fetched_at = _iso_now(runtime.clock)
+    record_ = source_record(adapter.licence, fetched_at)
+    return {
+        "ok": True,
+        "airport": {"icao": record["ident"], "name": record["name"]},
+        "window": {"begin_epoch": begin, "end_epoch": request.end_epoch, "minutes": window},
+        "flights": [flight.to_payload() for flight in flights],
+        "counts": {
+            which: sum(1 for f in flights if f.direction == which) for which in request.directions
+        },
+        "bookkeeping": {
+            "requests_spent": 1,
+            "requests_this_hour": runtime.providers.requests_this_hour(chosen),
+            "quota_per_hour": adapter.quota.requests_per_hour,
+        },
+        "unknowns": unknowns,
+        "source": {"name": adapter.licence.name, "provider": chosen, **record_},
+        "sources": [record_],
+    }
+
+
+@tool
 async def upstream_status() -> dict[str, Any]:
     """Report upstream health, credit spend and credential state.
 
@@ -1435,6 +1651,37 @@ async def upstream_status() -> dict[str, Any]:
         },
         "circuits": breakers().snapshots(),
         "tracing": tracing_kind() or "none",
+        "licences": licence_status(runtime.edition),
+    }
+
+
+def licence_status(plan: EditionPlan) -> dict[str, Any]:
+    """The edition, and the class of every source this process has configured.
+
+    Built from the plan the startup gate returned, so it cannot list a source the
+    gate did not see, nor omit one it did.
+    """
+    configured: dict[str, list[str]] = {}
+    for item in plan.configured:
+        configured.setdefault(item.source, []).append(item.variable)
+    return {
+        "edition": plan.edition,
+        "commercial_use": plan.commercial_use,
+        "allowed_classes": sorted(plan.allowed_classes),
+        "terms_checked_on": CHECKED_ON,
+        "sources": [
+            {
+                "source": source,
+                "name": plan.licence(source).name,
+                "licence_class": plan.licence(source).licence_class,
+                "class_meaning": CLASS_MEANING[plan.licence(source).licence_class],
+                "licence_name": plan.licence(source).licence_name,
+                "configured_by": variables,
+                "may_cache": plan.licence(source).may_cache,
+                "may_redistribute": plan.licence(source).may_redistribute,
+            }
+            for source, variables in configured.items()
+        ],
     }
 
 
@@ -1957,8 +2204,7 @@ def _weather_leg(payload: dict[str, Any]) -> dict[str, Any]:
     return _leg(status, source, payload.get("upstream_time_epoch"), observed)
 
 
-def _traffic_leg(payload: dict[str, Any]) -> dict[str, Any]:
-    source = "OpenSky Network /states/all"
+def _traffic_leg(payload: dict[str, Any], source: str = TRAFFIC_LEG_SOURCE) -> dict[str, Any]:
     if not payload.get("ok"):
         return _leg("unavailable", source, None, None, error=_failed_code(payload))
     snapshot = _epoch(payload.get("snapshot_time_epoch"))
@@ -1968,8 +2214,9 @@ def _traffic_leg(payload: dict[str, Any]) -> dict[str, Any]:
     return _leg(status, source, payload.get("upstream_time_epoch"), snapshot)
 
 
-def _movements_leg(payload: dict[str, Any], degraded: list[str]) -> dict[str, Any]:
-    source = "OpenSky Network /flights/arrival, /flights/departure"
+def _movements_leg(
+    payload: dict[str, Any], degraded: list[str], source: str = MOVEMENTS_LEG_SOURCE
+) -> dict[str, Any]:
     if not payload.get("ok"):
         return _leg("unavailable", source, None, None, error=_failed_code(payload))
     rows = payload.get("movements") or {}
@@ -2093,6 +2340,7 @@ def create_server(
     auth: AuthSettings | None = None,
     token_verifier: TokenVerifier | None = None,
     request_state_security: RequestStateSecurity | None = None,
+    edition: EditionPlan = DEMO_PLAN,
 ) -> MCPServer:
     """Build a server with every registered tool, optionally behind bearer auth.
 
@@ -2102,14 +2350,18 @@ def create_server(
     The tracing middleware is registered on both servers: on stdio an operator
     gets spans for local debugging, and on HTTP the client's `traceparent` from
     `_meta` becomes the parent span.
+
+    Only the tools `edition` may serve are listed. The default is the demo with
+    nothing optional configured, which lists what this server always listed.
     """
     authenticated = auth is not None
     # Sorted by name, not registration order. A host puts the tool list near the top
     # of a model's prompt, and a prompt cache only hits on an identical prefix: an
     # order that followed import order would change when a module was reorganised.
     tools = [
-        _published(fn, authenticated=authenticated)
+        _published(fn, authenticated=authenticated, edition=edition)
         for fn in sorted(_TOOLS, key=lambda tool_fn: tool_fn.__name__)
+        if provenance.available(fn.__name__, edition)
     ]
     # No tracing middleware is registered here on purpose: `MCPServer` already
     # installs its own `OpenTelemetryMiddleware` as the outermost built-in
@@ -2119,7 +2371,7 @@ def create_server(
     server: MCPServer = (ScopeChallengingServer if authenticated else MCPServer)(
         name="flightops-mcp",
         version=__version__,
-        instructions=INSTRUCTIONS,
+        instructions=instructions_for(edition),
         auth=auth,
         token_verifier=token_verifier,
         request_state_security=request_state_security,
@@ -2130,7 +2382,35 @@ def create_server(
     return server
 
 
-def _published(fn: ToolFn, *, authenticated: bool) -> Tool:
+def instructions_for(plan: EditionPlan) -> str:
+    """The server instructions. The demo's are unchanged; other editions add their terms."""
+    if plan.edition == "demo":
+        return INSTRUCTIONS
+    return (
+        INSTRUCTIONS
+        + f"""11. This is the {plan.edition} edition. Only sources whose licences permit it are \
+served; a tool not listed here has no such source. Each payload's `sources` carries \
+the licence and attribution of what it was built from: repeat the attribution when \
+you quote the data. Where this text mentions OpenSky credits, the tool now says in \
+its own description which source answers it.
+"""
+    )
+
+
+def _edition_note(name: str, plan: EditionPlan) -> str:
+    """One line for a tool's description outside the demo: which sources answer it now."""
+    sources = provenance.route_for(name)(plan) or ()
+    if not sources:
+        return ""
+    named = "; ".join(
+        f"{plan.licence(s).name} (licence class {plan.licence(s).licence_class}, "
+        f"{plan.licence(s).licence_name})"
+        for s in sources
+    )
+    return f"\n\nIn the {plan.edition} edition this tool reads: {named}."
+
+
+def _published(fn: ToolFn, *, authenticated: bool, edition: EditionPlan = DEMO_PLAN) -> Tool:
     """One tool as the protocol shows it: annotated, and with its real output schema.
 
     The SDK derives `{"type": "object", "additionalProperties": true}` from a
@@ -2143,6 +2423,8 @@ def _published(fn: ToolFn, *, authenticated: bool) -> Tool:
     published = Tool.from_function(
         scoped(fn) if authenticated else fn, annotations=annotations_for(name)
     )
+    if edition.edition != "demo":
+        published.description = (published.description or "") + _edition_note(name, edition)
     schema = output_schema_for(name)
     if schema is not None:
         published.fn_metadata.output_schema = schema
@@ -2221,6 +2503,7 @@ def create_http_server(
     *,
     jwks_transport: httpx.AsyncBaseTransport | None = None,
     clock: Callable[[], float] = time.time,
+    edition: EditionPlan | None = None,
 ) -> MCPServer:
     """The remote server: same tools, every request authenticated.
 
@@ -2230,13 +2513,50 @@ def create_http_server(
     resource_server = build_resource_server_auth(
         settings, jwks_transport=jwks_transport, clock=clock
     )
+    plan = edition or check_edition(settings)
     server = create_server(
         auth=resource_server.settings,
         token_verifier=resource_server.verifier,
         request_state_security=request_state_security(settings),
+        edition=plan,
     )
     install_observability_routes(server)
+    install_licence_route(server, plan)
     return server
+
+
+def install_licence_route(server: MCPServer, plan: EditionPlan) -> None:
+    """`/licences`: what this deployment serves, on what terms, and what it may not do.
+
+    Unauthenticated, like `/healthz`: ODbL asks that the derived-database notice be
+    offered to anyone the data reaches, and a notice behind a token is not offered.
+    """
+
+    @server.custom_route("/licences", methods=["GET"], name="licences")  # type: ignore[untyped-decorator]
+    async def licences(_request: Request) -> Response:
+        return JSONResponse(licence_notice(plan))
+
+
+def licence_notice(plan: EditionPlan) -> dict[str, Any]:
+    """The `/licences` document: the edition's permissions, each source's terms, ODbL's notice."""
+    status = licence_status(plan)
+    odbl = any(item["licence_class"] == "B" for item in status["sources"])
+    return {
+        **status,
+        "may": EDITION_MAY[plan.edition],
+        "may_not": EDITION_MAY_NOT[plan.edition],
+        "attributions": [plan.licence(item["source"]).attribution for item in status["sources"]],
+        "obligations": {
+            item["source"]: list(plan.licence(item["source"]).obligations)
+            for item in status["sources"]
+        },
+        "terms_urls": {
+            item["source"]: plan.licence(item["source"]).terms_url
+            for item in status["sources"]
+            if plan.licence(item["source"]).terms_url
+        },
+        "derived_database_notice": ODBL_NOTICE if odbl else None,
+    }
 
 
 def request_state_security(settings: Settings) -> RequestStateSecurity:
@@ -2262,6 +2582,51 @@ class HttpOptions(TypedDict):
 # serve any request and there is no session table to protect or expire.
 HTTP_OPTIONS: Final[HttpOptions] = {"stateless_http": True, "json_response": True}
 
+EDITION_MAY: Final[dict[str, list[str]]] = {
+    "demo": [
+        "Show the server to people, as a portfolio demonstration.",
+        "Read every configured source within that source's free, non-commercial terms.",
+    ],
+    "commercial": [
+        "Serve public-domain (class A) and ODbL (class B) data to paying customers.",
+        "Sell access to the weather and airport reference, and to adsb.lol traffic with its "
+        "attribution and ODbL notice.",
+    ],
+    "byo": [
+        "Everything the commercial edition may do.",
+        "Serve a customer's own licensed provider (class D) to that customer, request by "
+        "request, under the customer's licence.",
+    ],
+}
+EDITION_MAY_NOT: Final[dict[str, list[str]]] = {
+    "demo": [
+        "Be sold, or run as part of a paid product: OpenSky's terms require a written "
+        "licence for any for-profit or operational use.",
+        "Be presented as a licensed product. Every payload says commercial_use: not-permitted.",
+    ],
+    "commercial": [
+        "Serve OpenSky, AviationStack, AeroDataBox or Schiphol (class C) without a written "
+        "licence; this edition refuses to start with their credentials set.",
+        "Describe NOAA data as warrantied: it is provided as is.",
+        "Serve adsb.lol data without its attribution, or offer a derived database publicly "
+        "under any licence but ODbL.",
+    ],
+    "byo": [
+        "Cache, store or redistribute a customer's provider data beyond the request.",
+        "Serve one customer's provider data to another customer.",
+        "Serve OpenSky, AviationStack, AeroDataBox or Schiphol (class C) through the "
+        "built-in adapters.",
+    ],
+}
+ODBL_NOTICE: Final = (
+    "This service contains information from adsb.lol, which is made available under the "
+    "Open Database License (ODbL) 1.0, https://opendatacommons.org/licenses/odbl/1-0/. "
+    "Any database this service derives from that information and uses publicly (the "
+    "aircraft positions it filters, converts and returns) is offered under the ODbL 1.0. "
+    "To request a copy of such a derived database, contact the operator of this deployment."
+)
+
+
 # The stdio server. Local hosts launch it as a subprocess of the user's own
 # session, so the operating system is the trust boundary and there is no token.
 mcp: MCPServer = create_server()
@@ -2285,6 +2650,16 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     settings = Settings()
     configure_logging(settings.log_level)
+    # Before anything is served: a refused source stops the process with its variable.
+    try:
+        plan = check_edition(settings)
+    except (EditionRefusedError, ProviderError) as exc:
+        parser.error(str(exc))
+    _log.info(
+        "edition_checked",
+        edition=plan.edition,
+        sources=sorted({item.source for item in plan.configured}),
+    )
     configure_breakers(
         failure_threshold=settings.breaker_failure_threshold,
         recovery_timeout_s=settings.breaker_recovery_timeout_s,
@@ -2300,11 +2675,11 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     if args.transport == "stdio":
         _log.info("server_starting", transport="stdio", version=__version__)
-        mcp.run(transport="stdio")
+        create_server(edition=plan).run(transport="stdio")
         return
 
     try:
-        server = create_http_server(settings)
+        server = create_http_server(settings, edition=plan)
     except AuthConfigError as exc:
         parser.error(str(exc))
     _log.info(

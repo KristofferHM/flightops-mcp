@@ -20,6 +20,7 @@ import pytest
 from flightops_mcp import server as srv
 from flightops_mcp.airports import CONTINENTS, WORLD_TYPES, AirportDB, build_from_csv
 from flightops_mcp.config import Settings
+from flightops_mcp.provenance import LICENCE_FIELDS
 from flightops_mcp.runtime import Runtime, set_runtime
 from flightops_mcp.weather import ceiling
 from services.mock_upstream.dated import dated
@@ -334,7 +335,10 @@ async def test_one_airport_weather_still_reads_as_before(world: Callable[..., Ru
         "No METAR returned. That means NOAA holds no current observation for this "
         "station, not that conditions are good."
     ]
-    assert answer["source"] == srv.WEATHER_SOURCE
+    # As before, plus the licence fields the edition stamp adds (provenance.py).
+    kept = {k: v for k, v in answer["source"].items() if k not in LICENCE_FIELDS}
+    assert kept == srv.WEATHER_SOURCE
+    assert answer["source"]["licence_class"] == "A"
 
 
 # --- the triage ---------------------------------------------------------------------------

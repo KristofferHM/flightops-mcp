@@ -102,6 +102,8 @@ TOOL_CACHE_HINTS: Final[Mapping[str, CacheHint]] = {
     "flight_passenger_impact": CacheHint(ttl_ms=30_000, scope="private"),
     # The only write. Idempotency is the operations API's job, not a cache's.
     "propose_rebooking": CacheHint(ttl_ms=0),
+    # A customer's own provider (licence class D): never held past the request.
+    "provider_flights": CacheHint(ttl_ms=0),
 }
 
 

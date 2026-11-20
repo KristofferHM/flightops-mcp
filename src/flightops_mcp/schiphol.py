@@ -47,8 +47,12 @@ from .config import Settings
 from .credits import CreditLedger
 from .errors import missing_credentials, upstream_unavailable
 from .http import UpstreamHttp, authorized_get
+from .licences import licensed
 from .opensky_token import ClientCredentialsTokenManager
 from .telemetry import UPSTREAM_CREDITS_SPENT
+
+# This adapter's terms (licences.py). A source with no entry fails import here.
+LICENCE = licensed("schiphol")
 
 FLIGHTS_PATH: Final = "/public-flights/v4/flights"
 # One request is one unit of the public tier's per-minute limit.

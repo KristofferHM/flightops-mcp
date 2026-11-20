@@ -358,6 +358,7 @@ async def authorized_get(
     settings: Settings,
     sleep: Callable[[float], Awaitable[None]],
     empty_status: frozenset[int] = frozenset(),
+    extra_headers: Mapping[str, str] | None = None,
 ) -> HttpResponse:
     """GET an upstream endpoint under the one policy every upstream shares.
 
@@ -380,7 +381,9 @@ async def authorized_get(
     """
     log = get_logger(__name__).bind(upstream=upstream)
     for auth_attempt in range(2):
-        headers: dict[str, str] = {}
+        # An API key a provider takes as a header (adsb.lol's `x-api-key`, a BYO
+        # vendor's), never the caller's token: `refuse_inbound_token` still applies.
+        headers: dict[str, str] = dict(extra_headers or {})
         if tokens is not None:
             headers["Authorization"] = f"Bearer {await tokens.token()}"
         response = await http.request_json("GET", path, params=params, headers=headers)

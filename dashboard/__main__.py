@@ -12,6 +12,8 @@ from fastapi import FastAPI
 
 from flightops_mcp.airports import WORLD_TYPES, AirportDB, build_from_csv
 from flightops_mcp.config import Settings
+from flightops_mcp.edition import EditionPlan, EditionRefusedError, check_edition
+from flightops_mcp.providers import ProviderError
 from flightops_mcp.resilience import configure_breakers
 from flightops_mcp.runtime import get_runtime
 from flightops_mcp.server import log_opensky_mode
@@ -66,8 +68,26 @@ def load_airports(settings: Settings, csv_path: Path = WORLD_CSV) -> list[dict[s
     ]
 
 
-def build(args: argparse.Namespace, settings: Settings) -> tuple[FastAPI, str]:
-    """The app and the address to bind. Raises `RecordingError` for a bad recording."""
+class EditionMismatch(ValueError):
+    """A request this edition must refuse at startup."""
+
+
+def build(
+    args: argparse.Namespace, settings: Settings, edition: EditionPlan | None = None
+) -> tuple[FastAPI, str]:
+    """The app and the address to bind. Raises `RecordingError` for a bad recording.
+
+    Raises `EditionRefusedError` for a source the edition may not serve, and
+    `EditionMismatch` for a replay outside the demo: a recording holds whatever the
+    process that made it served, and only the demo may serve all of it.
+    """
+    plan = edition or check_edition(settings)
+    if args.replay and plan.edition != "demo":
+        raise EditionMismatch(
+            f"--replay serves a recording as it was made, which may hold OpenSky data "
+            f"(licence class C). The {plan.edition} edition does not replay; run "
+            "FLIGHTOPS_EDITION=demo."
+        )
     secret = settings.dashboard_passcode
     passcode = secret.get_secret_value() if secret else None
     host = bind_host(args.host, passcode)
@@ -111,7 +131,7 @@ def build(args: argparse.Namespace, settings: Settings) -> tuple[FastAPI, str]:
         load_airports(settings),
         traffic_ceiling_per_hour=settings.dashboard_traffic_credits_per_hour,
     )
-    return create_app(service, Gate(passcode), on_close=close), host
+    return create_app(service, Gate(passcode), on_close=close, edition=plan), host
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -138,7 +158,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     configure_logging(settings.log_level)
     try:
         app, host = build(args, settings)
-    except (RecordingError, OSError) as exc:
+    except (RecordingError, OSError, EditionRefusedError, EditionMismatch, ProviderError) as exc:
         parser.error(str(exc))
     uvicorn.run(app, host=host, port=args.port, log_level="warning")
 

@@ -24,6 +24,11 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Final
 
+from .licences import licensed
+
+# This reference's terms (licences.py). A source with no entry fails import here.
+LICENCE: Final = licensed("ourairports")
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS airports (
     ident TEXT PRIMARY KEY,

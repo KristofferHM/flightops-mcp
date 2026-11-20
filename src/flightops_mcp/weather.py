@@ -21,7 +21,11 @@ from . import progress
 from .config import Settings
 from .errors import ToolFailure, upstream_unavailable
 from .http import UpstreamHttp
+from .licences import licensed
 from .telemetry import get_logger
+
+# This adapter's terms (licences.py). A source with no entry fails import here.
+LICENCE = licensed("aviationweather")
 
 # Flight-category thresholds are advisory: report them, never act on them alone.
 IFR_CATEGORIES = frozenset({"IFR", "LIFR"})

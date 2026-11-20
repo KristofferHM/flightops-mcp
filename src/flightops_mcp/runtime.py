@@ -15,13 +15,16 @@ from typing import Any
 
 import httpx
 
+from .adsblol import AdsbLolClient
 from .airports import AirportDB
 from .auth import ApprovalVerifier, build_approval_verifier
 from .auth.obo import OboExchanger
 from .cache import ToolCache
 from .config import Settings
+from .edition import EditionPlan, check_edition
 from .opensky import OpenSkyClient
 from .ops import OpsApiClient
+from .providers import ProviderService
 from .schiphol import SchipholClient
 from .weather import WeatherClient
 
@@ -29,7 +32,11 @@ from .weather import WeatherClient
 @dataclass(slots=True)
 class Runtime:
     settings: Settings
+    # What this process may serve, decided once from `settings` (edition.py).
+    edition: EditionPlan
     opensky: OpenSkyClient
+    adsblol: AdsbLolClient
+    providers: ProviderService
     weather: WeatherClient
     schiphol: SchipholClient
     airports: AirportDB
@@ -58,6 +65,9 @@ class Runtime:
         ops_transport: httpx.AsyncBaseTransport | None = None,
         schiphol_transport: httpx.AsyncBaseTransport | None = None,
         schiphol_token_transport: httpx.AsyncBaseTransport | None = None,
+        adsblol_transport: httpx.AsyncBaseTransport | None = None,
+        provider_transport: httpx.AsyncBaseTransport | None = None,
+        edition: EditionPlan | None = None,
         sleep: Any = None,
         clock: Callable[[], float] = time.time,
         data_clock: Callable[[], float] | None = None,
@@ -67,14 +77,22 @@ class Runtime:
         # in 1970. Durations are computed as differences, so wall clock is safe
         # for the credit window too.
         resolved = settings or Settings()
+        # Raises `EditionRefusedError` for a source the edition may not serve. Every
+        # entry point builds a runtime, so none can start around the gate.
+        plan = edition or check_edition(resolved)
         return cls(
             settings=resolved,
+            edition=plan,
             opensky=OpenSkyClient(
                 resolved,
                 transport=opensky_transport,
                 token_transport=token_transport,
                 sleep=sleep,
                 clock=clock,
+            ),
+            adsblol=AdsbLolClient(resolved, transport=adsblol_transport, sleep=sleep, clock=clock),
+            providers=ProviderService(
+                resolved, plan.providers, transport=provider_transport, sleep=sleep, clock=clock
             ),
             weather=WeatherClient(resolved, transport=weather_transport),
             schiphol=SchipholClient(
@@ -100,6 +118,8 @@ class Runtime:
 
     async def aclose(self) -> None:
         await self.opensky.aclose()
+        await self.adsblol.aclose()
+        await self.providers.aclose()
         await self.weather.aclose()
         await self.schiphol.aclose()
         await self.obo.aclose()

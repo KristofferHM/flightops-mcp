@@ -52,6 +52,8 @@ class Scopes:
         # this entry is the only check that stands between a caller and both.
         "disruption_triage": frozenset({WEATHER_READ, TRAFFIC_READ}),
         "schiphol_flights": frozenset({SCHEDULE_READ}),
+        # A customer's own schedule provider: a schedule, like Schiphol's.
+        "provider_flights": frozenset({SCHEDULE_READ}),
         "upstream_status": frozenset({STATUS_READ}),
         "flight_passenger_impact": frozenset({PASSENGERS_READ}),
         # Proposing needs the write scope alone. It reads no manifest itself: the

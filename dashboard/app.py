@@ -17,9 +17,12 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from flightops_mcp.edition import DEMO_PLAN, EditionPlan
+
 from .aircraft import CAPS, DEFAULT_CAP, RADII_NM, Selection
 from .board import MAX_SNAPSHOT_EPOCH
 from .gate import COOKIE_NAME, LOCAL_HOSTS, SESSION_TTL_S, Gate, host_name
+from .licensing import index_page, licences_page
 from .service import (
     DEFAULT_REGION,
     LIST_PAGE,
@@ -31,7 +34,10 @@ from .service import (
 
 STATIC: Final = FilePath(__file__).parent / "static"
 MAX_LOGIN_BODY: Final = 4096
-OPEN_PATHS: Final = frozenset({"/login", "/login.css", "/healthz", "/favicon.ico"})
+# `/licences` is open: ODbL's derived-database notice is offered to anyone, not to members.
+OPEN_PATHS: Final = frozenset(
+    {"/login", "/login.css", "/healthz", "/favicon.ico", "/licences", "/static/board.css"}
+)
 # Everything is served from here. This is also what keeps a CDN from creeping back in:
 # the browser would refuse to load one.
 CONTENT_SECURITY_POLICY: Final = (
@@ -67,6 +73,7 @@ def create_app(
     gate: Gate,
     *,
     on_close: Callable[[], Awaitable[None]] | None = None,
+    edition: EditionPlan = DEMO_PLAN,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -159,9 +166,7 @@ def create_app(
         response.delete_cookie(COOKIE_NAME)
         return response
 
-    @app.get("/")
-    async def index() -> FileResponse:
-        return FileResponse(STATIC / "index.html", media_type="text/html")
+    _edition_routes(app, edition)
 
     @app.get("/api/board")
     async def api_board(
@@ -199,6 +204,24 @@ def create_app(
     _traffic_routes(app, service)
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app
+
+
+def _edition_routes(app: FastAPI, edition: EditionPlan) -> None:
+    """The page, with the edition strip in place, and `/licences`.
+
+    Rendered once: the edition cannot change while the process runs, and a strip in
+    the served HTML needs no script to show.
+    """
+    page = index_page((STATIC / "index.html").read_text(encoding="utf-8"), edition)
+    licences = licences_page(edition)
+
+    @app.get("/")
+    async def index() -> HTMLResponse:
+        return HTMLResponse(page)
+
+    @app.get("/licences")
+    async def licences_route() -> HTMLResponse:
+        return HTMLResponse(licences)
 
 
 def _selection(

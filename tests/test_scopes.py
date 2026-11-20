@@ -85,6 +85,12 @@ def test_the_write_has_a_scope_of_its_own() -> None:
     ]
 
 
+def test_a_customers_own_provider_is_a_schedule_and_needs_that_scope_alone() -> None:
+    """`provider_flights` reads a schedule, like Schiphol's: not traffic, not passengers."""
+    assert Scopes.for_tool("provider_flights") == {Scopes.SCHEDULE_READ}
+    assert Scopes.missing("provider_flights", [Scopes.TRAFFIC_READ]) == [Scopes.SCHEDULE_READ]
+
+
 def test_the_approve_permission_opens_no_tool() -> None:
     """It belongs on an approval grant. As a caller's scope it is worth nothing."""
     assert Scopes.REBOOKING_APPROVE not in Scopes.all()

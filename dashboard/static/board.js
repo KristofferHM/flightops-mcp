@@ -124,7 +124,43 @@
       throw new Error("sign-in required");
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
+    const body = await response.json();
+    noteServed(path, body);
+    return body;
+  }
+
+  // What each part of the page was built from, as the server listed it. The footer is
+  // their union: a source is credited exactly while something it supplied is on screen.
+  const served = {};
+  function servedPart(path) {
+    if (path.startsWith("/api/board")) return "board";
+    if (path.endsWith("/triage")) return "triage";
+    if (path.endsWith("/track") || path.includes("/track?")) return "track";
+    if (path.startsWith("/api/traffic/")) return "traffic";
+    if (path.startsWith("/api/airport/")) return "detail";
+    return null;
+  }
+  function noteServed(path, body) {
+    const part = servedPart(path);
+    if (!part || !body || !Array.isArray(body.attribution)) return;
+    served[part] = body.attribution;
+    renderAttribution();
+  }
+  function forgetServed(...parts) {
+    for (const part of parts) delete served[part];
+    renderAttribution();
+  }
+  function renderAttribution() {
+    const lines = new Map();
+    for (const list of Object.values(served)) {
+      for (const line of list) if (!lines.has(line.name)) lines.set(line.name, line);
+    }
+    $("attribution").replaceChildren(...[...lines.values()].map((line) => {
+      const item = document.createElement("li");
+      item.textContent = line.text;
+      item.dataset.licenceClass = line.licence_class || "";
+      return item;
+    }));
   }
 
   // The part of the sphere on screen, as a centre and an angular radius. Rounded, so a
@@ -502,6 +538,7 @@
   }
 
   async function select(icao) {
+    if (icao !== state.selected) forgetServed("detail", "triage");
     state.selected = icao;
     state.detail = null;
     state.triaged = false;
@@ -625,6 +662,7 @@
   }
 
   function focusOn(icao24) {
+    if ((icao24 || null) !== state.focus) forgetServed("track");
     state.focus = icao24 || null;
     state.focusData = null;
     state.track = null;
@@ -1363,6 +1401,7 @@
     state.airspace = [];
     state.trafficSnapshot = null;
     state.trafficUpstream = null;
+    forgetServed("traffic", "track");
     $("traffic-note").textContent = "";
     renderSelection(null);
     focusOn(null);

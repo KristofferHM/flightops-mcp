@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_USER_AGENT = "flightops-mcp/0.1 (+https://github.com/KristofferHM/flightops-mcp)"
+
+Edition = Literal["demo", "commercial", "byo"]
 
 
 class Settings(BaseSettings):
@@ -19,6 +22,11 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    # --- Edition (src/flightops_mcp/edition.py, docs/COMMERCIAL.md) -----------
+    # Which licence classes this process may serve. Checked once, before anything
+    # is served: a refused source stops the process with the variable that set it.
+    edition: Edition = "demo"
 
     # --- OpenSky Network (OAuth2 client credentials) -------------------------
     opensky_client_id: str | None = None
@@ -52,6 +60,28 @@ class Settings(BaseSettings):
 
     # --- AviationWeather.gov (no authentication) ----------------------------
     avwx_base_url: str = "https://aviationweather.gov/api/data"
+
+    # --- adsb.lol (ODbL 1.0; licence class B) --------------------------------
+    # Opt-in, because serving it accepts ODbL's obligations: attribution, and a
+    # derived database offered under ODbL. When on, it answers live traffic.
+    adsblol_enabled: bool = False
+    adsblol_base_url: str = "https://api.adsb.lol"
+    # Optional. Sent as `x-api-key`; without one the quota is per IP.
+    adsblol_api_key: SecretStr | None = None
+    # A local ceiling under adsb.lol's own: 500 requests a day per IP without a key.
+    adsblol_requests_per_hour: int = Field(default=20, ge=0)
+
+    # --- Paid schedule providers (licence class C) ---------------------------
+    # No adapter reads these. They exist so the edition gate can refuse them by
+    # name: a key in the environment is a statement that the source is in use.
+    aviationstack_access_key: SecretStr | None = None
+    aerodatabox_api_key: SecretStr | None = None
+
+    # --- Bring-your-own providers (licence class D; providers.py) ------------
+    # Comma-separated `module:attribute` paths to `ProviderAdapter` objects.
+    byo_providers: str = ""
+    # The labelled fixture adapter. It serves invented flights, never real ones.
+    byo_example_provider: bool = False
 
     # --- Inbound authentication (this server as an OAuth 2.1 resource server) -
     # Both must be set to serve over HTTP; stdio needs neither.

@@ -347,6 +347,28 @@ def schiphol_schedule(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Ob
     return f"EHAM: {'; '.join(parts)}. A published schedule, not observed movements."
 
 
+def provider_schedule(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Resolve an airport and count what the customer's own provider lists there."""
+    icao, missed = yield from _resolve(str(params["airport"]))
+    if icao is None:
+        return missed
+    arguments: dict[str, Any] = {"airport": icao, "direction": params.get("direction", "both")}
+    (schedule,) = yield [("provider_flights", arguments)]
+    if not schedule.ok:
+        return f"The provider's schedule is unavailable ({schedule.code}). What is due is unknown."
+    counts = schedule.payload.get("counts") or {}
+    statuses = [f.get("status") for f in schedule.payload.get("flights") or []]
+    listed = ", ".join(f"{count} {which}(s)" for which, count in sorted(counts.items()))
+    unknowns = schedule.payload.get("unknowns") or []
+    caveat = f" Caveats: {' '.join(unknowns)}" if unknowns else ""
+    attribution = "; ".join(r.get("attribution", "") for r in schedule.payload.get("sources") or [])
+    return (
+        f"{icao}: {listed} listed by the provider, {statuses.count('cancelled')} cancelled, "
+        f"{statuses.count('delayed')} delayed. A schedule, not observed movements.{caveat} "
+        f"Source: {attribution}"
+    )
+
+
 def airport_triage(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
     """Resolve an airport and run the composite triage. Severity is quoted, never upgraded."""
     icao, miss = yield from _resolve(params["airport"])
@@ -444,6 +466,7 @@ POLICIES: Final[dict[str, Policy]] = {
     "airport_movements": airport_movements,
     "airport_triage": airport_triage,
     "schiphol_schedule": schiphol_schedule,
+    "provider_schedule": provider_schedule,
     "passenger_impact": passenger_impact,
     "upstream_check": upstream_check,
     "decline": decline,

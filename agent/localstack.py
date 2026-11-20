@@ -27,6 +27,7 @@ start (`Runtime.data_clock`), because that is the moment the fixture describes.
 from __future__ import annotations
 
 import gc
+import os
 import secrets
 import tempfile
 from collections.abc import AsyncIterator, Callable
@@ -44,6 +45,7 @@ from flightops_mcp.airports import build_from_csv
 from flightops_mcp.auth import Scopes, refuse_inbound_token
 from flightops_mcp.auth.approval import APPROVAL_DETAIL_TYPE
 from flightops_mcp.config import Settings
+from flightops_mcp.providers_example import CREDENTIAL as EXAMPLE_CREDENTIAL
 from flightops_mcp.runtime import Runtime, set_runtime
 from services.idp.app import create_app as create_idp
 from services.idp.config import ClientConfig, IdpConfig
@@ -110,6 +112,8 @@ class Upstreams:
     ops: Callable[[httpx.Request], httpx.Response | None] | None = None
     # Free seats per target flight. None keeps the operations API's own.
     seats: dict[str, int] | None = field(default=None)
+    # Switches on the labelled example provider (licence class D, invented flights).
+    provider_example: bool = False
 
 
 class _OpsTap(httpx.AsyncBaseTransport):
@@ -245,7 +249,13 @@ async def local_stack(
             ops_api_base_url=OPS_URL,
             ops_api_audience=OPS_AUDIENCE,
             approval_audience=APPROVAL_AUDIENCE,
+            byo_example_provider=world.provider_example,
         )
+        # The example provider reads its credential from the environment, as a real one
+        # does. Set for this run only, and put back as it was.
+        previous = os.environ.get(EXAMPLE_CREDENTIAL)
+        if world.provider_example:
+            os.environ[EXAMPLE_CREDENTIAL] = _throwaway()
         upstream_clock = lambda: scenario.clock_start  # noqa: E731
         runtime = Runtime.build(
             settings,
@@ -284,6 +294,11 @@ async def local_stack(
         finally:
             set_runtime(None)
             await runtime.aclose()
+            if world.provider_example:
+                if previous is None:
+                    os.environ.pop(EXAMPLE_CREDENTIAL, None)
+                else:
+                    os.environ[EXAMPLE_CREDENTIAL] = previous
             # `AirportDB` leaves each lookup's SQLite connection to the garbage
             # collector, and Windows will not delete a file that is still open.
             # Collect before the directory goes, so nothing is left behind.

@@ -39,8 +39,12 @@ from .config import Settings
 from .credits import CreditLedger
 from .errors import ToolFailure, daily_budget_exhausted, missing_credentials, upstream_unavailable
 from .http import UpstreamHttp, authorized_get, credits_remaining_from_headers
+from .licences import licensed
 from .opensky_token import OpenSkyTokenManager
 from .telemetry import CREDITS_REMAINING, CREDITS_SPENT, UPSTREAM_CREDITS_SPENT, get_logger
+
+# This adapter's terms (licences.py). A source with no entry fails import here.
+LICENCE = licensed("opensky")
 
 SleepFn = Callable[[float], Any]
 

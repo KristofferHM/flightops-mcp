@@ -20,6 +20,10 @@ import httpx
 from .config import Settings
 from .errors import ToolFailure, not_found, upstream_unavailable
 from .http import SleepFn, UpstreamHttp
+from .licences import licensed
+
+# This adapter's terms (licences.py). A source with no entry fails import here.
+LICENCE = licensed("ops_api")
 
 UPSTREAM = "internal operations API"
 

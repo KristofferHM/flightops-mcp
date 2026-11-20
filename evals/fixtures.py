@@ -14,6 +14,8 @@
         credentials: true
         token: {status: 403}
         flights: {status: 200, json: {flights: [...]}}
+      provider:
+        example: true
       ops:
         manifests: {SK1429: [{connecting_flight: SK903, connection_minutes: 35}]}
         seats: {SK1433: 1}
@@ -55,6 +57,8 @@ _SECTIONS: Final[dict[str, frozenset[str]]] = {
     ),
     "schiphol": frozenset({"credentials", "token", "flights"}),
     "ops": frozenset({"manifests", "seats", "passengers", "rebookings"}),
+    # A bring-your-own provider. Only the labelled example fixture can be switched on.
+    "provider": frozenset({"example"}),
 }
 _ROW_KEYS: Final = frozenset(
     {"checked_in", "connecting_flight", "connection_minutes", "needs_assistance"}
@@ -77,6 +81,9 @@ def build(fixture: Mapping[str, Any]) -> tuple[Upstreams, Manifests | None]:
         sections[name] = section
     weather, opensky, ops = sections["weather"], sections["opensky"], sections["ops"]
     schiphol = sections["schiphol"]
+    example = sections["provider"].get("example", False)
+    if not isinstance(example, bool):
+        raise ScenarioInvalid("fixture.provider.example must be true or false")
 
     defaults = Upstreams()
     credentials = opensky.get("credentials", True)
@@ -101,6 +108,7 @@ def build(fixture: Mapping[str, Any]) -> tuple[Upstreams, Manifests | None]:
         schiphol_credentials=schiphol_credentials,
         ops=_ops(_response(ops, "passengers"), _response(ops, "rebookings")),
         seats=_seats(ops.get("seats")),
+        provider_example=example,
     )
     return upstreams, _manifests(ops.get("manifests"))
 

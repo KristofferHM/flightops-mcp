@@ -47,7 +47,9 @@ html, body { height: 100%; }
 body {
   margin: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  /* Strip, header, views, governance, attribution. Placed by row, so a page without
+     the demo strip keeps the same layout with an empty first row. */
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   background: var(--void);
   color: var(--type);
   font: 400 14px/1.45 var(--font-sans);
@@ -398,4 +400,48 @@ summary { color: var(--muted); font-size: 12px; cursor: pointer; }
   .governance div:nth-child(even) { border-left: 1px solid var(--line); }
   .governance div:first-child, .governance div:nth-child(2) { border-top: 0; }
   .governance div:last-child { grid-column: 1 / 3; }
+}
+
+/* The edition: placed by row (see body), and never hidden by a breakpoint. */
+.edition-strip { grid-row: 1; }
+.topline { grid-row: 2; }
+.views { grid-row: 3; }
+.governance { grid-row: 4; }
+.attribution { grid-row: 5; }
+
+/* A demo build must not pass for a licensed one, in a screenshot or anywhere else. */
+.edition-strip {
+  padding: 6px 20px;
+  background: var(--amber);
+  color: var(--void);
+  font-size: 13px;
+}
+.edition-strip a { color: var(--void); }
+
+/* Built from the payloads on screen (dashboard/licensing.py), never a fixed string. */
+.attribution {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  padding: 6px 20px 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.attribution ul { display: flex; flex-wrap: wrap; gap: 4px 16px; list-style: none; padding: 0; }
+.attribution li { overflow-wrap: anywhere; }
+
+body.licences { display: block; height: auto; }
+body.licences main { max-width: 960px; padding: 24px 20px 48px; }
+body.licences h1 { font-size: 22px; margin-bottom: 12px; }
+body.licences h2 { font-size: 16px; margin: 24px 0 8px; }
+body.licences ul { padding-left: 20px; }
+body.licences table { border-collapse: collapse; width: 100%; }
+body.licences th, body.licences td {
+  text-align: left;
+  vertical-align: top;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
 }

@@ -235,7 +235,8 @@ async def test_a_neighbour_never_reaches_the_triage() -> None:
 
     triage = await service.triage("ESGT")
 
-    assert triage == {"icao": "ESGT", **board.triage_view(TRIAGE)}
+    # `attribution` lists the triage's own sources; the fixture names none.
+    assert triage == {"icao": "ESGT", **board.triage_view(TRIAGE), "attribution": []}
     assert triage["severity"] == "unknown"
     assert "ESGG" not in str(triage)
     assert source.calls[-1] == ("disruption_triage", {"airport": "ESGT"})

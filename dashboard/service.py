@@ -15,6 +15,7 @@ from flightops_mcp.opensky import AIRSPACE_REGIONS
 from flightops_mcp.server import WEATHER_OVERVIEW_MAX
 
 from . import aircraft, board
+from .licensing import attribution
 from .sources import ToolSource
 
 # The selected airport's search. 40 nm around any listed airport is one credit.
@@ -134,8 +135,19 @@ class TrafficSpend:
         }
 
 
-def traffic_default(credentials: str | None) -> Payload:
+NOT_IN_EDITION: Final = (
+    "The {edition} edition serves no region-wide traffic: OpenSky's terms (licence class C) "
+    "need a written licence for commercial or operational use, and adsb.lol answers only "
+    "around one airport. Select an airport to see the traffic heard near it, where the "
+    "edition has a traffic source."
+)
+
+
+def traffic_default(credentials: str | None, edition: str = "demo") -> Payload:
     """Whether the layer starts on, and the sentence that says why."""
+    if edition != "demo":
+        # Only the demo may serve OpenSky, and the layer has no other source.
+        return {"on": False, "available": False, "reason": NOT_IN_EDITION.format(edition=edition)}
     if credentials == "client_credentials":
         return {
             "on": True,
@@ -219,10 +231,7 @@ class BoardService:
             for key, (label, _) in REGIONS.items()
         ]
 
-    async def _weather(self, icao: str) -> Payload:
-        return board.weather_view(await self._source.call("airport_weather", {"airport": icao}))
-
-    async def _overview(self, idents: list[str]) -> dict[str, Payload]:
+    async def _overview(self, idents: list[str]) -> tuple[dict[str, Payload], list[Payload]]:
         """Weather views for many airports, one `weather_overview` call per hundred."""
         gate = asyncio.Semaphore(WEATHER_CONCURRENCY)
         chunks = [
@@ -241,7 +250,7 @@ class BoardService:
             for icao in chunk:
                 entry = entries.get(icao) if answer.get("ok") else answer
                 views[icao] = board.weather_view(entry or NOT_ANSWERED)
-        return views
+        return views, list(answers)
 
     async def snapshot(
         self,
@@ -265,7 +274,7 @@ class BoardService:
         # Asked in code order, so a view held still sends the same hundreds each poll and
         # the tools' 60 s cache answers the repeats without asking NOAA.
         asked = sorted(airport["ident"] for airport in listed)
-        views = await self._overview(asked)
+        views, answers = await self._overview(asked)
         self._views.update(views)
         looked_up, calls = len(asked), math.ceil(len(asked) / WEATHER_OVERVIEW_MAX)
         found = board.neighbours(listed, views)
@@ -274,6 +283,7 @@ class BoardService:
         self._neighbours.update(found)
         status = await self._source.call("upstream_status", {})
         governance = board.governance(status)
+        edition = str((status.get("licences") or {}).get("edition") or "demo")
         weather = list(views.values())
         entries = [
             board.board_airport(record, self._summary(record["ident"], view), board.marker(view))
@@ -291,7 +301,7 @@ class BoardService:
             ),
             "governance": governance,
             "traffic": {
-                **traffic_default(governance["credentials"]),
+                **traffic_default(governance["credentials"], edition),
                 **self.traffic.view(),
                 "refused": self._traffic_refused,
             },
@@ -328,6 +338,8 @@ class BoardService:
                 "globe_altitude_ceiling_m": board.GLOBE_ALTITUDE_CEILING_M,
                 "trimmed_tip": board.TRIMMED_TIP,
             },
+            # The airports are OurAirports', whether or not any weather was asked for.
+            "attribution": attribution(*answers, reference=True),
         }
 
     def airport_list(
@@ -377,7 +389,8 @@ class BoardService:
         """The selected airport: weather and the aircraft heard around it."""
         record = self._airport(icao)
         ident = record["ident"]
-        weather = await self._weather(ident)
+        weather_payload = await self._source.call("airport_weather", {"airport": ident})
+        weather = board.weather_view(weather_payload)
         self._views[ident] = weather
         traffic = await self._source.call(
             "airport_live_traffic",
@@ -397,12 +410,13 @@ class BoardService:
             "marker": board.marker(weather),
             "traffic": board.traffic_view(traffic),
             "movements": {"arrivals": "not requested", "departures": "not requested"},
+            "attribution": attribution(weather_payload, traffic, reference=True),
         }
 
     async def triage(self, icao: str) -> Payload:
         ident = self._airport(icao)["ident"]
         payload = await self._source.call("disruption_triage", {"airport": ident})
-        return {"icao": ident, **board.triage_view(payload)}
+        return {"icao": ident, **board.triage_view(payload), "attribution": attribution(payload)}
 
     def selection(self, airport: str | None, **choices: Any) -> aircraft.Selection:
         """The reader's choices, with the airport resolved against the board's own list."""
@@ -432,6 +446,7 @@ class BoardService:
         if layer is None:
             return {
                 **board.refused_view("No traffic layer is held yet; turn traffic on."),
+                "attribution": [],
                 "refused": None,
                 "selection": None,
                 "cost": self.traffic.view(),
@@ -450,7 +465,11 @@ class BoardService:
         payload = await self._source.call(
             "aircraft_track", {"icao24": wanted, "estimate_arrival": estimate}
         )
-        return {"icao24": wanted, **aircraft.track_view(payload)}
+        return {
+            "icao24": wanted,
+            **aircraft.track_view(payload),
+            "attribution": attribution(payload),
+        }
 
     async def airspace(self, region: str, choice: aircraft.Selection | None = None) -> Payload:
         """The region's traffic layer, if the layer's ceiling allows one more refresh."""
@@ -462,6 +481,7 @@ class BoardService:
             self._traffic_refused = f"Auto-refresh stopped: {refused}."
             return {
                 **board.refused_view(self._traffic_refused),
+                "attribution": [],
                 "selection": None,
                 "cost": self.traffic.view(),
             }
@@ -470,7 +490,8 @@ class BoardService:
         )
         spent = (payload.get("bookkeeping") or {}).get("credits_spent")
         self.traffic.record(spent if isinstance(spent, int) else 0)
-        view = board.airspace_view(payload)
+        # Held with the layer, so a re-selection that spends nothing still credits its source.
+        view = {**board.airspace_view(payload), "attribution": attribution(payload)}
         error = payload.get("error") or {}
         if payload.get("ok"):
             self._traffic_refused = None
