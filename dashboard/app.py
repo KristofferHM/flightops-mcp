@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from .aircraft import CAPS, DEFAULT_CAP, RADII_NM, Selection
 from .board import MAX_SNAPSHOT_EPOCH
 from .gate import COOKIE_NAME, LOCAL_HOSTS, SESSION_TTL_S, Gate, host_name
+from .inbound import DRAWN_MAX
 from .service import (
     DEFAULT_REGION,
     LIST_PAGE,
@@ -257,3 +258,15 @@ def _traffic_routes(app: FastAPI, service: BoardService) -> None:
         estimate: bool = False,
     ) -> dict[str, Any]:
         return await service.track(region, icao24, estimate=estimate)
+
+    @app.post("/api/traffic/{region}/inbound/{icao}/tracks")
+    async def api_inbound_tracks(
+        region: str, icao: str, count: Annotated[int, Query(ge=0, le=DRAWN_MAX)]
+    ) -> dict[str, Any]:
+        """Observed tracks for what approaches an airport, at the price the page showed."""
+        return await service.inbound_tracks(region, icao, count)
+
+    @app.post("/api/airport/{icao}/arrivals")
+    async def api_arrivals(icao: str) -> dict[str, Any]:
+        """The arrival board, for matching approaching aircraft by callsign. Spends."""
+        return await service.arrival_board(icao)
