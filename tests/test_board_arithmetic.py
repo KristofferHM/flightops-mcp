@@ -213,6 +213,7 @@ def test_a_reported_airport_keeps_its_codes_and_type() -> None:
         "name": "ESGG Airport",
         "latitude": 57.66,
         "longitude": 12.28,
+        "cat": "V",
         "iata": "GOT",
         "type": "large_airport",
         "weather": weather,

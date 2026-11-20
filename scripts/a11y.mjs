@@ -182,10 +182,28 @@ async function walk(browser, viewport, servers, passcode) {
     reached.add(await page.evaluate(() => document.activeElement && document.activeElement.id));
     await page.keyboard.press("Tab");
   }
-  const controls = ["unknown-on", "a-sort", "a-cap", "a-radius", "a-airline", "a-band", "a-phase", "a-q", "a-focus"];
+  const controls = ["unknown-on", "layer-airports", "layer-aircraft", "flights-only", "weather-chip-all", "a-sort", "a-cap", "a-radius", "a-airline", "a-band", "a-phase", "a-q", "a-focus"];
   const missed = controls.filter((id) => !reached.has(id));
   checks += 1;
   if (missed.length) fail(`${size} keyboard`, `not reached by Tab: ${missed.join(", ")}`);
+
+  // The layer switches and the weather chips: each pressed state is scanned, then let go.
+  await page.locator("#weather-chips button").nth(1).click();
+  await page.locator("#weather-chips button[aria-pressed='true']").nth(0).waitFor();
+  await page.locator("#weather-note", { hasText: "of" }).waitFor();
+  await inspect(page, viewport, "weather filter chosen");
+  await page.locator("#weather-chip-all").click();
+  await page.getByRole("button", { name: "Flights only" }).click();
+  await page.locator('#flights-only[aria-pressed="true"]').waitFor();
+  await page.locator('#layer-airports[aria-pressed="false"]').waitFor();
+  await inspect(page, viewport, "flights only");
+  await page.getByRole("button", { name: "Aircraft", exact: true }).click();
+  await page.locator("#layer-note", { hasText: "Nothing drawn: both layers are off" }).waitFor();
+  await inspect(page, viewport, "both layers off");
+  await page.getByRole("button", { name: "Airports", exact: true }).click();
+  await page.getByRole("button", { name: "Aircraft", exact: true }).click();
+  await page.locator('#layer-aircraft[aria-pressed="true"]').waitFor();
+  await page.locator("#layer-note").waitFor({ state: "hidden" });
 
   await page.getByLabel("Show airports without a report").check();
   await page.locator("#unknown-note", { hasText: "dashed rings" }).waitFor();

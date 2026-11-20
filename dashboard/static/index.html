@@ -48,6 +48,17 @@
           <label class="check"><input id="unknown-on" type="checkbox" aria-describedby="unknown-note"> Show airports without a report</label>
           <span id="unknown-note" class="note" role="status"></span>
         </span>
+        <div id="layers" class="chips layers" role="group" aria-label="Layers drawn on the map">
+          <span class="chip-row">
+            <button id="layer-airports" class="quiet" type="button" aria-pressed="true">Airports</button>
+            <button id="layer-aircraft" class="quiet" type="button" aria-pressed="true">Aircraft</button>
+            <button id="flights-only" class="quiet" type="button" aria-pressed="false">Flights only</button>
+          </span>
+        </div>
+        <div id="weather-filter" class="chips" role="group" aria-label="Show airports by weather" hidden>
+          <span id="weather-chips" class="chip-row"></span>
+          <p id="weather-note" class="note" role="status"></p>
+        </div>
         <p id="coverage" class="note coverage"></p>
         <span id="traffic-note" class="note" role="status"></span>
         <div id="classes" class="chips" role="group" aria-label="Show aircraft by who is flying" hidden>
@@ -62,6 +73,7 @@
         <div class="canvas-wrap">
           <canvas id="map" role="img" aria-label="Map of the region's airports. The airport list holds the same information as text."></canvas>
           <div id="tip" class="tip" hidden></div>
+          <p id="layer-note" class="layer-note" role="status" hidden></p>
         </div>
       </div>
       <div class="legend">

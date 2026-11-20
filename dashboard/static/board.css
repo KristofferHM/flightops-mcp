@@ -271,6 +271,23 @@ a { color: var(--amber); }
 .chip-row button { min-height: 32px; padding: 3px 10px; font-size: 13px; }
 .chip-row button[aria-pressed="true"] { color: var(--void); background: var(--amber); border-color: var(--amber); font-weight: 600; }
 .chips .note:empty { display: none; }
+/* The layer switches read as chips: pressed is drawn, released is hidden. */
+.layers .chip-row button[aria-pressed="false"] { color: var(--muted); }
+/* Said over the map when nothing, or no airport, is drawn: never a blank map without a reason. */
+.layer-note {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 8px 12px;
+  transform: translate(-50%, -50%);
+  color: var(--type);
+  background: var(--panel);
+  border: 1px solid var(--control);
+  pointer-events: none;
+}
 .note.warn { color: var(--amber); }
 .note.warn:empty { display: none; }
 

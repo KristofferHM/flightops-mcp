@@ -339,6 +339,9 @@ class BoardService:
                 "text": board.hidden_note(unknown),
                 "shown_text": board.shown_note(unknown),
             },
+            # The weather chips. Render-only in the page, like the unknown toggle: the
+            # server is never told which chip is chosen, so this never depends on it.
+            "weather_filter": board.weather_filter(entries),
             "clusters": {
                 f"{cell:g}": board.clusters(entries, cell) for _, cell in board.CLUSTER_LEVELS
             },

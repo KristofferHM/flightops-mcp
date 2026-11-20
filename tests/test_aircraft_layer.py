@@ -686,7 +686,7 @@ async def test_an_airport_without_a_report_is_trimmed_to_where_it_is() -> None:
     trimmed = [a for a in snapshot["airports"] if "marker" not in a]
     full = [a for a in snapshot["airports"] if "marker" in a]
     assert len(trimmed) == 400 and len(full) == 200
-    assert all(set(a) == {"icao", "name", "latitude", "longitude"} for a in trimmed)
+    assert all(set(a) == {"icao", "name", "latitude", "longitude", "cat"} for a in trimmed)
     assert all(a["marker"]["category"] == "VFR" for a in full)
 
 
