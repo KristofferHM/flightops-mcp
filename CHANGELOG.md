@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **What approaches the selected airport.** Airborne aircraft within 60 nm whose track is within ±30° of the
+  bearing to the airport, from the held traffic layer at no cost, nearest 12 drawn with a ring and a dashed
+  great circle labelled *projected, not observed*, each with an ETA estimated from ground speed. On request: the
+  arrival board (4 credits), whose callsign matches are counted apart as evidence, and observed tracks for the
+  drawn set at a price stated in the button (4 credits each), with a shortfall refused as data. `dashboard/inbound.py`.
 - **`aircraft_track`**: one aircraft's observed path from OpenSky `/tracks/all` (4 credits, its own bucket,
   measured), and on request OpenSky's ADS-B arrival estimate from `/flights/aircraft` (30 credits, measured,
   client credentials only), given only for a record of the observed flight. `destination` is always
@@ -26,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callsigns over two live snapshots. `scripts/measure_frames.mjs` measures clutter and frame time.
 
 ### Fixed
+- **An aircraft selection could not be let go of** except by a button that may be off-screen on a phone. Empty
+  map, Escape (follow first, then the selection), the selected aircraft again and another aircraft now all clear
+  or replace it, and the status line says which. A poll in flight when the selection changed could repaint the
+  old aircraft's brackets and panel; its answer is now dropped. The observed transit is drawn solid: a dash now
+  means projected.
 - The page's first poll now waits for the first frame, so it asks about the view on screen instead of a default.
 - **The protocol surface around the tools** (`docs/PROTOCOL.md`). Every tool carries annotations from a closed
   table (`annotations.py`); a tool without an entry fails registration, as one without a scope does.

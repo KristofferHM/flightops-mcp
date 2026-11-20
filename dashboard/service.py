@@ -14,7 +14,7 @@ from flightops_mcp.airports import CONTINENTS
 from flightops_mcp.opensky import AIRSPACE_REGIONS
 from flightops_mcp.server import WEATHER_OVERVIEW_MAX
 
-from . import aircraft, board
+from . import aircraft, board, inbound
 from .sources import ToolSource
 
 # The selected airport's search. 40 nm around any listed airport is one credit.
@@ -157,6 +157,25 @@ def traffic_default(credentials: str | None) -> Payload:
     }
 
 
+def _tracks_answer(
+    icao: str, tracks: list[Payload], requested: int, spent: int, refused: str | None
+) -> Payload:
+    """The observed-track answer. `refused` is shown in the panel as it is."""
+    observed = sum(1 for track in tracks if track["state"] == "observed")
+    none = len(tracks) - observed
+    text = f"{observed} observed track{'' if observed == 1 else 's'} drawn, {spent} credits spent"
+    if none:
+        text += f"; OpenSky held no track for {none}, which keep their {inbound.PROJECTED} line"
+    return {
+        "icao": icao,
+        "requested": requested,
+        "tracks": tracks,
+        "credits_spent": spent,
+        "refused": refused,
+        "text": refused if refused and not tracks else text + (f". {refused}" if refused else "."),
+    }
+
+
 def _matches(airport: Payload, needle: str) -> bool:
     fields = (airport["ident"], airport.get("iata"), airport["name"], airport.get("municipality"))
     return any(needle in str(value).casefold() for value in fields if value)
@@ -183,6 +202,8 @@ class BoardService:
         # The newest traffic layer per region. Filters, sorts and focus re-read it for
         # free; only a refresh spends credits.
         self._held: dict[str, Payload] = {}
+        # The callsigns on each airport's arrival board, once the reader paid to read it.
+        self._arrivals: dict[str, list[str]] = {}
 
     def _airport(self, icao: str) -> Payload:
         # Only listed airports: a request must not be able to pick what credits buy.
@@ -420,9 +441,91 @@ class BoardService:
 
     def _selected(self, layer: Payload, choice: aircraft.Selection) -> Payload:
         now = layer.get("upstream_epoch") or None
-        chosen = aircraft.select(layer.get("aircraft") or [], choice, now)
+        held = layer.get("aircraft") or []
+        chosen = aircraft.select(held, choice, now)
+        # Read from the whole layer, not the filtered and capped draw: what approaches an
+        # airport does not depend on which airline the reader is looking at.
+        origin = choice.airport
+        chosen["inbound"] = (
+            inbound.inbound_view(held, origin, self._arrivals.get(origin["icao"]))
+            if origin is not None
+            else None
+        )
         # The layer's full list stays here; the page receives only what it draws.
         return {**layer, "aircraft": chosen.pop("aircraft"), "selection": chosen}
+
+    async def arrival_board(self, icao: str) -> Payload:
+        """The airport's arrival list, held for matching by callsign. 4 credits, on request."""
+        ident = self._airport(icao)["ident"]
+        payload = await self._source.call(
+            "airport_movements", {"airport": ident, "direction": "arrival", "window_minutes": 60}
+        )
+        view = inbound.board_view(payload)
+        if view["callsigns"] is not None:
+            self._arrivals[ident] = view["callsigns"]
+        spent = (payload.get("bookkeeping") or {}).get("credits_spent")
+        return {"icao": ident, **view, "credits_spent": spent if isinstance(spent, int) else 0}
+
+    async def inbound_tracks(self, region: str, icao: str, count: int) -> Payload:
+        """Observed tracks for the drawn approaching aircraft, at the price the page showed.
+
+        The set is recomputed from the held layer, so a request cannot pick what credits buy,
+        and `count` must match it, so nothing is spent at a price the reader did not see.
+        A refusal is data in the answer, never a silent fallback to the projection.
+        """
+        if region not in AIRSPACE_REGIONS or region not in REGIONS:
+            raise UnknownBoardItem(region)
+        record = self._airport(icao)
+        origin = {
+            "icao": record["ident"],
+            "latitude": record["latitude"],
+            "longitude": record["longitude"],
+        }
+        layer = self._held.get(region)
+        if layer is None:
+            return _tracks_answer(record["ident"], [], 0, 0, inbound.NO_LAYER)
+        view = inbound.inbound_view(
+            layer.get("aircraft") or [], origin, self._arrivals.get(origin["icao"])
+        )
+        wanted = [row["icao24"] for row in view["aircraft"]]
+        if count != len(wanted):
+            now = view["price"]
+            changed = (
+                f"The approaching set changed since the price was shown: it is now "
+                f"{now['count']} aircraft, {now['total']} credits. Nothing was spent."
+            )
+            return _tracks_answer(record["ident"], [], len(wanted), 0, changed)
+        governance = board.governance(await self._source.call("upstream_status", {}))
+        refused = inbound.tracks_refusal(len(wanted), inbound.remaining_credits(governance))
+        if refused is not None:
+            return _tracks_answer(record["ident"], [], len(wanted), 0, refused)
+        tracks: list[Payload] = []
+        spent = 0
+        stopped: str | None = None
+        for icao24 in wanted:
+            payload = await self._source.call(
+                "aircraft_track", {"icao24": icao24, "estimate_arrival": False}
+            )
+            error = payload.get("error") or {}
+            if not payload.get("ok") and error.get("code") in REFUSAL_CODES:
+                left = len(wanted) - len(tracks)
+                stopped = (
+                    f"The credit guard stopped after {len(tracks)} of {len(wanted)} tracks: "
+                    f"{error.get('message', error['code'])} The other {left} keep their "
+                    f"{inbound.PROJECTED} line."
+                )
+                break
+            view_one = aircraft.track_view(payload)
+            spent += view_one["credits_spent"] or 0
+            tracks.append(
+                {
+                    "icao24": icao24,
+                    "state": view_one["state"],
+                    "waypoints": view_one["waypoints"],
+                    "unknowns": view_one["unknowns"],
+                }
+            )
+        return _tracks_answer(record["ident"], tracks, len(wanted), spent, stopped)
 
     def reselect(self, region: str, choice: aircraft.Selection) -> Payload:
         """The held layer under new choices. Asks no upstream and spends nothing."""

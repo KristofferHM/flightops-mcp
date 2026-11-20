@@ -61,6 +61,7 @@
         </div>
       </div>
       <div class="legend">
+        <p id="map-status" class="legend-foot map-status" role="status" aria-live="polite"></p>
         <span class="key"><i class="mark vfr"></i>VFR</span>
         <span class="key"><i class="mark mvfr"></i>MVFR</span>
         <span class="key"><i class="mark ifr"></i>IFR</span>
@@ -77,6 +78,7 @@
           the ground; on the globe, lifted by altitude on a stem. A numbered marker is a group of
           airports in its most common category, with a badge for a worse one: zoom in to split it.
         </p>
+        <p id="inbound-legend" class="legend-foot" hidden></p>
         <p id="view-note" class="legend-foot"></p>
       </div>
     </section>
@@ -122,7 +124,7 @@
         <div class="aircraft-actions">
           <button id="a-follow" type="button" aria-pressed="false">Follow</button>
           <button id="a-estimate" type="button">Estimate arrival — 30 credits</button>
-          <button id="a-clear" class="quiet" type="button">Clear focus</button>
+          <button id="a-clear" class="quiet" type="button">Clear selection</button>
         </div>
         <p id="a-follow-note" class="note" role="status"></p>
         <dl id="a-facts" class="facts compact"></dl>
@@ -144,6 +146,19 @@
           <dt>Departures</dt><dd id="d-departures"></dd>
         </dl>
         <p id="d-raw" class="raw"></p>
+        <section id="inbound" class="inbound" aria-labelledby="i-title">
+          <h3 id="i-title">Approaching</h3>
+          <p id="i-summary" class="note" role="status"></p>
+          <p id="i-dropped" class="note warn"></p>
+          <p id="i-rule" class="sub"></p>
+          <ol id="i-list" class="inbound-list"></ol>
+          <div class="aircraft-actions">
+            <button id="i-board" type="button">Check the arrival board — 4 credits</button>
+            <button id="i-tracks" type="button" hidden></button>
+          </div>
+          <p id="i-board-note" class="note" role="status"></p>
+          <p id="i-tracks-note" class="note" role="status"></p>
+        </section>
         <button id="triage" type="button">Run triage (up to 9 credits)</button>
         <section id="triage-result" aria-live="polite" hidden>
           <h3>Triage: <span id="t-severity"></span></h3>

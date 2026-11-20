@@ -132,7 +132,7 @@ class Selection:
     focus: str | None = None
 
 
-def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dlon = math.radians(lon2 - lon1)
     x = math.sin(dlon) * math.cos(p2)
@@ -180,7 +180,7 @@ def _row(entry: Payload, origin: Payload | None) -> Payload:
     if origin is not None:
         lat, lon = origin["latitude"], origin["longitude"]
         row["distance_nm"] = round(haversine_nm(lat, lon, entry["latitude"], entry["longitude"]), 1)
-        row["bearing_deg"] = round(_bearing_deg(lat, lon, entry["latitude"], entry["longitude"]))
+        row["bearing_deg"] = round(bearing_deg(lat, lon, entry["latitude"], entry["longitude"]))
     return row
 
 

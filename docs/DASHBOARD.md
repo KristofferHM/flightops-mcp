@@ -169,6 +169,49 @@ since the page opened are drawn as dots with their times, never joined; and its 
 stale (unheard for 120 s) or leaves the snapshot, and says which; Escape, the button or moving the view releases
 it. Following is a view setting: it changes nothing that is fetched.
 
+**Letting go.** Every exit runs through one clear (`clearSelection` in `board.js`), so the panel, the brackets, the
+trail, the transit and the follow go together, and the status line under the map says which exit was taken:
+
+| Exit | What happens |
+|---|---|
+| Click or tap empty map | Clears. Nothing under the pointer is a request to let go |
+| Escape | Clears. When following, the first press releases the follow and says "Press Escape again"; the second clears |
+| Select the selected aircraft again | Clears: the tap that chose it can also let it go |
+| Select another | Replaces it whole: no transit, trail, follow or panel of the last one survives |
+| Clear selection button, or "none" in the Focus list | Clears |
+
+A selection survives a poll: the page sends it with each refresh. It does not survive a region change. A poll sent
+before the selection changed answers for the old aircraft; the page drops that answer rather than repaint it.
+
+### Approaching the selected airport
+
+The traffic layer has no destination, so what approaches an airport is **geometry**, read from the held layer for
+free (`dashboard/inbound.py`). An aircraft is approaching when it is airborne, within **60 nm**, and its track is
+within **±30°** of the bearing from it to the airport. 60 nm is about 15 minutes out for a jet on descent, wide
+enough to catch an arrival before it turns final; ±30° allows a dogleg or a vector and still excludes overflights
+crossing at right angles. The panel prints the rule, so a reader can disagree with it. The nearest **12** are
+drawn, and the panel says so: `27 approaching · 31 within 60 nm`, `drawing the nearest 12 of 27`.
+
+Each drawn one gets a ring, is drawn above every other aircraft, and has a **projected** line: a dashed great
+circle from where it was heard to the airport, thinner than any observed track. It is labelled *projected, not
+observed* in the legend and in the panel. Hovering an aircraft or its row, or selecting it, thickens its line and
+fades the rest. Each row gives the callsign, the airline if derived, the distance, the altitude and an ETA
+*estimated* from ground speed and distance, rounded to the minute; no ETA without a known, positive ground speed.
+
+| Layer | Cost | Drawn as | When |
+|---|---|---|---|
+| Projected | free | dashed | always, with traffic on and an airport selected |
+| Arrival board | 4 credits | rows marked *on the arrival board*, counted apart: `3 on the arrival board · 5 more approaching` | on request |
+| Observed tracks | 4 credits each | solid, replacing the projection for those aircraft only | on request: `Show observed tracks (8 aircraft · 4 credits each = 32)` |
+
+The observed-track button buys the drawn set, recomputed on the server, at the count the page showed: if the set
+has changed, nothing is spent and the panel says the new price. If the guards have too few credits left, the
+refusal is printed: `Not enough credits for 8 tracks (32 needed, 11 remaining)`. A guard that stops part-way is
+named, and the rest keep their projected line, said in words.
+
+OpenSky lists a flight on its arrival board **once it has landed**, so a live aircraft still in the air is usually
+not on it. A match is evidence; a missing callsign removes nothing from the geometric list.
+
 ### Observed, estimated, no source
 
 A transponder broadcasts where an aircraft is, not where it is going. The inspector keeps three lines for three

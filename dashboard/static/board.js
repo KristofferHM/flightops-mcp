@@ -31,6 +31,15 @@
   const TRAIL_POINTS = 120;
   const TRAIL_AIRCRAFT = 3000;
   const DIMMED = 0.3;
+  // Approach lines. Projected is dashed and thinner than any observed track, which is solid.
+  const PROJECTED_DASH = [4, 4];
+  const PROJECTED_WIDTH = 1;
+  const OBSERVED_WIDTH = 1.8;
+  const LIT_EXTRA = 1;
+  const FADED = 0.25;
+  const INBOUND_RING_PX = 8;
+  const INBOUND_OFF = "Turn traffic on to see what is approaching. It reads the traffic layer "
+    + "the board already holds, so it costs nothing.";
 
   // The colours and faces live in board.css. The canvas reads the same tokens.
   const styles = getComputedStyle(document.documentElement);
@@ -81,6 +90,8 @@
     choice: rememberedChoice(), aircraftQuery: "", selection: null,
     focus: null, focusData: null, follow: false, followHeard: null, followNote: "",
     track: null, trails: new Map(),
+    // What approaches the selected airport: the server's set, the one lit, and tracks paid for.
+    inbound: null, inboundHover: null, inboundTracks: new Map(),
     // Everything drawn that can be pointed at, rebuilt each frame, so a click hits what is seen.
     pickables: [], labels: [],
   };
@@ -307,6 +318,9 @@
     collectTrails(state.airspace);
     renderSelection(layer.selection);
     applyFocus(layer.selection ? layer.selection.focus : null);
+    // An answer asked for before the airport changed describes the old airport: not drawn.
+    const inbound = layer.selection ? layer.selection.inbound : null;
+    renderInbound(inbound && inbound.airport === state.selected ? inbound : null);
   }
 
   function startPolling() {
@@ -505,6 +519,11 @@
     state.selected = icao;
     state.detail = null;
     state.triaged = false;
+    // Approach lines belong to one airport. They are redrawn when its selection answers.
+    state.inboundTracks.clear();
+    $("i-tracks-note").textContent = "";
+    $("i-board-note").textContent = "";
+    renderInbound(null);
     $("triage-result").hidden = true;
     const airport = state.airports.find((item) => item.icao === icao);
     if (airport && state.projection === "globe") {
@@ -609,7 +628,10 @@
     }
   }
 
-  function applyFocus(focus) {
+  function applyFocus(answer) {
+    // A poll sent before the selection changed answers for the old aircraft. Painting it
+    // would bring back the brackets and the panel the reader just let go of.
+    const focus = answer && answer.icao24 === state.focus ? answer : null;
     state.focusData = focus;
     if (focus && focus.aircraft) collectTrails([focus.aircraft]);
     if (state.follow && focus) {
@@ -624,7 +646,10 @@
     renderAircraftPanel();
   }
 
+  // Selecting an aircraft replaces the last one whole: track, follow, panel and brackets.
   function focusOn(icao24) {
+    if (icao24 && state.focus && icao24 !== state.focus) say(`Selection moved to ${icao24}.`);
+    else if (icao24) say("");
     state.focus = icao24 || null;
     state.focusData = null;
     state.track = null;
@@ -667,6 +692,36 @@
     renderAircraftPanel();
   }
 
+  // The status line under the map: which of the exits just happened, in words.
+  function say(text) {
+    $("map-status").textContent = text;
+  }
+
+  const focusName = () => {
+    const aircraft = state.focusData && state.focusData.aircraft;
+    return (aircraft && (aircraft.callsign || "").trim()) || state.focus;
+  };
+
+  // Every way out of a selection ends here, so the panel, the brackets, the track and the
+  // follow all clear together. `how` is the exit, for the status line.
+  function clearSelection(how) {
+    if (!state.focus) return;
+    const name = focusName();
+    focusOn(null);
+    say(`Selection cleared (${how}): ${name}.`);
+  }
+
+  // Escape is one key with two steps: release the follow first, then let go of the aircraft.
+  function escape() {
+    if (state.follow) {
+      const text = "Follow released. Press Escape again to clear the selection.";
+      stopFollow(text);
+      say(text);
+      return;
+    }
+    clearSelection("Escape");
+  }
+
   function renderAircraftPanel() {
     const panel = $("aircraft-panel");
     panel.hidden = !state.focus;
@@ -701,10 +756,14 @@
     applyFocus(state.focusData);
   });
   $("a-estimate").addEventListener("click", () => fetchTrack(true));
-  $("a-clear").addEventListener("click", () => focusOn(null));
-  $("a-focus").addEventListener("change", () => focusOn($("a-focus").value));
+  $("a-clear").addEventListener("click", () => clearSelection("the Clear button"));
+  $("a-focus").addEventListener("change", () => {
+    const chosen = $("a-focus").value;
+    if (chosen) focusOn(chosen);
+    else clearSelection("the Focus list");
+  });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.follow) stopFollow("Follow released.");
+    if (event.key === "Escape" && !event.defaultPrevented) escape();
   });
 
   for (const [id, key] of [["a-sort", "sort"], ["a-cap", "cap"], ["a-radius", "radius_nm"],
@@ -1163,8 +1222,9 @@
     context.save();
     context.globalAlpha = 0.6;
     context.strokeStyle = INK.focus;
-    context.setLineDash([5, 4]);
-    context.lineWidth = 1.4;
+    // Solid: observed. A dash on this board means projected, not observed.
+    context.setLineDash([]);
+    context.lineWidth = OBSERVED_WIDTH;
     context.beginPath();
     path({ type: "LineString", coordinates });
     context.stroke();
@@ -1194,6 +1254,169 @@
     const name = (aircraft.callsign || "").trim() || aircraft.icao24;
     drawText(name, x + 14, y - 10, `700 12.5px ${MONO}`, INK.focus);
   }
+
+  // --- what approaches the selected airport ------------------------------------
+  const inboundIds = () => new Set(state.inbound ? state.inbound.aircraft.map((a) => a.icao24) : []);
+
+  // The one lit: the one under the pointer, else the selected one if it is approaching.
+  function inboundLit() {
+    if (state.inboundHover) return state.inboundHover;
+    return state.focus && inboundIds().has(state.focus) ? state.focus : null;
+  }
+
+  function hoverInbound(icao24) {
+    const next = icao24 && inboundIds().has(icao24) ? icao24 : null;
+    if (next === state.inboundHover) return;
+    state.inboundHover = next;
+    invalidate();
+  }
+
+  // The legend's words for the lines. The projection is never called a track.
+  function inboundLegend() {
+    return "Approach lines: dashed is projected, not observed — a great circle from where an "
+      + "aircraft was heard to the selected airport, nothing more. Solid is an observed track "
+      + "from OpenSky, drawn only when asked for. A ring marks an approaching aircraft.";
+  }
+
+  // Lines first, then the aircraft over them, ringed and above every other aircraft.
+  function drawInbound(path) {
+    const airport = selectedAirport();
+    if (!state.inbound || !airport) return;
+    const lit = inboundLit();
+    context.save();
+    context.strokeStyle = INK.focus;
+    for (const aircraft of state.inbound.aircraft) {
+      const observed = state.inboundTracks.get(aircraft.icao24);
+      const extra = lit === aircraft.icao24 ? LIT_EXTRA : 0;
+      context.globalAlpha = lit && !extra ? FADED : 0.85;
+      context.beginPath();
+      if (observed && observed.length) {
+        // Observed: solid. It replaces the projection for this aircraft only.
+        context.setLineDash([]);
+        context.lineWidth = OBSERVED_WIDTH + extra;
+        path({ type: "LineString", coordinates: observed.map((w) => [w.longitude, w.latitude]) });
+      } else {
+        // Projected, not observed: dashed, and thinner than any observed track.
+        context.setLineDash(PROJECTED_DASH);
+        context.lineWidth = PROJECTED_WIDTH + extra;
+        path({
+          type: "LineString",
+          coordinates: [[aircraft.longitude, aircraft.latitude], [airport.longitude, airport.latitude]],
+        });
+      }
+      context.stroke();
+    }
+    context.restore();
+    for (const aircraft of state.inbound.aircraft) {
+      if (aircraft.icao24 === state.focus) continue;
+      // Faded beside the lit one; dimmed like every other aircraft beside a selected one.
+      const faded = lit ? lit !== aircraft.icao24 : Boolean(state.focus);
+      drawAircraft(aircraft, false, faded, true);
+      const point = aircraftPoint(aircraft);
+      if (!point) continue;
+      context.globalAlpha = faded ? FADED : 1;
+      context.strokeStyle = INK.focus;
+      context.lineWidth = 1.25;
+      context.beginPath();
+      context.arc(point.at[0], point.at[1], INBOUND_RING_PX, 0, Math.PI * 2);
+      context.stroke();
+      context.globalAlpha = 1;
+    }
+  }
+
+  function inboundItem(aircraft) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quiet";
+    button.dataset.icao24 = aircraft.icao24;
+    button.dataset.evidence = aircraft.evidence;
+    button.textContent = aircraft.text;
+    button.addEventListener("click", () => focusOn(aircraft.icao24));
+    for (const name of ["mouseenter", "focus"]) {
+      button.addEventListener(name, () => hoverInbound(aircraft.icao24));
+    }
+    for (const name of ["mouseleave", "blur"]) button.addEventListener(name, () => hoverInbound(null));
+    item.append(button);
+    return item;
+  }
+
+  // Every word here was decided by the server (dashboard/inbound.py), except the legend's.
+  function renderInbound(inbound) {
+    state.inbound = inbound;
+    if (state.inboundHover && !inboundIds().has(state.inboundHover)) state.inboundHover = null;
+    const legend = $("inbound-legend");
+    legend.hidden = !inbound;
+    legend.textContent = inbound ? inboundLegend() : "";
+    const tracks = $("i-tracks");
+    if (!inbound) {
+      $("i-summary").textContent = $("traffic-on").checked ? "No traffic layer is held yet." : INBOUND_OFF;
+      $("i-dropped").textContent = "";
+      $("i-rule").textContent = "";
+      $("i-list").replaceChildren();
+      tracks.hidden = true;
+      invalidate();
+      return;
+    }
+    $("i-summary").textContent = inbound.text;
+    $("i-dropped").textContent = inbound.dropped || "";
+    $("i-rule").textContent = inbound.rule;
+    if (inbound.board_text) $("i-board-note").textContent = inbound.board_text;
+    $("i-list").replaceChildren(...inbound.aircraft.map(inboundItem));
+    tracks.textContent = inbound.price.text;
+    tracks.hidden = inbound.price.count === 0;
+    invalidate();
+  }
+
+  $("i-tracks").addEventListener("click", async () => {
+    const { inbound } = state;
+    const icao = state.selected;
+    const region = state.region;
+    if (!inbound || !icao) return;
+    const button = $("i-tracks");
+    const note = $("i-tracks-note");
+    button.disabled = true;
+    note.textContent = `Asking OpenSky for ${inbound.price.count} tracks (${inbound.price.total} credits).`;
+    try {
+      const answer = await api(
+        `/api/traffic/${encodeURIComponent(region)}/inbound/${encodeURIComponent(icao)}/tracks?count=${inbound.price.count}`,
+        { method: "POST" },
+      );
+      if (icao !== state.selected || region !== state.region) return;
+      for (const track of answer.tracks) {
+        if (track.state === "observed") state.inboundTracks.set(track.icao24, track.waypoints);
+      }
+      // A refusal is printed as it came, never replaced by the projection without a word.
+      note.textContent = answer.text;
+      refreshBoard();
+    } catch {
+      if (icao !== state.selected) return;
+      note.textContent = "The board server did not answer. No track was drawn; the lines stay projected.";
+    } finally {
+      button.disabled = false;
+      invalidate();
+    }
+  });
+
+  $("i-board").addEventListener("click", async () => {
+    const icao = state.selected;
+    if (!icao) return;
+    const button = $("i-board");
+    const note = $("i-board-note");
+    button.disabled = true;
+    try {
+      const answer = await api(`/api/airport/${encodeURIComponent(icao)}/arrivals`, { method: "POST" });
+      if (icao !== state.selected) return;
+      note.textContent = answer.text;
+      refreshSelection();
+      refreshBoard();
+    } catch {
+      if (icao !== state.selected) return;
+      note.textContent = "The board server did not answer. The arrival board was not read.";
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   function draw() {
     state.dirty = false;
@@ -1228,9 +1451,13 @@
     if (layer) {
       const dense = state.airspace.length > DENSE_AIRCRAFT && state.zoom < DETAIL_ZOOM;
       const dim = Boolean(state.focus);
+      const approaching = inboundIds();
       state.airspace.forEach((aircraft) => {
-        if (aircraft.icao24 !== state.focus) drawAircraft(aircraft, dense, dim, true);
+        if (aircraft.icao24 !== state.focus && !approaching.has(aircraft.icao24)) {
+          drawAircraft(aircraft, dense, dim, true);
+        }
       });
+      drawInbound(path);
     } else if (state.detail) {
       state.detail.traffic.aircraft.forEach((a) => drawAircraft(a, false, false, false));
     }
@@ -1287,6 +1514,7 @@
   canvas.addEventListener("pointermove", (event) => {
     if (!drag) {
       const pick = projection && nearest(event.offsetX, event.offsetY);
+      hoverInbound(pick && pick.kind === "aircraft" ? pick.item.icao24 : null);
       const tip = $("tip");
       tip.hidden = !pick;
       if (pick) {
@@ -1319,7 +1547,12 @@
       const pick = nearest(event.offsetX, event.offsetY);
       if (pick && pick.kind === "airport") select(pick.item.icao);
       else if (pick && pick.kind === "cluster") zoomInto(pick.item);
-      else if (pick && pick.kind === "aircraft") focusOn(pick.item.icao24);
+      else if (pick && pick.kind === "aircraft" && pick.item.icao24 === state.focus) {
+        // The selected aircraft again: a toggle, so the tap that chose it can also let it go.
+        clearSelection("selected again");
+      } else if (pick && pick.kind === "aircraft") focusOn(pick.item.icao24);
+      // Empty sky: nothing under the pointer is a request to let go.
+      else if (!pick) clearSelection("empty map");
     } else if (drag) {
       viewChanged();
     }
@@ -1328,7 +1561,7 @@
   }
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", () => { drag = null; canvas.classList.remove("dragging"); });
-  canvas.addEventListener("pointerleave", () => { $("tip").hidden = true; });
+  canvas.addEventListener("pointerleave", () => { $("tip").hidden = true; hoverInbound(null); });
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
     const factor = event.deltaY < 0 ? 1.2 : 1 / 1.2;
@@ -1365,6 +1598,8 @@
     state.trafficUpstream = null;
     $("traffic-note").textContent = "";
     renderSelection(null);
+    renderInbound(null);
+    state.inboundTracks.clear();
     focusOn(null);
     refreshBoard();
     invalidate();
@@ -1378,7 +1613,10 @@
     state.airspace = [];
     state.trafficSnapshot = null;
     state.trafficStopped = false;
-    focusOn(null);
+    // A region change is the one thing a selection does not survive.
+    clearSelection("region changed");
+    renderInbound(null);
+    state.inboundTracks.clear();
     refreshBoard();
     refreshTraffic();
     invalidate();

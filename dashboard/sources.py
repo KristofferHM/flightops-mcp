@@ -35,6 +35,8 @@ LIVE_TOOLS: Final[Mapping[str, Tool]] = {
     "airport_live_traffic": srv.airport_live_traffic,
     "airspace_snapshot": srv.airspace_snapshot,
     "aircraft_track": srv.aircraft_track,
+    # The arrival board, read only when the reader asks, to match callsigns as evidence.
+    "airport_movements": srv.airport_movements,
     "disruption_triage": srv.disruption_triage,
     "upstream_status": srv.upstream_status,
 }

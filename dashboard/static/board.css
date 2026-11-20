@@ -280,6 +280,16 @@ a { color: var(--amber); }
 .facts dd.mono { font-family: var(--font-mono); }
 .claims dt { color: var(--type); }
 
+/* What approaches the selected airport. Projected by geometry unless the arrival board says so. */
+.inbound { margin-top: 16px; }
+.inbound .note, .inbound .sub { margin-top: 6px; }
+.inbound .note:empty { display: none; }
+.inbound-list { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.inbound-list button { width: 100%; text-align: left; font: 12.5px/1.4 var(--font-mono); }
+.inbound-list button[data-evidence="arrival_board"] { border-left: 3px solid var(--amber); }
+.map-status:empty { display: none; }
+.map-status { color: var(--amber); }
+
 /* The last-update badge. An opaque panel, so its contrast does not depend on the map. */
 .last-update {
   position: absolute;
