@@ -195,6 +195,38 @@ adsb.lol is the only class-B source. Each of its obligations is a requirement wi
 - **Do not use AeroDataBox for mission-critical or safety-critical use**, which is what an operations product is.
 - **Do not replay a demo recording in a commercial deployment.** It may hold OpenSky data, and the board
   refuses `--replay` outside the demo.
+- **Do not identify the owner or lessee of an aircraft, and do not correlate an aircraft's movements with a
+  named person.** Not a licence question and not in the licence classes: a scope decision, argued below.
+
+## Out of scope: who is on board
+
+The data is aircraft, not people. Nothing here names a passenger, and the product must not go looking for one.
+
+Identifying an owner is partly possible — the FAA registry publishes a holder, some national registers publish
+one — and it must not be built. The chain *aircraft → natural person → movements → news about that person* is
+personal-data processing under GDPR (Art. 4(1), profiling under Art. 4(4)), and no lawful basis a product can
+claim survives the balancing test: not consent, not contract, and not legitimate interest when the profiling
+*is* the feature. A public registry is not a defence; public source assembled into a behavioural profile of a
+named individual is what the regulation is about. The journalistic exemption belongs to journalism and does not
+travel to a tracker with a subscription.
+
+It would also be wrong often. A large share of business jets are held through LLCs and trusts created to
+separate the holder from the flight, charter passengers are never named anywhere, and the operator is not the
+owner. Publishing a confident attribution that is sometimes false is defamation against a named person, which
+is a different kind of failure from a missing METAR.
+
+And the capability has no safe version at the individual level, because the harm does not depend on the intent
+of whoever builds it: the same query that finds where a fleet landed finds where anyone landed.
+
+What this edition does instead, and what a customer may ask for: **aggregate market views** (city pairs,
+seasonal curves, airport congestion, fleet mix) with no aircraft identity; **utilisation and emissions** per
+fleet or per operator, for corporates and operators who disclose, never per person; and **event context** —
+"twelve arrivals more than normal in the last hour, a SIGMET active" — tied to a place, which is situational
+awareness and is what an operations desk actually wants.
+
+No code enforces this, and none can: no configured source supplies owner data, so the boundary is a statement
+of scope rather than a runtime check. It is written down because a capability that was considered and declined
+is evidence, and a missing section is not.
 
 ## Where the licences leave genuine ambiguity
 
