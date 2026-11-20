@@ -41,3 +41,8 @@ mutants/
 
 # The accessibility gate's pinned tools (scripts/package-lock.json is committed)
 node_modules/
+
+# The demo video: the raw take and the MP4 are rebuilt by scripts/make_demo_video.mjs;
+# the MP4 is attached to the release, not committed (docs/DEMO-VIDEO.md)
+docs/demo/raw/
+docs/demo/*.mp4
