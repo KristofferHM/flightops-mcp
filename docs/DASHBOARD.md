@@ -19,12 +19,13 @@ existed is refused with the command that rebuilds it; the board never overwrites
 
 The region control offers Europe (508), North America (851), South America (274), Africa (342), Asia (1,054),
 Oceania (241) and World (3,270), each with the number of airports it will draw. The choice is remembered in the
-browser. The map draws every airport in the region; the list beside it shows 25 at a time, searchable by code,
-name or city. The server filters and pages the list (`/api/airports?region=&q=&offset=&limit=`), so a phone never
+browser. The map draws the airports nearest the centre of the view (below); the list beside it holds the whole
+region, 25 at a time, searchable by code, name or city. The server filters and pages the list (`/api/airports?region=&q=&offset=&limit=`), so a phone never
 holds more than one page of rows.
 
-Weather for a region arrives through `weather_overview`, a hundred airports per call, at most four calls at a time,
-cached for 60 s. The client asks NOAA 50 airports per request, so World is 66 requests per minute at most. An airport
+Weather arrives through `weather_overview`, a hundred airports per call, at most four calls at a time, cached for
+60 s, and only for the airports in view, at most 600 (next section). The client asks NOAA 50 airports per request,
+so a poll is 12 requests at most, where a World poll used to be 66. An airport
 NOAA did not answer for is Unknown with its own reason; the others in its request keep their reports. Why 50, and
 what NOAA does with more, is under "Weather requests, measured".
 
@@ -92,6 +93,144 @@ asks once more.
   (with `or more` when NOAA reported a floor), wind with gusts.
 - **Each source**: every leg's state, the age of its data by its own upstream's clock, and the endpoint.
 
+## The wide view: what is asked, what is drawn
+
+Measured on the running board at `region=world` before this change: a 900 KB answer in 6.6 s, 3,270 airports asked
+about, 1,888 of them (58 %) drawn as grey "Unknown" rings that carried no information. Four rules together, in
+`dashboard/board.py`:
+
+1. **Weather is asked for the view, not the region.** The page sends the centre of what it shows and its angular
+   radius (`/api/board?lat=&lon=&radius=`). The server asks about the airports within that radius plus 5°, nearest
+   the centre first, at most `WEATHER_LOOKUP_CAP` = 600, and says so: `Weather showing 600 of 3,270 nearest the
+   centre · 600 lookups in 6 calls`. The view is a circle, not a latitude/longitude box, because a box breaks at the
+   antimeridian and over a pole, and the globe's view is a circle anyway. The airports are sent to NOAA in code
+   order, so a view held still sends the same hundreds and the tools' 60 s cache answers the repeats. A moved view
+   asks again 0.7 s after it stops moving.
+2. **An airport without a report arrives trimmed**: code, name and coordinates. Its reason is still in the list and
+   in its detail. One exception: an airport with a neighbour's line keeps that line, because it is the only thing
+   the map can say about it.
+3. **Clusters below zoom 4.** Airports are grouped in 10° cells below zoom 2, 5° below 3 and 2.5° below 4. A group
+   is drawn in its most common category's shape (ties to the worse), sized by its count, with the count beside it
+   and a small badge in the worst category when that is worse, so one IFR airport is not lost in a cell of VFR. Its
+   tooltip reads `◆ 1 IFR · ● 2 VFR`. Selecting a group zooms in on it.
+4. **`Show airports without a report`**, off by default below zoom 4 and on from it, until the reader chooses; then
+   the choice is kept in the browser. Beside it the count is always shown: `167 hidden — no report heard`, or
+   `167 without a report, drawn as dashed rings`. It is a render filter. The page never sends it, no route takes
+   it, and two polls of one view are identical (`test_the_unknown_toggle_changes_no_payload_field`).
+
+Airport codes, from zoom 2.5, are placed worst category first and a code that would overlap one already placed is
+left out; its marker and tooltip stay.
+
+Measured on the live board, 2026-11-19, World at the page's first view:
+
+| | Before (brief) | After |
+|---|---|---|
+| Answer | 900 KB | 173 KB, 24 KB gzipped |
+| Airports asked | 3,270 | 600 |
+| Markers drawn at zoom 1 | 3,270 | 30–56 (10° groups, over three views) |
+| Hidden, and said so | none | 167 at the first view |
+| Poll, weather cached | 6.6 s | 0.3 s |
+| Poll, cold | | 2.1–3.3 s; 20–22 s when NOAA stalls a request past the 15 s timeout (2 of 5 cold polls) |
+
+**The 2-second target is met only when the weather is cached.** A cold poll is twelve NOAA requests at four at a
+time, and NOAA's stalls ("Weather requests, measured") are still there. Raising the concurrency would meet it more
+often, at the cost of the "not one burst" rule, so it was not changed here. Twenty-degree cells drew 11 to 19 groups
+at zoom 1, too coarse to read a continent; 5° drew up to 151.
+
+## Aircraft
+
+With traffic on, the aircraft are drawn on both projections, at the position OpenSky last heard and faded by age.
+**Nothing moves between observations**, and an aircraft with no position is not drawn.
+
+- **Map**: an arrow along the true track, a little larger the higher it is; hollow when no altitude was reported; a
+  square on the ground; a dot when no track was reported.
+- **Globe**: the same marks, each lifted radially by its altitude, `radius × (1 + min(alt, 12 km) / 12 km × 0.035)`,
+  with a thin stem down to where it is over the ground. A missing altitude is not lifted and is drawn hollow, so it
+  cannot pass for 0. Lifting a point radially is, once projected orthographically, scaling its ground point outward
+  from the centre (`aircraftPoint` in `board.js`). It is culled by where it is over the ground, by the same `place`
+  test as the airports. Both run in the page each frame; the lift itself is `board.globe_lift`.
+
+What a reader sees on the globe: over a busy region the arrows stand slightly proud of the coastline on short
+stems; near the limb the lift shows most, so aircraft over Scandinavia, seen from 20° N, fan visibly outward from
+their ground points, while one near the centre of the disc sits almost on its own ground point.
+
+**Choosing what is drawn** (`dashboard/aircraft.py`). Sort first: distance from the selected airport (the default),
+altitude (lowest first), callsign, last heard (most recent first), speed (fastest first). An unknown value sorts
+after every known one, and ties break by ICAO24, so the same snapshot and choices always draw the same aircraft.
+Then filters: within 25–500 nm of the selected airport, airline, altitude band (below 3 km, 3–9 km, above 9 km; an
+unknown altitude is in none), airborne or on the ground, callsign or ICAO24 search. Then the cap, 50 to 1,000,
+**default 200**. The panel says which control did what, `2 within 100 nm of ESSA · sorted by distance · showing 2`,
+and what the cap left out, `showing 200 of 412 — raise the cap or narrow the filter`. Distance without an airport
+falls back to last heard, and says so. The layer is held on the server, so changing a choice asks no upstream.
+
+**Focus**: select an aircraft on the map or in the Focus list. The others dim; it is labelled; the positions heard
+since the page opened are drawn as dots with their times, never joined; and its transit is asked for (4 credits).
+**Follow** keeps it centred, moving only when a new observation lands. It lets go by itself when the aircraft goes
+stale (unheard for 120 s) or leaves the snapshot, and says which; Escape, the button or moving the view releases
+it. Following is a view setting: it changes nothing that is fetched.
+
+### Observed, estimated, no source
+
+A transponder broadcasts where an aircraft is, not where it is going. The inspector keeps three lines for three
+kinds of claim:
+
+| Line | Kind | Source |
+|---|---|---|
+| Transit | **Observation** | OpenSky `/tracks/all?time=0`: waypoints, each with its time, drawn along great circles and never past the last one |
+| Estimated arrival | **Inference** | OpenSky `/flights/aircraft` for the last day: `estArrivalAirport`, from the first and last positions it heard. Labelled "estimated from ADS-B, not a schedule" |
+| Destination | **No source** | Needs a schedule provider (Schiphol is stubbed; AeroDataBox or AviationStack for global, FlightAware paid). None is configured |
+
+OpenSky lists a flight **once it has ended**, so an aircraft still flying usually has no record. An estimate is given
+only for a record whose first sighting is within 15 minutes of the track's start; any other record is shown as the
+last listed flight, not as this one's arrival. The estimate is behind a button because it costs 30 credits.
+
+Measured against OpenSky with client credentials, 2026-11-19, by `X-Rate-Limit-Remaining`:
+
+| Call | Credits | Note |
+|---|---|---|
+| `/tracks/all?icao24=…&time=0` | 4 per call | its own bucket (4000 → 3996 → 3992 → 3988 while `/states` stood at 3892). 58 waypoints over 49 min for one aircraft |
+| `/flights/aircraft`, 12 h or 1 day | 30 per call | the main bucket. A 2-day window was refused. The aircraft's current flight was not listed |
+
+On the live board an aircraft heard 7 s earlier had a track of 2 waypoints ending an hour before. OpenSky documents
+`/tracks` as experimental; the inspector prints the span (`22:42Z–22:49Z (7 min)`), and nothing is drawn in the gap.
+
+### Airlines, derived
+
+`dashboard/data/airlines.csv` holds 163 ICAO designators, compiled by hand; source, licence and how to add one are in
+`dashboard/data/README.md`. A callsign is an airline's when it is three letters and a flight number starting with a
+digit (`NOZ1260`, `BAW791G`, `FIN7LP`) or the three letters alone (`RYR`); `N12345` is a registration. Over the
+two live snapshots used to choose the table (Europe and North America, 2026-11-19, about 23:35 UTC):
+
+| | Aircraft | Airline-shaped | Named by the table |
+|---|---|---|---|
+| Europe | 1,335 | 1,268 (95.0 %) | 1,105 (87.1 %) |
+| North America | 8,281 | 5,111 (61.7 %) | 4,122 (80.6 %) |
+| Both | 9,616 | 6,379 | 5,227 (81.9 %) |
+
+The rest show their three letters: mostly business, cargo, charter and military operators.
+
+### Clutter and frame time, measured
+
+`node scripts/measure_frames.mjs` serves the real page over 1,202 synthetic aircraft, sets the cap, and drags each
+view for about two seconds in headless Chromium 159 on this laptop. The page reads no clock, so the script times
+each `draw` from outside by wrapping `requestAnimationFrame`. Draws per second (17–21) are set by how fast the
+script sends pointer events, so the draw time is the measure. Two runs, 2026-11-20:
+
+| Viewport | View | Cap 200: p50 / p95 | Cap 500: p50 / p95 | Cap 1,000: p50 / p95 |
+|---|---|---|---|---|
+| 1440 × 900 | map | 9.5 / 28.1 ms; 9.3 / 29.6 ms | 10.6 / 29.5 ms; 7.3 / 17.7 ms | 11.4 / 27.2 ms; 7.8 / 22.9 ms |
+| 1440 × 900 | globe | 12.0 / 29.3 ms; 13.5 / 36.4 ms | 15.1 / 41.7 ms; 13.4 / 37.2 ms | 17.0 / 41.5 ms; 15.5 / 32.5 ms |
+| 390 × 844 | map | 7.6 / 18.8 ms; 7.0 / 22.6 ms | 9.5 / 26.8 ms; 7.0 / 15.5 ms | 10.4 / 25.9 ms; 10.3 / 27.3 ms |
+| 390 × 844 | globe | 14.6 / 34.5 ms; 10.6 / 25.7 ms | 12.9 / 33.6 ms; 10.0 / 29.6 ms | 17.3 / 39.6 ms; 14.8 / 40.5 ms |
+
+- **The globe does not hold 30 fps at the 95th percentile while dragging at 500 aircraft** on this machine
+  (p95 33.6–41.7 ms against 33.3 ms), and not reliably at 200 either (25.7–36.4 ms). The median holds everywhere.
+- **The cap is not what costs.** Reprojecting the coastline and graticule each frame does; above 400 aircraft at a
+  wide zoom they are drawn as small squares, which are cheaper than arrows. A lower default would not buy 30 fps,
+  so the default stays at 200: past that, the picture is clutter (at 1,000 a continent is a speckle).
+- What each looks like: at 200, separate arrows with room between them; at 500, Europe's airways read as bands of
+  squares; at 1,000, a solid speckle over Europe in which no single aircraft can be followed without focus.
+
 ## Settings
 
 All are environment variables, or lines in `.env`. Changing one needs a restart and nothing else.
@@ -122,9 +261,15 @@ The mode appears in `upstream_status`, in the `opensky_mode` startup log line an
 - Zero aircraft reads "none heard, coverage not proven". Zero movements reads "not available yet today".
 - The banner (`LIVE`, `STALE`, `RECORDED <time>`, `NO DATA`) is computed from the payloads.
 - Aircraft stay where they were last reported and fade with age, measured from the moment of the answer.
-  They are never animated between polls.
+  They are never animated between polls, and a follower moves only when a new observation lands.
+- A missing altitude is never drawn or sorted as 0. A transit is never drawn past its last waypoint.
+- `transit`, `estimated arrival` and `destination` are three lines, because they are three kinds of claim.
+- The count of what is hidden or left out is always on screen: airports without a report, and aircraft past the cap.
 
-These decisions are made in `dashboard/board.py`, so they are tested in Python.
+These decisions are made in `dashboard/board.py` and `dashboard/aircraft.py`, so they are tested in Python. Two
+run in the page each frame, because the view changes between polls: the far-side cull and the zoom at which the
+toggle's default flips. Python holds the same rules with their tests, the server sends the thresholds, and a test
+reads `board.js` to check that aircraft pass through the airports' `place`.
 
 ## Identity
 
@@ -229,6 +374,11 @@ traffic layer on by default, a triage with every panel field filled, a search, a
 `A11Y_CHANNEL=msedge` runs it in an installed Edge instead of Playwright's Chromium. On 2026-11-19, in Edge
 157.0.4341.60 with axe-core 4.14.1: 33 checks, 0 serious or critical violations, no overflow at 390 px. The stale,
 refused and recorded states are not part of the walk.
+
+Since the aircraft layer the walk also turns on `Show airports without a report`, focuses an aircraft from the
+Focus list (the keyboard's way to an aircraft, since the canvas is not focusable), follows it and releases it with
+Escape, and checks that Tab reaches every new control. On 2026-11-20, in Playwright's Chromium 159 with
+axe-core 4.14.1: 41 checks, 0 serious or critical violations, no overflow at 390 px.
 
 ## Exposure
 

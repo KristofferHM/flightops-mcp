@@ -130,8 +130,9 @@ async def test_a_failed_overview_marks_its_airports_unknown_with_the_code() -> N
 
     snapshot = await board_service.snapshot("europe")
 
-    assert {a["marker"]["kind"] for a in snapshot["airports"]} == {"unknown"}
-    assert snapshot["airports"][0]["weather"]["summary"] == (
+    # The map gets the trimmed entry; the reason travels with the list and the detail.
+    assert all("marker" not in a and "weather" not in a for a in snapshot["airports"])
+    assert board_service.airport_list("europe")["items"][0]["weather"]["summary"] == (
         "Unknown: weather unavailable (upstream_unavailable)"
     )
 
@@ -140,10 +141,10 @@ async def test_an_overview_without_an_entry_is_not_called_weather() -> None:
     board_service, source = service(EUROPE[:2])
     source.answers["weather_overview"] = {"ok": True, "airports": {}}
 
-    snapshot = await board_service.snapshot("europe")
+    await board_service.snapshot("europe")
 
     assert (
-        snapshot["airports"][0]["weather"]["summary"]
+        board_service.airport_list("europe")["items"][0]["weather"]["summary"]
         == "Unknown: weather unavailable (not_answered)"
     )
 

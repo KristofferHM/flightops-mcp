@@ -1,0 +1,45 @@
+id: happy-aircraft-track
+group: happy-path
+why: 'A path is observed, an arrival is estimated, a destination has no source: three claims, kept apart.'
+question: Where has aircraft 4ca1fa flown this morning, and where did it land?
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.traffic.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+fixture:
+  opensky:
+    tracks:
+      status: 200
+      json:
+        icao24: 4ca1fa
+        callsign: 'SAS4047 '
+        startTime: 1794812400
+        endTime: 1794819000
+        path:
+        - [1794812400, 57.6628, 12.2798, 0, 10.0, false]
+        - [1794813300, 58.4, 11.6, 9144.0, 15.0, false]
+        - [1794816000, 59.6, 11.2, 9144.0, 20.0, false]
+        - [1794819000, 60.1939, 11.1004, 0, 190.0, true]
+    flights:
+      status: 200
+      json:
+      - icao24: 4ca1fa
+        callsign: 'SAS4047 '
+        firstSeen: 1794812460
+        lastSeen: 1794819000
+        estDepartureAirport: ESGG
+        estArrivalAirport: ENGM
+offline:
+  policy: aircraft_transit
+  params:
+    icao24: 4ca1fa
+expect:
+  tools:
+    required:
+    - aircraft_track
+  arguments:
+    aircraft_track:
+      icao24: 4ca1fa
+  answer: reported

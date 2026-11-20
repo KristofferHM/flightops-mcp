@@ -168,6 +168,32 @@ async function walk(browser, viewport, servers, passcode) {
   await page.locator("#traffic-cost", { hasText: "This session" }).waitFor();
   await inspect(page, viewport, "airport selected, traffic on");
 
+  // Every new control is reached by Tab, in the page's own order.
+  await page.locator("#a-selection", { hasText: "showing" }).waitFor();
+  await page.locator("#unknown-on").focus();
+  const reached = new Set();
+  for (let step = 0; step < 40; step += 1) {
+    reached.add(await page.evaluate(() => document.activeElement && document.activeElement.id));
+    await page.keyboard.press("Tab");
+  }
+  const controls = ["unknown-on", "a-sort", "a-cap", "a-radius", "a-airline", "a-band", "a-phase", "a-q", "a-focus"];
+  const missed = controls.filter((id) => !reached.has(id));
+  checks += 1;
+  if (missed.length) fail(`${size} keyboard`, `not reached by Tab: ${missed.join(", ")}`);
+
+  await page.getByLabel("Show airports without a report").check();
+  await page.locator("#unknown-note", { hasText: "dashed rings" }).waitFor();
+  await inspect(page, viewport, "airports without a report shown");
+
+  // Focusing an aircraft from the keyboard: the list, not the canvas.
+  await page.locator("#a-focus").selectOption("4ca1f2");
+  await page.locator("#a-claims", { hasText: "observed: 8 waypoints" }).waitFor();
+  await page.getByRole("button", { name: "Follow" }).click();
+  await page.locator('#a-follow[aria-pressed="true"]').waitFor();
+  await inspect(page, viewport, "aircraft focused and followed");
+  await page.keyboard.press("Escape");
+  await page.locator("#a-follow-note", { hasText: "Follow released" }).waitFor();
+
   await page.getByRole("button", { name: /Run triage/ }).click();
   await page.locator("#t-higher li").first().waitFor();
   await page.locator("#t-counts dd").first().waitFor();

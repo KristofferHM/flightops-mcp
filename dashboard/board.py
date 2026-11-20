@@ -17,6 +17,7 @@ The rules are about honesty, so they live where a test can hold them:
 from __future__ import annotations
 
 import bisect
+import math
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Final
@@ -43,6 +44,26 @@ MAX_SNAPSHOT_EPOCH: Final = 4_102_444_800
 # within 25 nm, 18 % within 50 and 48 % within 100. At 100 nm it is not that airport's
 # weather. Widening this needs that argument answered here, not a setting.
 NEIGHBOUR_MAX_NM: Final = 25.0
+# Weather is asked only for the airports nearest the centre of the view, at most this
+# many. A world poll asked NOAA about all 3,270 to draw 1,888 grey rings; 600 is what a
+# continent at full zoom holds, and twelve NOAA requests.
+WEATHER_LOOKUP_CAP: Final = 600
+# Added to the view's radius, so a short pan does not uncover airports never asked about.
+VIEW_MARGIN_DEG: Final = 5.0
+# Below each zoom, airports are drawn as one marker per cell of this many degrees.
+# At and above the last zoom every airport is drawn on its own. Measured on the live world
+# view (600 airports): 10-degree cells drew 30 to 56 markers at zoom 1, 20-degree cells 11
+# to 19 (too coarse to read a continent), 5-degree cells up to 151.
+CLUSTER_LEVELS: Final = ((2.0, 10.0), (3.0, 5.0), (4.0, 2.5))
+# Airports without a report are hidden by default below this zoom, and shown from it,
+# until the reader chooses. The choice is the reader's, and outlasts the page.
+UNKNOWN_SHOWN_FROM_ZOOM: Final = 4.0
+# The globe lifts each aircraft by its altitude: 12 km, a cruising level, is 3.5 % of
+# the radius. Enough to separate 0 from 12 km, too little to bend the sphere.
+GLOBE_ALTITUDE_CEILING_M: Final = 12_000.0
+GLOBE_MAX_LIFT: Final = 0.035
+CATEGORY_ORDER: Final = ("VFR", "MVFR", "IFR", "LIFR")
+CATEGORY_SYMBOL: Final = {"VFR": "●", "MVFR": "■", "IFR": "◆", "LIFR": "▲"}
 
 Payload = dict[str, Any]
 
@@ -183,6 +204,154 @@ def marker(weather: Payload) -> Payload:
     return {"kind": "unknown", "category": None, "label": "Unknown", "scope": "weather"}
 
 
+def airports_in_view(
+    airports: Sequence[Payload],
+    centre_lat: float,
+    centre_lon: float,
+    radius_deg: float,
+    cap: int = WEATHER_LOOKUP_CAP,
+) -> tuple[list[Payload], int]:
+    """The airports whose weather is worth asking for, and how many the view holds.
+
+    The view is a circle on the sphere, its centre and its radius plus a margin, not a
+    latitude/longitude box: a box breaks at the antimeridian and over a pole, and the
+    globe's view is a circle anyway. Nearest the centre first, ties by code, so the same
+    view always asks about the same airports.
+    """
+    reach = min(180.0, radius_deg + VIEW_MARGIN_DEG)
+    scored = sorted(
+        (angular_distance_deg(centre_lat, centre_lon, a["latitude"], a["longitude"]), a["ident"], a)
+        for a in airports
+    )
+    inside = [airport for distance, _, airport in scored if distance <= reach]
+    return inside[: max(0, cap)], len(inside)
+
+
+def cluster_text(counts: Mapping[str, int], unknown: int, show_unknown: bool) -> str:
+    """`● 42 VFR · ◆ 11 IFR`, the worst-first counts a cluster's tooltip reads out."""
+    parts = [
+        f"{CATEGORY_SYMBOL[category]} {counts[category]} {category}"
+        for category in reversed(CATEGORY_ORDER)
+        if counts.get(category)
+    ]
+    if show_unknown and unknown:
+        parts.append(f"○ {unknown} without a report")
+    return " · ".join(parts) or "no report heard"
+
+
+def clusters(airports: Sequence[Payload], cell_deg: float) -> list[Payload]:
+    """One aggregate per grid cell of `cell_deg` degrees, carrying a count per category.
+
+    `airports` are board entries: a reported one has a `marker`, a trimmed one does not.
+    The marker takes the shape of the most common category (`majority`, ties to the worse),
+    so a continent of VFR does not read as a continent of LIFR. When something worse is in
+    the cell, `worst` names it and the page adds it as a small badge: one IFR airport is not
+    hidden inside a cell of VFR ones. Unknowns are counted apart: the page draws or hides
+    them with the toggle, and a cell that holds only unknowns has both None.
+    """
+    cells: dict[tuple[int, int], list[Payload]] = {}
+    for airport in airports:
+        key = (
+            math.floor((airport["latitude"] + 90.0) / cell_deg),
+            math.floor((airport["longitude"] + 180.0) / cell_deg),
+        )
+        cells.setdefault(key, []).append(airport)
+    out = []
+    for key in sorted(cells):
+        members = cells[key]
+        counts = dict.fromkeys(CATEGORY_ORDER, 0)
+        unknown = 0
+        for airport in members:
+            category = (airport.get("marker") or {}).get("category")
+            if category in counts:
+                counts[category] += 1
+            else:
+                unknown += 1
+        reported = [a for a in members if (a.get("marker") or {}).get("category") in counts]
+        worst = max(
+            (a["marker"]["category"] for a in reported),
+            key=CATEGORY_ORDER.index,
+            default=None,
+        )
+        majority = max(
+            (category for category in CATEGORY_ORDER if counts[category]),
+            key=lambda category: (counts[category], CATEGORY_ORDER.index(category)),
+            default=None,
+        )
+        # Placed at the mean of the airports it stands for, so it sits over land and not
+        # at a cell corner. A cell never crosses the antimeridian, so the mean is sound.
+        placed_by = reported or members
+        out.append(
+            {
+                "latitude": round(sum(a["latitude"] for a in placed_by) / len(placed_by), 3),
+                "longitude": round(sum(a["longitude"] for a in placed_by) / len(placed_by), 3),
+                "reported": len(reported),
+                "unknown": unknown,
+                "counts": counts,
+                "majority": majority,
+                "worst": worst,
+                "text": cluster_text(counts, unknown, show_unknown=False),
+                "text_with_unknown": cluster_text(counts, unknown, show_unknown=True),
+            }
+        )
+    return out
+
+
+def board_airport(record: Payload, weather: Payload, marker_view: Payload) -> Payload:
+    """One airport as the map receives it. Without a report: code, name and place only.
+
+    A world poll was 900 KB, most of it weather objects that said "nothing heard". The
+    trimmed entry still draws as Unknown, and selecting it fetches its own line. One
+    thing is kept: a neighbour's line, for the few that have one, because that line is
+    the only thing the map can say about the airport.
+    """
+    entry: Payload = {
+        "icao": record["ident"],
+        "name": record["name"],
+        "latitude": record["latitude"],
+        "longitude": record["longitude"],
+    }
+    if marker_view["kind"] != "weather":
+        return {**entry, "weather": weather} if weather.get("neighbour") else entry
+    return {
+        **entry,
+        "iata": record.get("iata"),
+        "type": record.get("type"),
+        "weather": weather,
+        "marker": marker_view,
+    }
+
+
+def shown_note(unknown: int) -> str:
+    """What the toggle shows when it is on."""
+    if unknown == 0:
+        return "every airport asked has a report"
+    return f"{unknown:,} without a report, drawn as dashed rings"
+
+
+# The tooltip of an airport the map received trimmed: it has no line of its own here.
+TRIMMED_TIP: Final = "Unknown: no report heard. Select it for its own line."
+
+
+def hidden_note(unknown: int) -> str:
+    """What the toggle hides, said whether or not anything is hidden."""
+    if unknown == 0:
+        return "none hidden: every airport asked has a report"
+    return f"{unknown:,} hidden — no report heard"
+
+
+def viewport_note(region_total: int, in_view: int, asked: int, looked_up: int, calls: int) -> str:
+    """Which airports were asked about, and how many lookups this poll cost."""
+    if asked < in_view:
+        scope = f"showing {asked:,} of {in_view:,} nearest the centre"
+    else:
+        scope = f"showing all {asked:,} in view"
+    if in_view < region_total:
+        scope += f" ({region_total:,} in the region)"
+    calls_text = "call" if calls == 1 else "calls"
+    return f"Weather {scope} · {looked_up:,} lookups in {calls} {calls_text}"
+
+
 def _valid_epoch(epoch: object) -> int | None:
     if isinstance(epoch, bool) or not isinstance(epoch, int):
         return None
@@ -198,9 +367,42 @@ def upstream_time(payload: Payload) -> int | None:
     return _valid_epoch(payload.get("upstream_time_epoch"))
 
 
+def _measure(value: object) -> float | None:
+    """A reported figure, or None. A missing altitude is unknown, never 0."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def globe_lift(altitude_m: float | None) -> float | None:
+    """How far above the globe's surface an aircraft is drawn, as a fraction of its radius.
+
+    None for an unknown altitude: the aircraft is drawn on the surface and marked as
+    unknown, so a missing altitude cannot pass for one of 0.
+    """
+    if altitude_m is None:
+        return None
+    clamped = max(0.0, min(GLOBE_ALTITUDE_CEILING_M, altitude_m))
+    return round(clamped / GLOBE_ALTITUDE_CEILING_M * GLOBE_MAX_LIFT, 5)
+
+
+def angular_distance_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """The great-circle angle between two points, in degrees."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dlat, dlon = p2 - p1, math.radians(lon2 - lon1)
+    h = math.sin(dlat / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlon / 2) ** 2
+    return math.degrees(2 * math.asin(min(1.0, math.sqrt(h))))
+
+
+def _heard_utc(epoch: object) -> str | None:
+    valid = _valid_epoch(epoch)
+    return datetime.fromtimestamp(valid, UTC).strftime("%H:%M:%SZ") if valid else None
+
+
 def _aircraft(entry: Payload, now: float | None) -> Payload:
     heard = entry.get("last_contact")
     age = round(now - heard) if now and heard else None
+    altitude = _measure(entry.get("baro_altitude_m"))
     return {
         "icao24": entry.get("icao24"),
         "callsign": entry.get("callsign"),
@@ -208,6 +410,12 @@ def _aircraft(entry: Payload, now: float | None) -> Payload:
         "longitude": entry.get("longitude"),
         "on_ground": entry.get("on_ground"),
         "track": entry.get("true_track_deg"),
+        "altitude_m": altitude,
+        "velocity_ms": _measure(entry.get("velocity_ms")),
+        "lift": globe_lift(altitude),
+        "last_contact": _valid_epoch(heard),
+        # OpenSky's time for the position, so a trail point is labelled with its own time.
+        "heard_utc": _heard_utc(heard),
         "age_s": age,
         "fade": fade(age),
     }

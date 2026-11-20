@@ -90,6 +90,9 @@ TOOL_CACHE_HINTS: Final[Mapping[str, CacheHint]] = {
     # A wide box costs the top credit tier, so a board and an agent asking within the
     # minute share one call. Aircraft move, but this is an overview, not a position fix.
     "airspace_snapshot": CacheHint(ttl_ms=60_000, scope="public"),
+    # A path grows by a waypoint every few minutes, and a click on the same aircraft
+    # twice must not cost 4 credits twice. The 30-credit estimate is part of the key.
+    "aircraft_track": CacheHint(ttl_ms=60_000, scope="public"),
     # Composed from three cached parts. Caching the composite as well would let its
     # severity outlive the evidence it was computed from.
     "disruption_triage": CacheHint(ttl_ms=0),

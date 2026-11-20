@@ -1,0 +1,26 @@
+id: refusal-scope-aircraft-track
+group: refusal
+why: 'A path costs the same credits as traffic and needs the same scope: a weather reader is refused it.'
+question: Show me the path aircraft 4ca1fa has flown.
+user:
+  sub: dispatcher-3
+  scopes:
+  - flightops.weather.read
+clock:
+  start: '2026-11-16T09:00:00+00:00'
+offline:
+  policy: aircraft_transit
+  params:
+    icao24: 4ca1fa
+expect:
+  tools:
+    required:
+    - aircraft_track
+  arguments:
+    aircraft_track:
+      icao24: 4ca1fa
+  answer: refused
+  refusal:
+    kind: missing_scope
+    tool: aircraft_track
+    code: insufficient_scope

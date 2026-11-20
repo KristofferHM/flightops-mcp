@@ -47,6 +47,7 @@ class Scopes:
         "airport_live_traffic": frozenset({TRAFFIC_READ}),
         "airport_movements": frozenset({TRAFFIC_READ}),
         "airspace_snapshot": frozenset({TRAFFIC_READ}),
+        "aircraft_track": frozenset({TRAFFIC_READ}),
         # A composite needs everything its parts need. It calls them directly, so
         # this entry is the only check that stands between a caller and both.
         "disruption_triage": frozenset({WEATHER_READ, TRAFFIC_READ}),

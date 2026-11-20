@@ -52,6 +52,14 @@ STATES_STALE_AFTER_S = 300
 
 CredentialsMode = Literal["client_credentials", "anonymous", "none"]
 
+# Measured 2026-11-19 against the live API with client credentials, by the change in
+# `X-Rate-Limit-Remaining` over three calls each. `/tracks/all` is debited from a bucket of
+# its own (4000 -> 3996 -> 3992 -> 3988 while `/states` stood at 3892). `/flights/aircraft`
+# is debited from the main bucket, 30 a call for a 12 h or a 1 day window alike.
+TRACK_COST: Final = 4
+AIRCRAFT_FLIGHTS_COST: Final = 30
+# OpenSky refuses a `/flights/aircraft` window over two days; one day was measured.
+AIRCRAFT_FLIGHTS_WINDOW_S: Final = 86_400
 ANONYMOUS_TIME_RESOLUTION_S: Final = 10
 AUTHENTICATED_DAILY_CREDITS: Final = 4000
 ANONYMOUS_DAILY_CREDITS: Final = 400
@@ -244,6 +252,32 @@ class Movement:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class Waypoint:
+    """One observed point of a flown path, as `/tracks/all` sent it."""
+
+    time: int
+    latitude: float
+    longitude: float
+    baro_altitude_m: float | None
+    true_track_deg: float | None
+    on_ground: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Track:
+    """The path an aircraft has flown, as observed. Never extended past its last point."""
+
+    icao24: str
+    callsign: str | None
+    start_time: int | None
+    end_time: int | None
+    waypoints: list[Waypoint]
+    unreadable: int = 0
+    received: int = 0
+    upstream_time: int | None = None
+
+
 # Fixed, so a caller cannot ask for an antimeridian box or a surprise cost. Every one is
 # over 400 square degrees, which is OpenSky's top tier: 4 credits, however wide.
 # A box cannot cross the antimeridian, so Oceania stops at 180 E: Hawaii, Samoa and
@@ -413,6 +447,86 @@ class OpenSkyClient:
             {"airport": airport_icao, "begin": begin, "end": end},
         )
         return replace(decode_movements(body), upstream_time=upstream_time)
+
+    async def track(self, icao24: str) -> Track:
+        """The live path of one aircraft (`/tracks/all?time=0`), as observed waypoints."""
+        self._require_access()
+        self._charge(TRACK_COST)
+        body, upstream_time = await self._authorized_get(
+            "/tracks/all", {"icao24": icao24, "time": 0}
+        )
+        return replace(decode_track(body, icao24), upstream_time=upstream_time)
+
+    async def aircraft_flights(self, icao24: str, *, begin: int, end: int) -> Movements:
+        """One aircraft's flight records, whose airports OpenSky estimates from ADS-B."""
+        # Like `movements`: anonymous callers were refused `/flights/*` older than the
+        # last hour, and were debited far more than the documented price when served.
+        if self.credentials_mode != "client_credentials":
+            raise missing_credentials()
+        self._charge(AIRCRAFT_FLIGHTS_COST)
+        body, upstream_time = await self._authorized_get(
+            "/flights/aircraft", {"icao24": icao24, "begin": begin, "end": end}
+        )
+        return replace(decode_movements(body), upstream_time=upstream_time)
+
+
+def decode_track(body: object, icao24: str) -> Track:
+    """`/tracks/all` as a track. A 404 (`None`) is no track, not an error.
+
+    Waypoints are `[time, latitude, longitude, baro_altitude, true_track, on_ground]`.
+    A row without a time or a position is counted in `unreadable`, never drawn.
+    """
+    if body is None:
+        return Track(icao24, None, None, None, [])
+    if not isinstance(body, dict):
+        raise upstream_unavailable("OpenSky", "tracks response was not a JSON object")
+    rows = body.get("path")
+    if rows is None:
+        rows = []
+    if not isinstance(rows, list):
+        raise upstream_unavailable("OpenSky", "tracks path was not a list")
+    waypoints: list[Waypoint] = []
+    for row in rows:
+        point = _waypoint(row)
+        if point is not None:
+            waypoints.append(point)
+    # Sent in time order; sorted anyway, because a path drawn out of order is invented.
+    waypoints.sort(key=lambda point: point.time)
+    return Track(
+        icao24=str(body.get("icao24") or icao24),
+        callsign=_text(body.get("callsign"), strip=True) or None,
+        start_time=_epoch_int(body.get("startTime")),
+        end_time=_epoch_int(body.get("endTime")),
+        waypoints=waypoints,
+        unreadable=len(rows) - len(waypoints),
+        received=len(rows),
+    )
+
+
+def _waypoint(row: object) -> Waypoint | None:
+    if not isinstance(row, list) or len(row) < 3:
+        return None
+    moment = _epoch_int(row[0])
+    latitude, longitude = _number(row[1]), _number(row[2])
+    if moment is None or latitude is None or longitude is None:
+        return None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    at = row + [None] * (6 - len(row))
+    return Waypoint(
+        time=moment,
+        latitude=latitude,
+        longitude=longitude,
+        baro_altitude_m=_number(at[3]),
+        true_track_deg=_number(at[4]),
+        on_ground=at[5] is True,
+    )
+
+
+def _epoch_int(value: object) -> int | None:
+    """An epoch OpenSky may send as `1795123301` or `1795123301.0`."""
+    number = _number(value)
+    return int(number) if number is not None and number > 0 else None
 
 
 def decode_states(body: object, *, max_vectors: int) -> StatesSnapshot:

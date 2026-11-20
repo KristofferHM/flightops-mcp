@@ -275,6 +275,27 @@ def airspace_view(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observ
     return f"{region}: {counts.get('returned')} aircraft heard."
 
 
+def aircraft_transit(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
+    """Read one aircraft's observed path and the estimate of where it lands, kept apart."""
+    icao24 = params["icao24"]
+    (track,) = yield [("aircraft_track", {"icao24": icao24, "estimate_arrival": True})]
+    if not track.ok:
+        return f"The path of {icao24} is unavailable ({track.code}). Where it is going is unknown."
+    transit = track.payload.get("transit") or {}
+    points = len(transit.get("waypoints") or [])
+    arrival = track.payload.get("estimated_arrival") or {}
+    if arrival.get("state") == "estimated":
+        estimate = (
+            f"OpenSky estimates it arrived at {arrival.get('airport')}, from ADS-B, not a schedule"
+        )
+    else:
+        estimate = "OpenSky has no arrival estimate for this flight"
+    return (
+        f"{icao24}: {points} observed waypoints. {estimate}. "
+        "Its destination has no source: no schedule provider is configured."
+    )
+
+
 def airport_movements(params: Mapping[str, Any]) -> Generator[Calls, Sequence[Observation], str]:
     """Resolve an airport and count its estimated arrivals and departures."""
     icao, miss = yield from _resolve(params["airport"])
@@ -419,6 +440,7 @@ POLICIES: Final[dict[str, Policy]] = {
     "weather_board": weather_board,
     "airport_traffic": airport_traffic,
     "airspace_view": airspace_view,
+    "aircraft_transit": aircraft_transit,
     "airport_movements": airport_movements,
     "airport_triage": airport_triage,
     "schiphol_schedule": schiphol_schedule,

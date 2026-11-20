@@ -20,6 +20,7 @@ import argparse
 import functools
 import hashlib
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
@@ -72,13 +73,19 @@ from .errors import (
     reference_data_missing,
 )
 from .opensky import (
+    AIRCRAFT_FLIGHTS_COST,
+    AIRCRAFT_FLIGHTS_WINDOW_S,
     AIRSPACE_REGIONS,
     ANONYMOUS_LIMITATION,
     MAX_HISTORY_S,
     STATES_STALE_AFTER_S,
     TIME_RESOLUTION_S,
+    TRACK_COST,
     BBox,
+    Movement,
+    Movements,
     StatesSnapshot,
+    Track,
     credentials_mode,
     daily_metered,
 )
@@ -139,6 +146,26 @@ AIRSPACE_COLUMNS: Final = (
 AIRSPACE_MAX_AIRCRAFT: Final = 10_000
 OPENSKY_LICENCE: Final = (
     "Free for personal and non-profit use; commercial use needs OpenSky's consent"
+)
+ICAO24: Final = re.compile(r"[0-9a-f]{6}")
+# `aircraft_track`'s waypoint columns, in OpenSky's own order.
+WAYPOINT_COLUMNS: Final = (
+    "time",
+    "latitude",
+    "longitude",
+    "baro_altitude_m",
+    "true_track_deg",
+    "on_ground",
+)
+# A flight record whose first sighting is this close to the track's start is that flight.
+# Both are OpenSky's first position of the aircraft; 15 min absorbs a late first record.
+SAME_FLIGHT_TOLERANCE_S: Final = 900
+ESTIMATE_BASIS: Final = (
+    "Estimated by OpenSky from the first and last ADS-B positions, not a schedule."
+)
+DESTINATION_NO_SOURCE: Final = (
+    "No source. A transponder broadcasts position, not intent; a destination needs a "
+    "schedule provider, and none is configured."
 )
 
 INSTRUCTIONS = """\
@@ -699,6 +726,170 @@ async def airspace_snapshot(
         "source": {
             "name": "OpenSky Network",
             "endpoint": "/states/all",
+            "licence": OPENSKY_LICENCE,
+        },
+    }
+
+
+def _flight_record(movement: Movement | None) -> dict[str, Any] | None:
+    if movement is None:
+        return None
+    return {
+        "callsign": movement.callsign,
+        "departure_airport": movement.est_departure_airport,
+        "arrival_airport": movement.est_arrival_airport,
+        "first_seen_epoch": movement.first_seen,
+        "last_seen_epoch": movement.last_seen,
+    }
+
+
+def _same_flight(movement: Movement, track: Track) -> bool:
+    """Whether a flight record describes the flight the track observed.
+
+    OpenSky starts both from the aircraft's first position, so they agree to within
+    minutes. A record that does not overlap the track is another flight.
+    """
+    if movement.first_seen is None or track.start_time is None:
+        return False
+    return abs(movement.first_seen - track.start_time) <= SAME_FLIGHT_TOLERANCE_S
+
+
+def _estimated_arrival(track: Track, flights: Movements) -> dict[str, Any]:
+    ended = sorted(
+        (m for m in flights.movements if m.last_seen is not None),
+        key=lambda m: m.last_seen or 0,
+    )
+    matching = [m for m in ended if _same_flight(m, track)]
+    record = matching[-1] if matching else None
+    others = [m for m in ended if m is not record]
+    previous = others[-1] if others else None
+    if record is None:
+        state = "no_record_for_this_flight"
+    elif record.est_arrival_airport:
+        state = "estimated"
+    else:
+        state = "not_estimated"
+    return {
+        "state": state,
+        "airport": record.est_arrival_airport if record else None,
+        "flight": _flight_record(record),
+        # The last flight OpenSky lists as ended, when it is not this one. Context only:
+        # where the aircraft was last estimated to land is not where it is going.
+        "previous_flight": _flight_record(previous),
+        "basis": ESTIMATE_BASIS,
+        "records_received": flights.received,
+    }
+
+
+@tool
+async def aircraft_track(icao24: str, estimate_arrival: bool = False) -> dict[str, Any]:
+    """Return the path one aircraft has flown, as observed, and what is known of where it goes.
+
+    Three different kinds of claim, kept apart:
+    `transit` is observed: OpenSky's `/tracks/all` waypoints, each with its own time, never
+    extended past the last one. 4 OpenSky credits per uncached call, from a bucket separate
+    from state vectors (measured 2026-11-19). `estimated_arrival` is an inference: with
+    `estimate_arrival` true, `/flights/aircraft` is asked for the last day, and OpenSky's
+    `estArrivalAirport` is given only for a record of the observed flight. OpenSky lists a
+    flight after it ends, so an aircraft still flying usually has none. That call costs 30
+    credits (measured 2026-11-19) and needs client credentials. `destination` has no
+    source: a transponder broadcasts position, not intent, and no schedule provider is
+    configured.
+
+    Args:
+        icao24: The transponder address, six hex digits, e.g. 4ca1fa.
+        estimate_arrival: Also ask OpenSky for its ADS-B estimate of the arrival airport.
+    """
+    runtime = get_runtime()
+    wanted = icao24.strip().lower()
+    if not ICAO24.fullmatch(wanted):
+        raise ToolFailure(
+            code="invalid_argument",
+            message="icao24 must be six hexadecimal digits",
+            hint="Take icao24 from airspace_snapshot or airport_live_traffic. "
+            "A callsign is not one.",
+        )
+    unknowns: list[str] = []
+    track = await runtime.opensky.track(wanted)
+    spent = TRACK_COST
+    upstream_time = track.upstream_time
+    if not track.waypoints:
+        unknowns.append(
+            "OpenSky holds no track for this aircraft now. It may have landed, left receiver "
+            "coverage or not been heard recently; nothing is drawn in its place."
+        )
+    if track.unreadable:
+        unknowns.append(
+            f"{track.unreadable} of {track.received} waypoints had no time or position and are "
+            "left out of the transit."
+        )
+    if upstream_time is None:
+        unknowns.append(
+            "OpenSky's response carried no Date header, so how recent this track is cannot be "
+            "judged. This server does not substitute its own clock."
+        )
+
+    arrival: dict[str, Any] = {"state": "not_requested", "basis": ESTIMATE_BASIS}
+    if estimate_arrival:
+        # A request parameter, chosen before any upstream has answered: the local clock.
+        end = int(runtime.data_clock())
+        try:
+            flights = await runtime.opensky.aircraft_flights(
+                wanted, begin=end - AIRCRAFT_FLIGHTS_WINDOW_S, end=end
+            )
+        except ToolFailure as exc:
+            if exc.code == "credentials_missing":
+                arrival = {**arrival, "state": "unavailable", "error": exc.code}
+                unknowns.append("No arrival estimate: OpenSky flights need client credentials.")
+            else:
+                raise
+        else:
+            spent += AIRCRAFT_FLIGHTS_COST
+            upstream_time = _newest(upstream_time, flights.upstream_time)
+            arrival = _estimated_arrival(track, flights)
+            if arrival["state"] == "no_record_for_this_flight":
+                unknowns.append(
+                    "OpenSky lists no record of the observed flight. It publishes a flight once "
+                    "it has ended, so one still under way has no estimated arrival yet."
+                )
+    path = track.waypoints
+    return {
+        "ok": True,
+        "upstream_time_epoch": upstream_time,
+        "credentials": runtime.opensky.credentials_mode,
+        "icao24": wanted,
+        "transit": {
+            "state": "observed" if path else "none",
+            "callsign": track.callsign,
+            "start_epoch": track.start_time,
+            "end_epoch": track.end_time,
+            "first_waypoint_epoch": path[0].time if path else None,
+            "last_waypoint_epoch": path[-1].time if path else None,
+            "columns": list(WAYPOINT_COLUMNS),
+            "waypoints": [
+                [
+                    p.time,
+                    p.latitude,
+                    p.longitude,
+                    p.baro_altitude_m,
+                    p.true_track_deg,
+                    p.on_ground,
+                ]
+                for p in path
+            ],
+            "received": track.received,
+            "unreadable": track.unreadable,
+        },
+        "estimated_arrival": arrival,
+        "destination": {"state": "no_source", "text": DESTINATION_NO_SOURCE},
+        "bookkeeping": {
+            "credits_spent": spent,
+            "credits_remaining_upstream": runtime.opensky.last_credits_remaining,
+        },
+        "unknowns": unknowns,
+        "source": {
+            "name": "OpenSky Network",
+            "endpoint": "/tracks/all" + (", /flights/aircraft" if estimate_arrival else ""),
             "licence": OPENSKY_LICENCE,
         },
     }

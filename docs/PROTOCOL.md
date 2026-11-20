@@ -35,6 +35,7 @@ purpose (`tests/test_protocol_surface.py::test_capabilities_declare_resources_pr
 | `airport_live_traffic` | true | | | true |
 | `airport_movements` | true | | | true |
 | `airspace_snapshot` | true | | | true |
+| `aircraft_track` | true | | | true |
 | `disruption_triage` | true | | | true |
 | `schiphol_flights` | true | | | true |
 | `flight_passenger_impact` | true | | | true |
