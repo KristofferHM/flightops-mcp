@@ -7,7 +7,7 @@ names the code and the test that holds it to the claim.
 
 | Feature | State | Where | Note |
 |---|---|---|---|
-| Tools | **Implemented**: 12 | `server.py` | Sorted by name, byte-identical across builds, `ttlMs: 300000` |
+| Tools | **Implemented**: 13 | `server.py` | Sorted by name, byte-identical across builds, `ttlMs: 300000` |
 | Tool annotations | **Implemented**: every tool | `annotations.py` | A tool without an entry fails registration |
 | `outputSchema` + `structuredContent` | **Implemented**: 3 tools | `schemas.py` | `resolve_airport`, `airport_weather`, `disruption_triage`; text block kept |
 | Progress notifications | **Implemented** on stdio; **not delivered** over HTTP | `progress.py` | One per upstream request, only with a `progressToken`. See below |
