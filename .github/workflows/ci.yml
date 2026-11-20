@@ -295,20 +295,34 @@ jobs:
             mutmut.out
           if-no-files-found: warn
 
-      - name: Keep mutmut's own cache
-        # The cache is the mutation baseline another repository can seed from: mutmut stores one row per
-        # mutant keyed by the source it was cut from, and skips the rows it already has. A killed mutant
-        # stays killed under a superset of the same tests, so a fork that keeps every test here and adds
-        # more only has to re-run the survivors. Uploaded on every run; published below only from main.
+      - name: Pack mutmut's verdicts
+        # The cache is the mutation baseline another repository can seed from. mutmut 3 keeps it as one
+        # `mutants/<source>.meta` per mutated file: each mutant's exit code, and the hash of the function it
+        # was cut from. On the next run it keeps a verdict whose function hash is unchanged and skips it.
+        # (`.mutmut-cache` was mutmut 2's file; mutmut 3 never writes one, so the first version of this step
+        # published nothing - run 44746735588, "no .mutmut-cache to publish".)
+        # Only the .meta files: mutmut-stats.json is not needed to resume, and a consumer with a different
+        # test selection would have every verdict reset by it (mutmut's config fingerprint).
+        if: always()
+        run: |
+          if [ ! -d mutants ]; then
+            echo "::warning::no mutants/ directory: mutmut did not run, nothing to pack"
+            exit 0
+          fi
+          find mutants -name '*.meta' -type f | sort > meta-files.txt
+          tar -czf mutants-meta.tar.gz -T meta-files.txt
+          echo "packed $(wc -l < meta-files.txt) .meta files"
+
+      - name: Keep mutmut's verdicts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: mutmut-cache
-          path: .mutmut-cache
+          name: mutants-meta
+          path: mutants-meta.tar.gz
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Publish the cache as a rolling baseline
+      - name: Publish the verdicts as a rolling baseline
         # A release asset rather than a cross-repository artifact download: this repository is public, so
         # the consumer needs no token and no access grant to fetch it. `--clobber` makes it rolling, so the
         # asset always matches the newest main. The manifest is the other half: the hashes of every mutated
@@ -317,16 +331,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ ! -f .mutmut-cache ]; then
-            echo "::warning::no .mutmut-cache to publish"
+          if [ ! -f mutants-meta.tar.gz ]; then
+            echo "::warning::no mutants-meta.tar.gz to publish"
             exit 0
           fi
           uv run python scripts/mutation_baseline.py --manifest mutation-baseline.json
           gh release view mutation-baseline > /dev/null 2>&1 \
             || gh release create mutation-baseline \
                  --title "Mutation baseline (rolling)" \
-                 --notes "mutmut's cache from the newest run on main, and a manifest of the files it was made from. Seeded by another repository so it can skip mutants this one has already killed. A result for a source line that has since changed is not carried: those mutants are re-cut and re-run."
-          gh release upload mutation-baseline .mutmut-cache mutation-baseline.json --clobber
+                 --notes "mutmut's per-file verdicts (mutants/**/*.meta) from the newest run on main, and a manifest of the files they were made from. Seeded by another repository so it can skip mutants this one has already killed. A verdict for a function that has since changed is not carried: mutmut re-cuts and re-runs it."
+          gh release upload mutation-baseline mutants-meta.tar.gz mutation-baseline.json --clobber
 
   # The board's accessibility claim, enforced. A browser is the price: contrast, focus order and
   # sideways overflow only exist once a page is laid out, so no static check can see them.
