@@ -66,6 +66,21 @@ GLOBE_ALTITUDE_CEILING_M: Final = 12_000.0
 GLOBE_MAX_LIFT: Final = 0.035
 CATEGORY_ORDER: Final = ("VFR", "MVFR", "IFR", "LIFR")
 CATEGORY_SYMBOL: Final = {"VFR": "●", "MVFR": "■", "IFR": "◆", "LIFR": "▲"}
+# Every airport row carries its category as one letter, so the page can filter by weather
+# without the full weather object a trimmed row does not have. One letter is ten bytes a
+# row with its key; the category name would be up to thirteen. `U` is every unknown: no
+# observation, an old report and a failed fetch. Why it is unknown stays in the row's own
+# weather line and in its detail, not in the letter.
+CATEGORY_LETTER: Final = {"VFR": "V", "MVFR": "M", "IFR": "I", "LIFR": "L"}
+UNKNOWN_LETTER: Final = "U"
+WEATHER_FILTER_ORDER: Final = ("V", "M", "I", "L", "U")
+WEATHER_FILTER_LABELS: Final = {
+    "V": "VFR",
+    "M": "MVFR",
+    "I": "IFR",
+    "L": "LIFR",
+    "U": "Unknown",
+}
 
 Payload = dict[str, Any]
 
@@ -299,6 +314,26 @@ def clusters(airports: Sequence[Payload], cell_deg: float) -> list[Payload]:
     return out
 
 
+def category_letter(marker_view: Payload) -> str:
+    """`V`, `M`, `I` or `L` for a reported category, `U` for anything else."""
+    if marker_view.get("kind") != "weather":
+        return UNKNOWN_LETTER
+    return CATEGORY_LETTER.get(str(marker_view["category"]), UNKNOWN_LETTER)
+
+
+def weather_filter(entries: Sequence[Payload]) -> Payload:
+    """The weather chips' counts, taken from the rows' own `cat`, so the two cannot disagree.
+
+    Like the operator chips, the counts describe what was received, not what is drawn:
+    no chip, toggle or layer switch moves them. Every letter is present, zero or not, so
+    the page can say `0 of 600` for a chip with nothing in it.
+    """
+    counts = dict.fromkeys(WEATHER_FILTER_ORDER, 0)
+    for entry in entries:
+        counts[entry["cat"]] += 1
+    return {"all": len(entries), "counts": counts, "labels": dict(WEATHER_FILTER_LABELS)}
+
+
 def board_airport(record: Payload, weather: Payload, marker_view: Payload) -> Payload:
     """One airport as the map receives it. Without a report: code, name and place only.
 
@@ -312,6 +347,7 @@ def board_airport(record: Payload, weather: Payload, marker_view: Payload) -> Pa
         "name": record["name"],
         "latitude": record["latitude"],
         "longitude": record["longitude"],
+        "cat": category_letter(marker_view),
     }
     if marker_view["kind"] != "weather":
         return {**entry, "weather": weather} if weather.get("neighbour") else entry

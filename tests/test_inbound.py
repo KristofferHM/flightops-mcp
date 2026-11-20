@@ -557,9 +557,10 @@ def test_a_cleared_selection_leaves_no_highlight_panel_or_late_answer() -> None:
     focus = body("applyFocus")
 
     assert "panel.hidden = !state.focus;" in panel
-    # Brackets, trail and transit are drawn only while something is selected.
-    assert "if (state.focus) { drawTrail(state.focus); drawFocused(); }" in draw
-    assert "if (state.focus) drawTransit(path);" in draw
+    # Brackets, trail and transit are drawn only while something is selected (and the
+    # aircraft layer is on: tests/test_airport_layers.py).
+    assert "state.focus) { drawTrail(state.focus); drawFocused(); }" in draw
+    assert "state.focus) drawTransit(path);" in draw
     # A poll sent before the change answers for the old aircraft and is not painted.
     assert "answer && answer.icao24 === state.focus ? answer : null" in focus
 

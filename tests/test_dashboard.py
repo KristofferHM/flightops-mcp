@@ -226,8 +226,10 @@ async def test_no_metar_and_no_aircraft_never_renders_as_weather(
     triage = (await open_board.post("/api/airport/ESGG/triage")).json()
 
     (airport,) = overview["airports"]
-    # Without a report the map gets the airport and nothing that could pass for weather.
-    assert set(airport) == {"icao", "name", "latitude", "longitude"}
+    # Without a report the map gets the airport and nothing that could pass for weather:
+    # its one letter is `U`, the letter that claims no category.
+    assert set(airport) == {"icao", "name", "latitude", "longitude", "cat"}
+    assert airport["cat"] == "U"
     assert overview["hidden"]["text"] == "1 hidden — no report heard"
     assert overview["banner"] == {"mode": "NO DATA", "label": "NO DATA"}
     assert detail["traffic"]["summary"] == "none heard, coverage not proven"
