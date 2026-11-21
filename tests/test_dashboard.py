@@ -768,7 +768,17 @@ def test_the_page_starts_at_no_data_yet_and_computes_no_age() -> None:
     script = (STATIC / "board.js").read_text(encoding="utf-8")
 
     assert f"<span>{board.NO_DATA_YET}</span>" in page
-    assert not re.search(r"\bDate\b|performance\.now|setInterval", script)
+    assert not re.search(r"\bDate\b|setInterval", script)
+    # One narrowing, chosen by the owner. A countdown is a claim about elapsed time, not about
+    # data freshness, so a monotonic source cannot make it wrong. `Date` and `setInterval`
+    # stay banned; `performance.now` is read once in `schedule` (when a poll is due) and once
+    # in the traffic clock, and nowhere else. Pinned here so it cannot widen later.
+    allowed = r"\n  function (?:schedule|trafficClock)\(.*?\n  \}\n"
+    assert script.count("performance.now") == 2
+    assert not re.search(r"performance\.now", re.sub(allowed, "", script, flags=re.S))
+    for name in ("schedule", "trafficClock"):
+        found = re.search(rf"\n  function {name}\(.*?\n  \}}\n", script, re.S)
+        assert found is not None and found.group().count("performance.now()") == 1, name
     assert "line.text" in script
     assert "board.last_update" in script
 

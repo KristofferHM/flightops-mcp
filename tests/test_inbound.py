@@ -499,15 +499,17 @@ def test_a_click_on_empty_map_clears_the_selection() -> None:
     """The pointer-up handler is the canvas' click; a click on nothing must reach the clear."""
     handler = body("endDrag")
 
-    assert 'else if (!pick) clearSelection("empty map");' in handler
-    assert handler.index("if (drag && !drag.moved)") < handler.index("clearSelection(")
+    # Through `letGo`: a focused aircraft is let go first (tests/test_airport_exit.py).
+    assert 'else if (!pick) letGo("empty map");' in handler
+    assert handler.index("if (drag && !drag.moved)") < handler.index("letGo(")
+    assert "if (state.focus) clearSelection(how);" in body("letGo")
 
 
 def test_escape_releases_follow_first_then_clears() -> None:
     step = body("escape")
 
     assert "if (state.follow) {" in step
-    follow, clear = step.index("stopFollow("), step.index('clearSelection("Escape")')
+    follow, clear = step.index("stopFollow("), step.index('letGo("Escape")')
     assert follow < step.index("return;") < clear
     assert "Press Escape again to clear the selection." in step
     assert re.search(r'event\.key === "Escape" && !event\.defaultPrevented\) escape\(\)', SCRIPT)

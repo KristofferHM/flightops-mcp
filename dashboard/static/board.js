@@ -91,6 +91,9 @@
     // The time of the traffic layer on screen, and OpenSky's clock when it was sent,
     // as the server gave them. Null when no layer is drawn.
     trafficSnapshot: null, trafficUpstream: null, boardRequest: 0, listRequest: 0,
+    // When the layer on screen arrived (the page's monotonic clock) and how old OpenSky said
+    // it was then, in seconds, or null when it sent no clock. Null when no layer arrived.
+    trafficHeard: null, trafficAsking: false,
     selectionRequest: 0,
     projection: "map", lon: 10, lat: 20, panY: 0, zoom: 1,
     width: 0, height: 0, dirty: true,
@@ -121,6 +124,9 @@
     pickables: [], labels: [],
   };
   const timers = {};
+  // When each armed poll will fire, on the page's monotonic clock, so the traffic line can
+  // say when it will next ask instead of leaving the reader to guess.
+  const due = {};
   let projection = null;
 
   // Per-browser conveniences. Storage can be missing or refused; the page works without it.
@@ -168,7 +174,10 @@
     if (document.hidden) return;
     const jitter = 0.85 + Math.random() * 0.3;
     const wait = typeof interval === "function" ? interval() : interval;
+    due[name] = performance.now() + wait * jitter;
     timers[name] = setTimeout(async () => {
+      // Fired: until it is armed again there is no next time to count down to.
+      delete due[name];
       await task();
       schedule(name, task, interval);
     }, wait * jitter);
@@ -267,6 +276,8 @@
       invalidate();
       refreshBoard();
     } catch {
+      // A failure is an answer too: after a clear or a new airport it is not painted.
+      if (icao !== state.selected) return;
       $("d-traffic").textContent = "Unknown: the board server did not answer";
       explain("d-traffic-why", "");
     }
@@ -312,9 +323,12 @@
   async function refreshTraffic() {
     if (!$("traffic-on").checked || state.trafficStopped) return;
     const region = state.region;
+    const asked = selectionParams();
     const superseded = () => !$("traffic-on").checked || region !== state.region;
+    state.trafficAsking = true;
+    renderTrafficClock();
     try {
-      const layer = await api(`/api/traffic/${encodeURIComponent(region)}?${selectionParams()}`);
+      const layer = await api(`/api/traffic/${encodeURIComponent(region)}?${asked}`);
       if (superseded()) return;
       if (layer.cost) {
         renderTrafficCost(layer.cost);
@@ -328,9 +342,27 @@
         refreshBoard();
         return;
       }
-      applyLayer(layer);
+      if (asked === selectionParams()) {
+        // Newer than any free re-selection still on its way, which read the layer before this.
+        state.selectionRequest += 1;
+        applyLayer(layer);
+      } else {
+        // The choices moved while this was asked: an airport chosen or let go, a filter. Its
+        // selection describes the old ones. The server now holds this layer, so the current
+        // choices are read from it, free, rather than painting the old.
+        refreshSelection();
+      }
       state.trafficSnapshot = layer.snapshot_epoch;
       state.trafficUpstream = layer.upstream_epoch;
+      // Its age as the upstream's own two clocks put it, then counted on from arrival by this
+      // page's monotonic clock: the reader's wall clock may be wrong, and is never read.
+      // `at` is stamped by the traffic clock, on the render this call's `finally` makes in the
+      // same task: only the clock and `schedule` read the monotonic clock.
+      state.trafficHeard = {
+        at: null,
+        age: layer.snapshot_epoch > 0 && layer.upstream_epoch >= layer.snapshot_epoch
+          ? layer.upstream_epoch - layer.snapshot_epoch : null,
+      };
       // The count and its qualifiers stay; the upstream's hint is a reason, so it moves.
       let text = layer.summary;
       if (layer.truncated) text += ", most recent only";
@@ -346,8 +378,12 @@
       renderClasses();
       state.trafficSnapshot = 0;
       state.trafficUpstream = 0;
+      state.trafficHeard = null;
       setTrafficNote("Unknown: the board server did not answer", "");
       refreshBoard();
+    } finally {
+      state.trafficAsking = false;
+      renderTrafficClock();
     }
     invalidate();
   }
@@ -385,6 +421,7 @@
     schedule("board", refreshBoard, BOARD_POLL_MS);
     schedule("detail", refreshDetail, DETAIL_POLL_MS);
     schedule("traffic", refreshTraffic, () => state.trafficIntervalMs);
+    tickTrafficClock();
   }
 
   document.addEventListener("visibilitychange", () => {
@@ -501,6 +538,54 @@
     explain("traffic-why", state.coverage, state.trafficWhy);
   }
 
+  // `5 s`, `3 min`, `2 h`: an age, rounded down.
+  function ago(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    if (s < 60) return `${s} s`;
+    return s < 3600 ? `${Math.floor(s / 60)} min` : `${Math.floor(s / 3600)} h`;
+  }
+
+  // `1:42`, for a countdown.
+  function clock(seconds) {
+    const s = Math.max(0, Math.ceil(seconds));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
+
+  // `heard 5 s ago · next refresh in 1:42`. The interval is long enough (the ceiling sets it,
+  // 4 minutes by default) that a layer left alone looks frozen unless the page says when it
+  // was heard and when it will ask again. The countdown is the armed timer's own, jitter and
+  // all. Outside the live note, so a screen reader is not read a number every second.
+  function trafficClock() {
+    if (!$("traffic-on").checked) return "";
+    const now = performance.now();
+    const parts = [];
+    const heard = state.trafficHeard;
+    if (heard && heard.at === null) heard.at = now;
+    if (heard) {
+      const since = (now - heard.at) / 1000;
+      parts.push(heard.age === null ? `received ${ago(since)} ago` : `heard ${ago(heard.age + since)} ago`);
+    }
+    if (state.trafficAsking) parts.push("asking OpenSky now");
+    else if (state.trafficStopped) parts.push("auto-refresh stopped");
+    else if (known(due.traffic) && known(timers.traffic)) {
+      parts.push(`next refresh in ${clock((due.traffic - now) / 1000)}`);
+    }
+    return parts.join(" · ");
+  }
+
+  function renderTrafficClock() {
+    const text = trafficClock();
+    const line = $("traffic-clock");
+    if (line.textContent !== text) line.textContent = text;
+  }
+
+  // Once a second while the page is seen. Stopped with the polls when the tab is hidden.
+  function tickTrafficClock() {
+    renderTrafficClock();
+    clearTimeout(timers.clock);
+    if (!document.hidden) timers.clock = setTimeout(tickTrafficClock, 1000);
+  }
+
   // --- panels ------------------------------------------------------------------
   function renderBanner(mode, label) {
     const banner = $("banner");
@@ -555,10 +640,20 @@
     select.value = chosen;
   }
 
+  // `4 minutes`, `2 min 30 s`: the server's interval, as said beside the toggle.
+  function every(seconds) {
+    const minutes = Math.floor(seconds / 60);
+    const rest = Math.round(seconds % 60);
+    if (!rest) return minutes === 1 ? "minute" : `${minutes} minutes`;
+    return minutes ? `${minutes} min ${rest} s` : `${rest} s`;
+  }
+
+  // The interval leads: it is the answer to "why has nothing moved". "About", because each
+  // wait is jittered by up to 15% so many tabs do not ask at once.
   function renderTrafficCost(cost) {
     $("traffic-cost").textContent =
-      `This session: ${cost.session_total} credits · ${cost.hour_spent} of ${cost.hour_ceiling} `
-      + `this hour · refresh every ${Math.round(cost.interval_s / 60)} min`;
+      `Traffic refreshes about every ${every(Math.max(TRAFFIC_POLL_MS / 1000, cost.interval_s))}. `
+      + `This session: ${cost.session_total} credits · ${cost.hour_spent} of ${cost.hour_ceiling} this hour`;
   }
 
   // On by default only with credentials. Without, it stays off and says why.
@@ -693,31 +788,67 @@
     fillList($("d-unknowns"), gaps);
   }
 
-  async function select(icao) {
-    state.selected = icao;
+  // The strip of the selected airport is marked current; no strip is when none is selected.
+  function markStrips() {
+    document.querySelectorAll("#strips .strip").forEach((strip) => {
+      if (strip.dataset.icao === state.selected) strip.setAttribute("aria-current", "true");
+      else strip.removeAttribute("aria-current");
+    });
+  }
+
+  // Everything that belongs to one airport: its detail, its triage, its approach lines and
+  // the tracks bought for them. Dropped on a change of airport and on a clear alike.
+  function forgetAirport() {
     state.detail = null;
     state.triaged = false;
-    // Approach lines belong to one airport. They are redrawn when its selection answers.
     state.inboundTracks.clear();
     inboundNote("i-tracks", "", "");
     inboundNote("i-board", "", "");
     renderInbound(null);
     $("triage-result").hidden = true;
+  }
+
+  async function select(icao) {
+    // The selected airport again: a toggle, so the press that chose it can also let it go.
+    if (icao === state.selected) { clearAirport("selected again"); return; }
+    state.selected = icao;
+    forgetAirport();
     const airport = state.airports.find((item) => item.icao === icao);
     if (airport && state.projection === "globe") {
       state.lon = airport.longitude;
       state.lat = airport.latitude;
       viewChanged();
     }
-    document.querySelectorAll("#strips .strip").forEach((strip) => {
-      if (strip.dataset.icao === icao) strip.setAttribute("aria-current", "true");
-      else strip.removeAttribute("aria-current");
-    });
+    markStrips();
     invalidate();
     // Distance and the radius are measured from the selected airport.
     refreshSelection();
     await refreshDetail();
     schedule("detail", refreshDetail, DETAIL_POLL_MS);
+  }
+
+  // Every way out of an airport ends here, so the panel, the strip's mark, the inbound list
+  // and the approach lines clear together. `how` is the exit, for the status line. Answers
+  // still on their way are dropped where they land: each compares its airport to this one.
+  function clearAirport(how) {
+    if (!state.selected) return;
+    const icao = state.selected;
+    // The Close button is about to be hidden. The keyboard goes to the airport's strip, or
+    // to the search it was found with, not to the top of the page.
+    const inside = $("detail").contains(document.activeElement);
+    state.selected = null;
+    forgetAirport();
+    $("detail").hidden = true;
+    $("detail-empty").hidden = false;
+    markStrips();
+    if (inside) {
+      const strip = document.querySelector(`#strips [data-icao="${CSS.escape(icao)}"]`);
+      (strip || $("search")).focus();
+    }
+    // The traffic layer goes back to the region-wide selection, from the layer already held.
+    refreshSelection();
+    invalidate();
+    say(`Airport cleared (${how}): ${icao}.`);
   }
 
   $("triage").addEventListener("click", async () => {
@@ -742,6 +873,7 @@
       $("d-departures").textContent = result.movements.departures;
       refreshBoard();
     } catch {
+      if (icao !== state.selected) return;
       $("triage-result").hidden = false;
       $("t-severity").textContent = "Unknown";
       fillList($("t-reasons"), ["The board server did not answer."]);
@@ -1073,7 +1205,8 @@
     say(`Selection cleared (${how}): ${name}.`);
   }
 
-  // Escape is one key with two steps: release the follow first, then let go of the aircraft.
+  // Escape is one key with three steps: release the follow first, then let go of the
+  // aircraft, then of the airport. One press undoes one thing.
   function escape() {
     if (state.follow) {
       const text = "Follow released. Press Escape again to clear the selection.";
@@ -1082,7 +1215,13 @@
       say(text);
       return;
     }
-    clearSelection("Escape");
+    letGo("Escape");
+  }
+
+  // The innermost selection goes first: the aircraft, then the airport it may be bound for.
+  function letGo(how) {
+    if (state.focus) clearSelection(how);
+    else clearAirport(how);
   }
 
   function renderAircraftPanel() {
@@ -1126,6 +1265,7 @@
   });
   $("a-estimate").addEventListener("click", () => fetchTrack(true));
   $("a-clear").addEventListener("click", () => clearSelection("the Clear button"));
+  $("d-close").addEventListener("click", () => clearAirport("the Close button"));
   $("a-focus").addEventListener("change", () => {
     const chosen = $("a-focus").value;
     if (chosen) focusOn(chosen);
@@ -1989,8 +2129,8 @@
         // The selected aircraft again: a toggle, so the tap that chose it can also let it go.
         clearSelection("selected again");
       } else if (pick && pick.kind === "aircraft") focusOn(pick.item.icao24);
-      // Empty sky: nothing under the pointer is a request to let go.
-      else if (!pick) clearSelection("empty map");
+      // Empty sky: nothing under the pointer is a request to let go, innermost first.
+      else if (!pick) letGo("empty map");
     } else if (drag) {
       viewChanged();
     }
@@ -2037,9 +2177,11 @@
     state.airspace = [];
     state.trafficSnapshot = null;
     state.trafficUpstream = null;
+    state.trafficHeard = null;
     state.classes = null;
     renderClasses();
     setTrafficNote("", "");
+    renderTrafficClock();
     renderSelection(null);
     renderInbound(null);
     state.inboundTracks.clear();
@@ -2055,6 +2197,7 @@
     state.clusters = {};
     state.airspace = [];
     state.trafficSnapshot = null;
+    state.trafficHeard = null;
     state.trafficStopped = false;
     // A region change is the one thing a selection does not survive. Nor does the class
     // filter: the chips count the old region's sky.
