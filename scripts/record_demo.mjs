@@ -273,6 +273,11 @@ async function tour(page, started) {
   // 6. Its observed track, and the price on the button that buys more.
   t.mark("track");
   await t.need("#a-claims dd", "the transit line", { hasText: /observed|unavailable|no /i });
+  // "Visible" to Playwright includes below the fold of the inspector's own scroll box, where
+  // the 2026-11-21 take left the transit. Bringing its end into view keeps the estimate button
+  // above it on screen too, so the hover that follows does not scroll it away again.
+  await page.locator("#a-claims").evaluate((element) => element.scrollIntoView({ block: "end", behavior: "smooth" }));
+  await t.hold(800);
   await t.hover("#a-estimate", "the estimate button and its price");
   await t.hold(3_500);
 

@@ -3,9 +3,8 @@
 One take of the board, recorded unattended by a script and replayed from a committed recording. Nothing
 is burned in: no title, no watermark, no edited frame. The page is the artefact.
 
-**Status:** the pipeline and the recording are committed; the GIF, the poster and the README embed are
-held for the re-shoot after the board's descriptive text moves into `?` tooltips. That change frees
-height for the map, so try `DEMO_VIEWPORT=1280x720` then (below).
+**Status:** re-shot on 2026-11-21 with the quiet panels (`?` tooltips) and the layer switches; the GIF,
+the poster and the README embed are committed. The MP4 is not yet attached to a release.
 
 ## Rebuild it
 
@@ -37,8 +36,8 @@ recording does not hold, the take fails with `not in the recording: <path>`: run
 | File | What | In git |
 |---|---|---|
 | `docs/demo/board-recording.jsonl` | the recording a take replays | yes |
-| `docs/demo/flightops-demo.gif` | 12 fps timeline, 900 px wide, 128-colour palette, at most 5 MB | after the re-shoot |
-| `docs/demo/poster.png` | one frame: the approaching list beside the globe | after the re-shoot |
+| `docs/demo/flightops-demo.gif` | 12 fps timeline, 900 px wide, 128-colour palette, at most 5 MB | yes |
+| `docs/demo/poster.png` | one frame: the approaching list beside the globe | yes |
 | `docs/demo/flightops-demo.mp4` | h264, yuv420p, 30 fps, 1280×720, faststart | never: attached to the release |
 | `docs/demo/raw/` | the WebM take and its timeline | never |
 
@@ -59,6 +58,17 @@ gh release upload <tag> docs/demo/flightops-demo.mp4
 |---|---|---|---|---|
 | replay | 80 s | 1.88 MB, 42.57 s, 0 dropped | 3.12 MB, 41.75 s, 91 distinct frames | 0.69 MB |
 | `--live` | 139 s | 1.93 MB, 42.10 s, 0 dropped | 3.27 MB, 41.75 s, 89 distinct frames | 0.74 MB |
+
+### Measured, 2026-11-21, Windows 10, Chromium 159, after the quiet panels
+
+| Run | Wall time | MP4 | GIF | Poster |
+|---|---|---|---|---|
+| replay, 1600×900 (committed) | 93 s | 1.88 MB, 45.33 s, 0 dropped, 0 duplicated | 3.24 MB, 43.83 s, 102 distinct frames | 0.64 MB, at 38.16 s |
+| replay, 1280×720 (tried, not used) | 100 s | 1.69 MB, 44.60 s, 0 dropped | 2.58 MB, 43.50 s, 106 distinct frames | 0.62 MB |
+
+At 1600×900 the map now fills about 375 of the video's 720 rows, against about 310 before the quiet panels.
+At 1280×720 it sits on its floor (`min(220px, 35vh)`) and the globe is cramped beside a larger font, so the
+default stays 1600×900.
 
 The GIF merges each frame identical to the one before into that frame's delay (`mpdecimate`), which
 keeps the 12 fps timing; without it the GIF was 7.62 MB. Its thresholds keep every frame of the click
@@ -121,3 +131,25 @@ A replay's banner says `RECORDED` with the recording's time, as any replay does,
   for the next animation frame (`dashboard/static/board.js`, `resize()`).
 
 Both are the board's behaviour, recorded as it is, and not changed on this branch.
+
+## What the 2026-11-21 take showed, read frame by frame
+
+- The first take of the day left the transit below the fold: Playwright counts an element inside a scroll box
+  as visible, so step 6 passed with the inspector showing only the heading `Transit, estimate and
+  destination`. The tour now scrolls the claims into view before pointing at the estimate button; the
+  committed take shows `observed: 109 waypoints, 18:37Z–19:37Z (59 min)` with the button above it.
+- The sign-in page never appears, no secret is on screen, and the unknown toggle reports `46 hidden` off
+  and `46 without a report` on.
+- **The banner still prints the raw timestamp** in replay: `RECORDED 2026-11-20T20:03:26.283923+00:00`.
+- **Each chip click still blanks the map for one frame** (33 ms, at 4.47 s and 7.67 s in the first take,
+  measured as the map's mean luma dropping from 32.8 to 26.0 and back). With the quiet panels the chip note
+  now wraps onto a second line beside its `?` when Airline is pressed, which is the height change that
+  clears the canvas.
+- **The flat map stays on the whole world** through steps 1 to 6, so Europe is about a sixth of the map's
+  width and the dashed approach lines around ESGG are too small to read until the globe zooms in at step 7.
+- The globe's hover tooltip passes over the ESGG label during the zoom (about 33 s) and reads
+  `ESGG: Weather VFR. VFR, METAR 21 min old`: the category is said twice. It is gone by the poster frame.
+- The sort select in the aircraft panel is cut to `Distance from the ai`.
+
+The banner, the blank frame, the doubled `VFR` and the cut select are the board's behaviour, recorded as
+it is and not changed on this branch.
