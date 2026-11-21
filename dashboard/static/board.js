@@ -21,6 +21,10 @@
   const WEATHER_KEY = "airport-board.weather-filter";
   const LAYERS_KEY = "airport-board.layers";
   const LAYER_DEFAULTS = { airports: true, aircraft: true, before: null };
+  // Per tab session: the region whose bulk load was asked for. Dropped on a region change.
+  const BULK_KEY = "airport-board.bulk";
+  // Until the first answer names its own (board.VIEW_CACHE_VIEWS, board.VIEW_CACHE_TTL_S).
+  const VIEW_CACHE = { views: 8, ttl_s: 300 };
   const MAX_ZOOM = 12;
   const HIT_RADIUS_PX = 14;
   // Past this many aircraft at a wide zoom, arrowheads merge into a solid shape.
@@ -121,7 +125,18 @@
     // What approaches the selected airport: the server's set, the one lit, and tracks paid for.
     inbound: null, inboundHover: null, inboundTracks: new Map(),
     // Everything drawn that can be pointed at, rebuilt each frame, so a click hits what is seen.
-    pickables: [], labels: [],
+    pickables: [], labels: [], rows: [],
+    // Recent answers by region and view, the upstream's clock that ages them, and the one on
+    // screen: `current` is the answer to the view shown, `updating` an older or other view
+    // kept up while a new one is asked for, `stale` one past its TTL or after a failure.
+    views: new BoardCache.Views(VIEW_CACHE.views), upstream: new BoardCache.Clock(),
+    shown: null, viewStatus: "current", viewReason: "",
+    // The opt-in bulk load: every airport of the region by code, each with its own age.
+    // A cache under the view, not a mode: panning still asks for the view.
+    bulk: {
+      region: "", rows: new Map(), run: 0, loading: false, total: 0, got: 0, requests: 0,
+      started: 0, took: 0, stopped: "", cost: null,
+    },
   };
   const timers = {};
   // When each armed poll will fire, on the page's monotonic clock, so the traffic line can
@@ -235,34 +250,135 @@
       : "";
     const view = viewQuery();
     state.viewSent = view;
+    const key = `${region}${view}`;
+    // The drawing on screen stays until the answer lands. Another view's, or a kept copy of
+    // this one, is said to be updating. A kept copy within its TTL is painted at once; one
+    // past it only when nothing else is on screen, and then as STALE.
+    if (!state.shown || state.shown.key !== key) {
+      const kept = state.views.get(key);
+      const age = kept ? keptAge(kept) : null;
+      const fresh = BoardCache.fresh(age, cacheSettings().ttl_s);
+      if (kept && (fresh || !state.shown)) {
+        state.shown = kept;
+        applyBoard(kept.payload);
+        setViewStatus(fresh ? "updating" : "stale", fresh ? "" : "expired");
+      } else if (state.shown) {
+        setViewStatus("updating", "");
+      }
+    }
     try {
       const board = await api(`/api/board?region=${encodeURIComponent(region)}${query}${view}`);
       if (request !== state.boardRequest || region !== state.region) return;
-      state.airports = board.airports;
-      state.clusters = board.clusters || {};
-      state.hidden = board.hidden;
-      state.weather = board.weather_filter || null;
-      state.display = board.display;
-      $("view-note").textContent = board.viewport ? board.viewport.short || board.viewport.text : "";
-      $("view-why").textContent = board.viewport ? board.viewport.text : "";
-      refreshHint($("legend-why"));
-      renderBanner(board.banner.mode, board.banner.label);
-      renderLastUpdate(board.last_update);
-      renderGovernance(board.governance);
-      renderRegions(board.regions, board.region);
-      $("coverage").textContent = board.coverage_short || board.coverage;
-      state.coverage = board.coverage;
-      explain("traffic-why", state.coverage, state.trafficWhy);
-      renderTrafficControl(board.traffic);
-      renderUnknownToggle();
-      renderWeather();
-      refreshList();
-      invalidate();
+      const heard = elapsed();
+      state.upstream.hear(board.upstream_epoch, heard);
+      state.views.setLimit(cacheSettings(board).views);
+      state.views.put(key, board, heard);
+      state.shown = state.views.get(key);
+      applyBoard(board);
+      setViewStatus("current", "");
+      if (sessionChoice(BULK_KEY) === region && !state.bulk.loading && state.bulk.region !== region) {
+        loadAll();
+      }
     } catch {
       if (request !== state.boardRequest) return;
+      // A failure never blanks the board: the last view stays, labelled with its age.
+      if (state.shown) {
+        setViewStatus("stale", "failed");
+        return;
+      }
       renderBanner("NO DATA", "NO DATA: the board server did not answer");
       renderLastUpdate(NO_ANSWER);
     }
+  }
+
+  // The one monotonic reading the cache and the bulk load use. It only counts on from an
+  // answer's own `upstream_epoch` (BoardCache.Clock); it never stands in for the time of day.
+  function elapsed() {
+    return performance.now();
+  }
+
+  // The view cache's size and TTL, as the newest answer gave them.
+  function cacheSettings(board) {
+    const display = (board || {}).display || state.display;
+    return (display && display.view_cache) || VIEW_CACHE;
+  }
+
+  // How old a kept answer is by the upstream's clock, or null when it carried no time.
+  function keptAge(entry) {
+    return state.upstream.age(entry.payload.upstream_epoch, elapsed());
+  }
+
+  // Paints one board answer, received now or kept. Reads it and never writes to it.
+  function applyBoard(board) {
+    state.airports = board.airports;
+    state.clusters = board.clusters || {};
+    state.hidden = board.hidden;
+    state.weather = board.weather_filter || null;
+    state.display = board.display;
+    $("view-why").textContent = board.viewport ? board.viewport.text : "";
+    refreshHint($("legend-why"));
+    renderBanner(board.banner.mode, board.banner.label);
+    renderLastUpdate(board.last_update);
+    renderGovernance(board.governance);
+    renderRegions(board.regions, board.region);
+    $("coverage").textContent = board.coverage_short || board.coverage;
+    state.coverage = board.coverage;
+    explain("traffic-why", state.coverage, state.trafficWhy);
+    renderTrafficControl(board.traffic);
+    renderBulkControl(board.bulk);
+    renderUnknownToggle();
+    renderWeather();
+    refreshList();
+    invalidate();
+  }
+
+  // The one word before the view line, and what the banner and badge say when the view on
+  // screen is not the answer to it. Counted on each second while it is not current, so an
+  // age on screen never stands still and goes on looking new.
+  const VIEW_WORDS = { current: "", updating: "Updating", stale: "Stale" };
+  function setViewStatus(status, reason) {
+    state.viewStatus = status;
+    state.viewReason = reason;
+    renderViewState();
+  }
+
+  function renderViewState() {
+    clearTimeout(timers.viewAge);
+    const shown = state.shown;
+    if (!shown) return;
+    const { payload } = shown;
+    const line = payload.viewport ? payload.viewport.short || payload.viewport.text : "";
+    const note = $("view-note");
+    note.dataset.state = state.viewStatus;
+    if (state.viewStatus === "current") {
+      note.textContent = line;
+      return;
+    }
+    const age = keptAge(shown);
+    const old = age === null ? "age unknown" : `${ago(age)} old`;
+    // Whatever asked for a new view, one past its TTL (or with no age) is never "updating" under
+    // its old LIVE banner: a layout change re-asked while an expired view was up, and it did.
+    const status = state.viewStatus === "updating" && !BoardCache.fresh(age, cacheSettings().ttl_s)
+      ? "stale" : state.viewStatus;
+    note.dataset.state = status;
+    note.textContent = `${VIEW_WORDS[status]}: ${old} · ${line}`;
+    if (status === "stale") {
+      const why = state.viewStatus === "stale" && state.viewReason === "failed"
+        ? "the board server did not answer"
+        : age === null ? "a view with no upstream time" : "a kept view, past its time";
+      renderBanner("STALE", `STALE: ${why}; the view on screen is ${old}`);
+      renderLastUpdate({
+        state: "stale",
+        lines: [{ label: "Board", state: "stale", text: `${why}; view ${old}` }],
+      });
+    } else {
+      // The kept answer's own banner and badge. Its age is on the view line, not a badge line:
+      // on a phone the badge is in the page flow, and a line coming and going with every pan
+      // moved everything under the map. Within the TTL its ages are short by at most that.
+      renderBanner(payload.banner.mode, payload.banner.label);
+      renderLastUpdate(payload.last_update);
+    }
+    if (!document.hidden) timers.viewAge = setTimeout(renderViewState, 1000);
   }
 
   async function refreshDetail() {
@@ -610,6 +726,113 @@
     }));
   }
 
+  // --- the bulk load ------------------------------------------------------------
+  // Off by default. Its price is the server's (board.bulk_cost), on screen before a press.
+  function renderBulkControl(cost) {
+    if (!cost) return;
+    state.bulk.cost = cost;
+    renderBulk();
+  }
+
+  const bulkChosen = () => sessionChoice(BULK_KEY) === state.region;
+  const count = (n) => n.toLocaleString("en");
+
+  function bulkNote() {
+    const { bulk } = state;
+    if (!bulkChosen() || bulk.region !== state.region) return "";
+    const of = `${count(bulk.got)} of ${count(bulk.total)} airports`;
+    if (bulk.loading) return `Loading: ${of} so far`;
+    const spent = `${bulk.requests} weather request${bulk.requests === 1 ? "" : "s"}`;
+    if (bulk.stopped) return `Stopped at ${of}: ${bulk.stopped}. The rest are not loaded.`;
+    return `Loaded ${of} in ${Math.round(bulk.took)} s · ${spent}. Each keeps its own age.`;
+  }
+
+  function renderBulk() {
+    const { cost } = state.bulk;
+    if (!cost) return;
+    $("bulk").hidden = false;
+    const button = $("bulk-load");
+    button.textContent = cost.label;
+    button.setAttribute("aria-pressed", String(bulkChosen()));
+    $("bulk-cost").textContent = cost.cost;
+    const note = bulkNote();
+    if ($("bulk-note").textContent !== note) $("bulk-note").textContent = note;
+  }
+
+  // Chunk after chunk, so a refusal stops it between two and the count says how far it got.
+  async function loadAll() {
+    const { bulk } = state;
+    const run = ++bulk.run;
+    const region = state.region;
+    Object.assign(bulk, {
+      region, rows: new Map(), loading: true, got: 0, requests: 0, stopped: "", took: 0,
+      total: bulk.cost ? bulk.cost.airports : 0, started: elapsed(),
+    });
+    renderBulk();
+    let offset = 0;
+    while (offset !== null) {
+      let chunk = null;
+      try {
+        chunk = await api(`/api/bulk/${encodeURIComponent(region)}?offset=${offset}`, { method: "POST" });
+      } catch { /* said below */ }
+      if (run !== bulk.run) return;
+      if (!chunk) { finishBulk("the board server did not answer"); return; }
+      state.upstream.hear(chunk.upstream_epoch, elapsed());
+      for (const row of chunk.airports) bulk.rows.set(row.icao, row);
+      Object.assign(bulk, { total: chunk.total, got: bulk.rows.size, requests: bulk.requests + chunk.requests });
+      renderBulk();
+      invalidate();
+      if (chunk.refused) { finishBulk(chunk.refused); return; }
+      offset = chunk.next;
+    }
+    finishBulk("");
+  }
+
+  function finishBulk(stopped) {
+    const { bulk } = state;
+    Object.assign(bulk, { loading: false, stopped, took: (elapsed() - bulk.started) / 1000 });
+    renderBulk();
+  }
+
+  function dropBulk() {
+    const { bulk } = state;
+    bulk.run += 1;
+    Object.assign(bulk, { region: "", rows: new Map(), loading: false, got: 0, requests: 0, stopped: "" });
+    renderBulk();
+    invalidate();
+  }
+
+  // What the map draws: the view's rows, then the bulk rows the view does not hold. The view's
+  // answer wins for its own airports, because it is the newer.
+  function boardRows() {
+    const { bulk } = state;
+    if (bulk.region !== state.region || !bulk.rows.size) return state.airports;
+    const seen = new Set(state.airports.map((airport) => airport.icao));
+    const limit = state.display ? state.display.metar_stale_after_s : 0;
+    const at = elapsed();
+    const rows = state.airports.slice();
+    for (const row of bulk.rows.values()) if (!seen.has(row.icao)) rows.push(bulkRow(row, limit, at));
+    return rows;
+  }
+
+  // A bulk row aged on by the upstream's clock. Past the tools' METAR limit it is Unknown, as
+  // the tools would call it: a load is never a reason to call an old report current.
+  function bulkRow(row, limit, at) {
+    const observed = row.observed || {};
+    const since = state.upstream.age(observed.upstream_epoch, at);
+    const loaded = since === null ? "loaded, age unknown" : `loaded ${ago(since)} ago`;
+    const summary = row.weather ? row.weather.summary : "Unknown: no report heard";
+    const lapsed = since === null || observed.age_s === null || observed.age_s + since > limit;
+    if (row.marker && lapsed) {
+      const { icao, name, latitude, longitude } = row;
+      return {
+        icao, name, latitude, longitude, cat: "U",
+        bulk: `${summary} when ${loaded}; past the ${Math.round(limit / 60)} min limit now`,
+      };
+    }
+    return { ...row, bulk: `${summary} · ${loaded}` };
+  }
+
   const known = (value) => value !== null && value !== undefined;
   const ofBudget = (spent, budget) =>
     known(spent) && known(budget) ? `${spent} of ${budget}` : "Unknown";
@@ -744,7 +967,8 @@
     }));
     if (focused) {
       const again = list.querySelector(`[data-icao="${CSS.escape(focused)}"]`);
-      if (again) again.focus();
+      // Without a scroll: the strip is back where it was, and a poll must not move the page.
+      if (again) again.focus({ preventScroll: true });
     }
   }
 
@@ -813,7 +1037,7 @@
     if (icao === state.selected) { clearAirport("selected again"); return; }
     state.selected = icao;
     forgetAirport();
-    const airport = state.airports.find((item) => item.icao === icao);
+    const airport = state.rows.find((item) => item.icao === icao);
     if (airport && state.projection === "globe") {
       state.lon = airport.longitude;
       state.lat = airport.latitude;
@@ -1397,8 +1621,8 @@
   }
 
   function airportTip(airport) {
-    const tip = airport.weather ? airport.weather.summary
-      : (state.display ? state.display.trimmed_tip : "Unknown");
+    const tip = airport.bulk || (airport.weather ? airport.weather.summary
+      : (state.display ? state.display.trimmed_tip : "Unknown"));
     return `${airport.icao}: ${airport.marker ? airport.marker.label : "Unknown"}. ${tip}`;
   }
 
@@ -1458,7 +1682,7 @@
   // group, so its shape and its worst are that category.
   function filteredCells(cellDeg, letter) {
     const cells = new Map();
-    for (const airport of state.airports) {
+    for (const airport of state.rows) {
       if (airport.cat !== letter) continue;
       const key = `${Math.floor((airport.latitude + 90.0) / cellDeg)},`
         + `${Math.floor((airport.longitude + 180.0) / cellDeg)}`;
@@ -1486,12 +1710,55 @@
     const cell = clusterCell();
     if (cell === null || !state.clusters[String(cell)]) return null;
     const chosen = weatherChoice();
-    return chosen ? filteredCells(cell, chosen) : state.clusters[String(cell)];
+    if (chosen) return filteredCells(cell, chosen);
+    return state.rows === state.airports ? state.clusters[String(cell)] : allCells(cell);
+  }
+
+  // board.clusters and board.cluster_text, over the view's rows and the bulk rows together:
+  // the server's grid, counts, majority (ties to the worse) and worst, so a bulk load groups
+  // exactly as a view does. Only used while bulk rows are drawn.
+  const CATEGORY_ORDER = ["VFR", "MVFR", "IFR", "LIFR"];
+  function clusterText(counts, unknown, showUnknown) {
+    const parts = [...CATEGORY_ORDER].reverse().filter((c) => counts[c])
+      .map((c) => `${CATEGORY[c].symbol} ${counts[c]} ${c}`);
+    if (showUnknown && unknown) parts.push(`○ ${unknown} without a report`);
+    return parts.join(" · ") || "no report heard";
+  }
+
+  function allCells(cellDeg) {
+    const cells = new Map();
+    for (const airport of state.rows) {
+      const key = `${Math.floor((airport.latitude + 90.0) / cellDeg)},`
+        + `${Math.floor((airport.longitude + 180.0) / cellDeg)}`;
+      if (!cells.has(key)) cells.set(key, []);
+      cells.get(key).push(airport);
+    }
+    return [...cells.values()].map((members) => {
+      const counts = { VFR: 0, MVFR: 0, IFR: 0, LIFR: 0 };
+      const reported = members.filter((a) => a.marker && a.marker.category in counts);
+      for (const airport of reported) counts[airport.marker.category] += 1;
+      const unknown = members.length - reported.length;
+      let majority = null;
+      let worst = null;
+      for (const c of CATEGORY_ORDER) {
+        if (!counts[c]) continue;
+        worst = c;
+        if (majority === null || counts[c] >= counts[majority]) majority = c;
+      }
+      const placedBy = reported.length ? reported : members;
+      const mean = (field) => placedBy.reduce((sum, a) => sum + a[field], 0) / placedBy.length;
+      return {
+        latitude: mean("latitude"), longitude: mean("longitude"),
+        reported: reported.length, unknown, counts, majority, worst,
+        text: clusterText(counts, unknown, false),
+        text_with_unknown: clusterText(counts, unknown, true),
+      };
+    });
   }
 
   function drawAirports() {
     if (clustered()) {
-      const chosen = state.airports.find((airport) => airport.icao === state.selected);
+      const chosen = state.rows.find((airport) => airport.icao === state.selected);
       if (chosen) drawAirport(chosen);
       return;
     }
@@ -1499,7 +1766,7 @@
     const chosen = weatherChoice();
     const drawn = (airport) => (chosen ? airport.cat === chosen : Boolean(airport.marker) || show);
     state.labels = [];
-    state.airports
+    state.rows
       .filter((airport) => drawn(airport) || airport.icao === state.selected)
       .sort((a, b) => drawOrder(a) - drawOrder(b))
       .forEach(drawAirport);
@@ -1533,7 +1800,7 @@
   }
 
   // The selection outlives a change of region: the detail carries its own position.
-  const selectedAirport = () => state.airports.find((item) => item.icao === state.selected)
+  const selectedAirport = () => state.rows.find((item) => item.icao === state.selected)
     || (state.detail && state.detail.icao === state.selected ? state.detail : undefined);
 
   // Range rings are true great-circle distances from the selected airport.
@@ -1996,6 +2263,7 @@
     projection = buildProjection();
     // The first poll waits for the first frame, so it already asks about the view on screen.
     if (state.viewSent === null) refreshBoard();
+    state.rows = boardRows();
     const globe = state.projection === "globe";
     const path = d3.geoPath(projection, context);
     context.clearRect(0, 0, state.width, state.height);
@@ -2166,6 +2434,16 @@
   $("layer-airports").addEventListener("click", () => applyLayers(switchLayer(state.layers, "airports")));
   $("layer-aircraft").addEventListener("click", () => applyLayers(switchLayer(state.layers, "aircraft")));
   $("flights-only").addEventListener("click", () => applyLayers(flightsOnly(state.layers)));
+  // A second press drops the loaded set and stops a load under way.
+  $("bulk-load").addEventListener("click", () => {
+    if (bulkChosen()) {
+      rememberSession(BULK_KEY, "");
+      dropBulk();
+    } else {
+      rememberSession(BULK_KEY, state.region);
+      loadAll();
+    }
+  });
   $("traffic-on").addEventListener("change", () => {
     state.trafficChosen = true;
     state.trafficStopped = false;
@@ -2195,6 +2473,11 @@
     state.offset = 0;
     state.airports = [];
     state.clusters = {};
+    // Nothing of the old region stays on screen. Its views stay kept, by region, so going
+    // back paints at once; its bulk load is dropped, like the class chip.
+    state.shown = null;
+    rememberSession(BULK_KEY, "");
+    dropBulk();
     state.airspace = [];
     state.trafficSnapshot = null;
     state.trafficHeard = null;

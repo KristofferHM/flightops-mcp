@@ -210,6 +210,50 @@ Measured on the live board, 2026-11-20, World at the page's first view (`lat=0&l
 Placed at the whole cell's mean instead, the one IFR airport of a 33-airport cell would have been drawn 372 km from
 where it is.
 
+### Kept views and the bulk load
+
+The filters never lost data: they are render-only. A view change did. Each one fetched the airports nearest the new
+view and replaced the old set, so a pan of 200 nm left nothing of what was there, and panning back fetched it again.
+
+- **The drawing stays until the answer lands.** Nothing is cleared when a view is asked for. While a new view
+  loads, the view line leads with one word and the age of what is on screen: `Updating: 40 s old · Weather showing
+  …`. A failed refresh never blanks the board: the last view stays, the banner reads `STALE: the board server did
+  not answer; the view on screen is 2 min old`, and the badge is replaced by that one line. `NO DATA` is left for a
+  board that never had a view. Ages count on each second, so a frozen number never goes on looking new.
+- **The last 8 answers are kept** by region and the rounded view the server was asked for (`board.VIEW_CACHE_VIEWS`).
+  Each is the payload as received, never re-stamped. It is aged by the answers' own `upstream_epoch`, NOAA's newest
+  clock in each, counted on by the page's monotonic clock (`BoardCache.Clock` in `viewcache.js`); never by the time
+  of day. Within `board.VIEW_CACHE_TTL_S` (5 minutes) a kept view is painted at once, as `Updating`, and its request
+  still goes out. Past it, or with no `upstream_epoch`, it is painted only when nothing else is on screen (after a
+  region change), and then as `STALE: a kept view, past its time; the view on screen is 16 min old`. A kept view
+  that ages past the TTL while it waits turns `Stale` on its own: the browser gate found a resize asking again while
+  an expired view was up, and the view read `Updating` under its old `LIVE` banner.
+- **`Load all 3,270 airports`**, off by default, says its price before it spends: `~1.2 MB (164 KB compressed) ·
+  ~66 weather requests · ~17 s` (`board.bulk_cost`). It asks `POST /api/bulk/{region}` 500 airports at a time, in code
+  order; NOAA is asked 50 at a time as always. Each row carries the age its METAR had and NOAA's clock then
+  (`observed`), and the page ages it on: past the tools' 90-minute limit it is drawn Unknown, never current. The
+  view's own answer wins for its airports. At a wide zoom the rows are grouped on the server's grid (`allCells`
+  mirrors `board.clusters`). A refusal (`local_budget_exhausted`, `upstream_rate_limited`) stops the load and says how
+  far it got: `Stopped at 1,120 of 3,270 airports: … The rest are not loaded.` The choice is kept for the tab's
+  session; a second press drops the set; a region change drops it.
+
+Measured on this machine, 2026-11-21, through the synthetic board (`scripts/a11y_server.py`); NOAA was not asked:
+
+| | |
+|---|---|
+| A World view, 600 airports | 258,772 bytes, 28,842 gzipped |
+| 8 such views kept | 2.16 MB of JSON, **2.46 MB of JS heap** (Chromium, after a forced GC) |
+| A whole World bulk load | 3,270 airports in 7 chunks, 1,010,227 bytes, 113,409 gzipped; 0.4 to 0.9 s, since nothing waits on NOAA |
+
+The synthetic METARs repeat, so they compress better than NOAA's. A live bulk load is NOAA's own time: 66 requests
+took 10.5 to 44 s in the world polls measured under "Weather requests, measured". Not yet measured live.
+
+Two things the cache makes worse. The weather chips count the view's rows (`weather_filter`), not the bulk rows
+drawn beside them, so with a bulk load the map can show more airports of a category than its chip says. And a kept
+view painted within its TTL shows its own badge, whose ages are short by at most those 5 minutes; the view line says
+`Updating` with the true age until the answer replaces it. The badge has no line of its own for this: at 390 px it is
+in the page flow, and a line coming and going with every pan moved everything under the map.
+
 ## Aircraft
 
 With traffic on, the aircraft are drawn on both projections, at the position OpenSky last heard and faded by age.

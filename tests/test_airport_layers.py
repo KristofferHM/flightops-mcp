@@ -297,9 +297,7 @@ def test_the_filter_hides_a_cell_left_empty_and_keeps_one_with_matches() -> None
     assert "if (airport.cat !== letter) continue;" in cells
     assert "Math.floor((airport.latitude + 90.0) / cellDeg)" in cells
     assert "Math.floor((airport.longitude + 180.0) / cellDeg)" in cells
-    assert "chosen ? filteredCells(cell, chosen) : state.clusters[String(cell)]" in body(
-        "clustered"
-    )
+    assert "if (chosen) return filteredCells(cell, chosen);" in body("clustered")
     assert "if (!count) continue;" in body("drawClusters")
 
 

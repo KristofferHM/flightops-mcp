@@ -160,6 +160,9 @@ pytest_add_cli_args_test_selection = [
     "tests/test_airport_layers.py",
     # The short forms that stay on screen (board.hidden_short, shown_short, viewport_short).
     "tests/test_quiet_panels.py",
+    # The view cache's clock and the bulk load's price and rows (board.newest_upstream,
+    # bulk_cost, bulk_airport).
+    "tests/test_view_cache.py",
     # A static scan of the source text for clients without the passthrough guard. mutmut's
     # instrumented copy contains every mutant side by side, including those that drop the
     # guard, so the scan fails before any mutant runs. It still runs in the normal suite.

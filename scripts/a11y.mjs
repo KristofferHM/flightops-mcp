@@ -209,6 +209,13 @@ async function screenState(page) {
   });
 }
 
+// Which parts of two screen states differ, with both values, so a failure says what moved.
+function changed(before, after) {
+  const [a, b] = [JSON.parse(before), JSON.parse(after)];
+  return Object.keys(a).filter((key) => JSON.stringify(a[key]) !== JSON.stringify(b[key]))
+    .map((key) => `${key}: ${JSON.stringify(a[key])} -> ${JSON.stringify(b[key])}`).join("; ");
+}
+
 // Each `?` opens on hover and on focus, closes on blur, on Escape and on a click elsewhere,
 // toggles on a tap, and changes nothing else on the page while it is open.
 async function exerciseHints(page, viewport, ids, touch) {
@@ -239,7 +246,8 @@ async function exerciseHints(page, viewport, ids, touch) {
     await button.focus();
     await expect(id, true, "focus");
     checks += 1;
-    if ((await screenState(page)) !== before) fail(where, `#${id} changed the page around it when it opened`);
+    const opened = await screenState(page);
+    if (opened !== before) fail(where, `#${id} changed the page around it when it opened: ${changed(before, opened)}`);
     await page.keyboard.press("Escape");
     await expect(id, false, "Escape");
     await page.keyboard.press("Tab");
@@ -260,7 +268,11 @@ async function exerciseHints(page, viewport, ids, touch) {
       await expect(id, false, "a second tap");
     }
     checks += 1;
-    if ((await screenState(page)) !== before) fail(where, `#${id} left the page changed`);
+    const after = await screenState(page);
+    if (after !== before) {
+      const shown = await page.evaluate(() => ["last-update", "view-note"].map((n) => document.getElementById(n).textContent.trim()).join(" | "));
+      fail(where, `#${id} left the page changed: ${changed(before, after)}; now ${shown}`);
+    }
   }
 }
 
@@ -381,7 +393,14 @@ async function exerciseAirportExits(page, size) {
     return null;
   }, { x: box.x, y: box.y + box.height - 6, width: box.width });
   checks += 1;
-  if (!spot) { fail(where, "every empty-map spot is covered by another element"); return; }
+  if (!spot) {
+    const cover = await page.evaluate(({ x, y, width }) => {
+      const hit = document.elementFromPoint(x + width / 2, y);
+      return `${hit ? hit.id || hit.className || hit.tagName : "nothing (off screen)"} at y ${Math.round(y)} of ${innerHeight}`;
+    }, { x: box.x, y: box.y + box.height - 6, width: box.width });
+    fail(where, `every empty-map spot is covered by another element: ${cover}`);
+    return;
+  }
   await exit("empty map", icao, () => page.mouse.click(spot.x, spot.y));
 }
 
@@ -541,6 +560,249 @@ async function checkTrafficTimeline(browser, servers, passcode) {
   }
 }
 
+// --- the view cache and the bulk load --------------------------------------------------------
+// The complaint: panning lost the airports on screen. Each claim is checked on the page itself:
+// the drawing (VFR marker pixels on the canvas), the banner, the view line's one word, and what
+// went over the wire. Late answers are held back by a route; a stale age is made by a route that
+// rewrites one region's `upstream_epoch`, the only field a test may change.
+async function checkViewCache(browser, servers, passcode) {
+  const where = "view cache";
+  const viewport = { width: 1280, height: 720 };
+  const context = await browser.newContext({ viewport });
+  await context.route("**/*", (route) => {
+    const url = new URL(route.request().url());
+    if (url.hostname === LOCAL_HOST) return route.continue();
+    fail(where, `a request left this machine: ${url.origin}`);
+    return route.abort();
+  });
+  const page = await context.newPage();
+  page.on("pageerror", (error) => fail(where, `page error: ${error.message}`));
+  const boards = [];
+  const bulks = [];
+  let inFlight = 0;
+  const done = (request) => { if (isBoard(new URL(request.url()))) inFlight -= 1; };
+  page.on("requestfinished", done);
+  page.on("requestfailed", done);
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (isBoard(url)) inFlight += 1;
+    if (url.pathname === "/api/board") boards.push(viewOf(url));
+    if (url.pathname.startsWith("/api/bulk/")) bulks.push(url.searchParams.get("offset"));
+  });
+  const expect = (ok, message) => { checks += 1; if (!ok) fail(where, message); };
+  // The cache's key: region and view. The traffic times a request also carries change by themselves.
+  const viewOf = (url) => ["region", "lat", "lon", "radius"].map((name) => url.searchParams.get(name)).join("|");
+  const isBoard = (url) => url.pathname === "/api/board";
+  const note = () => page.locator("#view-note").textContent();
+  const banner = () => page.evaluate(() => {
+    const element = document.getElementById("banner");
+    return { mode: element.dataset.mode, text: element.textContent };
+  });
+  // VFR marker pixels on the canvas: none means the airports were wiped from the drawing.
+  const marks = () => page.evaluate(() => {
+    const probe = document.createElement("canvas").getContext("2d");
+    probe.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--vfr").trim();
+    const [r, g, b] = [1, 3, 5].map((at) => parseInt(probe.fillStyle.slice(at, at + 2), 16));
+    const map = document.getElementById("map");
+    const data = map.getContext("2d").getImageData(0, 0, map.width, map.height).data;
+    let count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (Math.abs(data[i] - r) < 3 && Math.abs(data[i + 1] - g) < 3 && Math.abs(data[i + 2] - b) < 3) count += 1;
+    }
+    return count;
+  });
+  const pan = async (dx) => {
+    const box = await page.locator("#map").boundingBox();
+    const [x, y] = [box.x + box.width / 2, box.y + box.height / 2];
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx, y, { steps: 8 });
+    await page.mouse.up();
+  };
+  const hold = (answer) => page.route((url) => isBoard(url), async (route) => {
+    await new Promise((done) => setTimeout(done, LATE_MS));
+    if (answer) await route.fulfill(answer).catch(() => {});
+    else await route.continue().catch(() => {});
+  });
+  const asked = () => page.waitForRequest((request) => isBoard(new URL(request.url())), { timeout: 10_000 });
+  const settled = (word) => page.waitForFunction(
+    (prefix) => !document.getElementById("view-note").textContent.startsWith(prefix), word, { timeout: 10_000 },
+  );
+  try {
+    await open(page, servers.data.base, passcode, viewport);
+    await page.locator('#banner[data-mode="LIVE"]').waitFor();
+    await page.locator("#view-note", { hasText: "Weather showing" }).waitFor();
+
+    // The LRU and the clock, on the page's own code.
+    const unit = await page.evaluate(() => {
+      const { Views, Clock, fresh } = window.BoardCache;
+      const views = new Views(8);
+      const payloads = Array.from({ length: 9 }, (_, n) => ({ n, upstream_epoch: 1000 + n }));
+      const before = JSON.stringify(payloads);
+      payloads.slice(0, 8).forEach((payload, n) => views.put(`v${n}`, payload, n));
+      views.get("v0");
+      views.put("v8", payloads[8], 8);
+      const clock = new Clock();
+      clock.hear(2000, 0);
+      // An older clock heard later, as a cached answer carries, does not pull it back.
+      clock.hear(1900, 5000);
+      return {
+        size: views.size, keys: views.keys(), same: views.get("v8").payload === payloads[8],
+        unchanged: JSON.stringify(payloads) === before,
+        age: clock.age(1990, 30_000), noAge: clock.age(null, 0),
+        fresh: [fresh(299, 300), fresh(300, 300), fresh(301, 300), fresh(null, 300)].join(),
+      };
+    });
+    expect(unit.size === 8, `the LRU holds ${unit.size} views, not 8`);
+    expect(!unit.keys.includes("v1") && unit.keys.includes("v0"), `the ninth did not evict the least recently used: ${unit.keys}`);
+    expect(unit.same && unit.unchanged, "a kept payload is not the same, unchanged object");
+    expect(unit.age === 40 && unit.noAge === null, `the clock aged 1990 as ${unit.age} s, not 40`);
+    expect(unit.fresh === "true,true,false,false", `fresh() said ${unit.fresh}`);
+
+    // A pan held back: the airports stay drawn, the line says Updating, the banner stays.
+    const first = boards.at(-1);
+    const initial = await marks();
+    expect(initial > 0, "no VFR marker is drawn on the first view");
+    await hold(null);
+    let request = asked();
+    await pan(-200);
+    const second = viewOf(new URL((await request).url()));
+    await page.locator("#view-note", { hasText: /^Updating: \d+ s old · Weather showing/ }).waitFor({ timeout: 5_000 })
+      .catch(async () => fail(where, `while the new view loads the line says "${await note()}"`));
+    expect((await marks()) > 0, "the airports were wiped while the new view loaded");
+    expect((await banner()).mode === "LIVE", `the banner left LIVE while a view loaded: ${(await banner()).text}`);
+    // The badge keeps its own lines: on a phone it is in the page flow, so it must not grow.
+    expect(!(await page.locator("#last-update").textContent()).includes("Board"), "the badge was replaced while a view loaded");
+    await settled("Updating");
+    await page.unrouteAll({ behavior: "wait" });
+    expect((await marks()) > 0, "no airports after the new view landed");
+
+    // A failed refresh: the view stays, labelled STALE with its age.
+    await page.route((url) => isBoard(url), (route) => route.fulfill({ status: 500, body: "{}" }));
+    await pan(-200);
+    await page.locator('#banner[data-mode="STALE"]').waitFor({ timeout: 10_000 })
+      .catch(() => fail(where, "a failed refresh did not turn the banner STALE"));
+    const stale = await banner();
+    expect(/^STALE: the board server did not answer; the view on screen is \d+ s old$/.test(stale.text), `the STALE banner says "${stale.text}"`);
+    expect(/^Stale: \d+ s old · Weather showing/.test(await note()), `the line after a failure says "${await note()}"`);
+    expect((await marks()) > 0, "a failed refresh blanked the board");
+    await page.unrouteAll({ behavior: "wait" });
+
+    // Back to the first view, kept: painted before its answer lands, and still asked for. (The
+    // failed view's neighbour is still the one on screen, so it is the first view that is kept
+    // apart from the drawing.)
+    await hold(null);
+    request = asked();
+    await pan(400);
+    const again = viewOf(new URL((await request).url()));
+    expect(again === first, `panning back asked for ${again}, not the kept ${first}`);
+    expect(second !== first, "the first pan did not change the view");
+    // Only the kept copy can turn STALE back into LIVE while the answer is held.
+    await page.locator('#banner[data-mode="LIVE"]').waitFor({ timeout: LATE_MS - 300 })
+      .catch(() => fail(where, "the kept view was not painted before its answer landed"));
+    expect(/^Updating: \d+ s old/.test(await note()), `a kept view is not labelled Updating: "${await note()}"`);
+    await settled("Updating");
+    await page.unrouteAll({ behavior: "wait" });
+
+    // An expired kept view is shown only when nothing else is, and then as STALE with its age.
+    // The world's answers are rewritten 1000 s older; Europe's are not, so the clock is real.
+    let holdWorld = false;
+    await page.route((url) => isBoard(url) && url.searchParams.get("region") === "world", async (route) => {
+      if (holdWorld) await new Promise((done) => setTimeout(done, LATE_MS));
+      const response = await route.fetch().catch(() => null);
+      if (!response) return;
+      const payload = await response.json();
+      payload.upstream_epoch -= 1000;
+      await route.fulfill({ response, json: payload }).catch(() => {});
+    });
+    // A region change can resize the map and ask again; each visit waits for both answers.
+    const quiet = async () => {
+      await page.waitForTimeout(1200);
+      for (let wait = 0; wait < 100 && inFlight > 0; wait += 1) await page.waitForTimeout(100);
+    };
+    const answered = (region) => page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return isBoard(url) && url.searchParams.get("region") === region;
+    }, { timeout: 10_000 });
+    let landed = answered("world");
+    await page.locator("#region").selectOption("world");
+    await landed;
+    await quiet();
+    landed = answered("europe");
+    await page.locator("#region").selectOption("europe");
+    await landed;
+    await quiet();
+    holdWorld = true;
+    await page.locator("#region").selectOption("world");
+    await page.locator('#banner[data-mode="STALE"]').waitFor({ timeout: LATE_MS - 300 })
+      .catch(() => fail(where, "an expired kept view was not labelled STALE"));
+    const expired = await banner();
+    expect(/^STALE: a kept view, past its time; the view on screen is 1[67] min old$/.test(expired.text), `an expired view's banner says "${expired.text}"`);
+    expect(/^Stale: 1[67] min old · /.test(await note()), `an expired view's line says "${await note()}"`);
+    await page.locator('#banner[data-mode="LIVE"]').waitFor({ timeout: 10_000 });
+    await settled("Stale");
+    expect((await note()).startsWith("Weather showing"), `the answer did not replace the expired view: "${await note()}"`);
+    await quiet();
+    await page.unrouteAll({ behavior: "wait" });
+
+    // The bulk load: off, priced, and nothing spent until it is pressed.
+    const button = page.locator("#bulk-load");
+    await button.waitFor();
+    const label = await button.textContent();
+    const cost = await page.locator("#bulk-cost").textContent();
+    expect(/^Load all [\d,]+ airports$/.test(label), `the button says "${label}"`);
+    expect(/^~[\d.]+ [KM]B \([\d.]+ [KM]B compressed\) · ~\d+ weather requests? · ~\d+ s$/.test(cost), `the price says "${cost}"`);
+    expect((await button.getAttribute("aria-pressed")) === "false", "the bulk load starts on");
+    expect(bulks.length === 0, `${bulks.length} bulk requests before any press`);
+
+    // A refusal on the third chunk stops it, and the count says how far it got.
+    await page.route((url) => url.pathname.startsWith("/api/bulk/"), async (route) => {
+      const response = await route.fetch();
+      const chunk = await response.json();
+      if (new URL(route.request().url()).searchParams.get("offset") === "1000") {
+        Object.assign(chunk, { refused: "NOAA asked us to wait 60 s", next: null, airports: chunk.airports.slice(0, 120), got: 120 });
+      }
+      await route.fulfill({ response, json: chunk });
+    });
+    await button.click();
+    await page.locator("#bulk-note", { hasText: "Stopped at 1,120 of 3,270 airports: NOAA asked us to wait 60 s. The rest are not loaded." })
+      .waitFor({ timeout: 30_000 }).catch(async () => fail(where, `a refused load says "${await page.locator("#bulk-note").textContent()}"`));
+    expect(bulks.join() === "0,500,1000", `the refused load asked for chunks ${bulks.join()}`);
+    expect((await button.getAttribute("aria-pressed")) === "true", "a stopped load is not shown as chosen");
+    await page.unrouteAll({ behavior: "wait" });
+    await inspect(page, viewport, "bulk load stopped");
+
+    // Pressed again it is dropped; pressed once more it loads the region whole.
+    await button.click();
+    await page.locator('#bulk-load[aria-pressed="false"]').waitFor();
+    expect((await page.locator("#bulk-note").textContent()) === "", "a dropped load still has a note");
+    bulks.length = 0;
+    const started = Date.now();
+    await button.click();
+    await page.locator("#bulk-note", { hasText: /^Loaded 3,270 of 3,270 airports in \d+ s · \d+ weather requests\. Each keeps its own age\.$/ })
+      .waitFor({ timeout: 60_000 }).catch(async () => fail(where, `a whole load says "${await page.locator("#bulk-note").textContent()}"`));
+    const took = Date.now() - started;
+    expect(bulks.length === 7, `a whole world load took ${bulks.length} chunks, not 7`);
+    expect((await marks()) > 0, "no airports drawn after the bulk load");
+
+    // Remembered for the tab session: a reload loads it again without a press.
+    bulks.length = 0;
+    await page.reload();
+    await page.locator('#bulk-load[aria-pressed="true"]').waitFor({ timeout: 10_000 })
+      .catch(() => fail(where, "the bulk choice was not kept for the session"));
+    await page.locator("#bulk-note", { hasText: /^Loaded 3,270 of 3,270/ }).waitFor({ timeout: 60_000 })
+      .catch(() => fail(where, "the remembered bulk load did not run"));
+    expect(bulks.length === 7, `the remembered load took ${bulks.length} chunks`);
+    await button.click();
+    await page.locator('#bulk-load[aria-pressed="false"]').waitFor();
+    console.log(`checked ${where}: a whole synthetic world load took ${took} ms in 7 chunks`);
+  } catch (error) {
+    fail(where, error.message.split("\n")[0]);
+  } finally {
+    await context.close();
+  }
+}
+
 async function walk(browser, viewport, servers, passcode) {
   // The phone has a touchscreen, so a tap is tried there: hover does not exist on it.
   const touch = viewport.width === OVERFLOW_WIDTH;
@@ -588,7 +850,7 @@ async function walk(browser, viewport, servers, passcode) {
     reached.add(await page.evaluate(() => document.activeElement && document.activeElement.id));
     await page.keyboard.press("Tab");
   }
-  const controls = ["unknown-on", "unknown-hint", "traffic-hint", "class-hint", "layer-airports", "layer-aircraft", "flights-only", "weather-chip-all", "a-sort", "a-cap", "a-radius", "a-airline", "a-band", "a-phase", "a-q", "a-focus"];
+  const controls = ["unknown-on", "unknown-hint", "traffic-hint", "class-hint", "layer-airports", "layer-aircraft", "flights-only", "bulk-load", "weather-chip-all", "a-sort", "a-cap", "a-radius", "a-airline", "a-band", "a-phase", "a-q", "a-focus"];
   const missed = controls.filter((id) => !reached.has(id));
   checks += 1;
   if (missed.length) fail(`${size} keyboard`, `not reached by Tab: ${missed.join(", ")}`);
@@ -675,6 +937,7 @@ async function main() {
     console.log(`axe-core ${AXE_VERSION}, Chromium ${browser.version()}`);
     for (const viewport of VIEWPORTS) await walk(browser, viewport, servers, passcode);
     await checkTrafficTimeline(browser, servers, passcode);
+    await checkViewCache(browser, servers, passcode);
   } finally {
     // A browser that never started must not leave the three servers running.
     if (browser) await browser.close();

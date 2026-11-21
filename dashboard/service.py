@@ -12,7 +12,7 @@ from typing import Any, Final
 
 from flightops_mcp.airports import CONTINENTS
 from flightops_mcp.opensky import AIRSPACE_REGIONS
-from flightops_mcp.server import WEATHER_OVERVIEW_MAX
+from flightops_mcp.server import METAR_STALE_AFTER_S, WEATHER_OVERVIEW_MAX
 
 from . import aircraft, board, inbound
 from .sources import ToolSource
@@ -251,8 +251,8 @@ class BoardService:
     async def _weather(self, icao: str) -> Payload:
         return board.weather_view(await self._source.call("airport_weather", {"airport": icao}))
 
-    async def _overview(self, idents: list[str]) -> dict[str, Payload]:
-        """Weather views for many airports, one `weather_overview` call per hundred."""
+    async def _overview_answers(self, idents: list[str]) -> list[tuple[list[str], Payload]]:
+        """The raw `weather_overview` answers, one call per hundred, with the codes each asked."""
         gate = asyncio.Semaphore(WEATHER_CONCURRENCY)
         chunks = [
             idents[start : start + WEATHER_OVERVIEW_MAX]
@@ -264,12 +264,23 @@ class BoardService:
                 return await self._source.call("weather_overview", {"airports": chunk})
 
         answers = await asyncio.gather(*(one(chunk) for chunk in chunks))
+        return list(zip(chunks, answers, strict=True))
+
+    @staticmethod
+    def _entries(chunk: list[str], answer: Payload) -> dict[str, Payload]:
+        """Each airport's own entry. A failed call is every one of its airports' entry."""
+        entries = (answer.get("airports") or {}) if answer.get("ok") else {}
+        return {
+            icao: (entries.get(icao) if answer.get("ok") else answer) or NOT_ANSWERED
+            for icao in chunk
+        }
+
+    async def _overview(self, idents: list[str]) -> dict[str, Payload]:
+        """Weather views for many airports, one `weather_overview` call per hundred."""
         views: dict[str, Payload] = {}
-        for chunk, answer in zip(chunks, answers, strict=True):
-            entries = (answer.get("airports") or {}) if answer.get("ok") else {}
-            for icao in chunk:
-                entry = entries.get(icao) if answer.get("ok") else answer
-                views[icao] = board.weather_view(entry or NOT_ANSWERED)
+        for chunk, answer in await self._overview_answers(idents):
+            for icao, entry in self._entries(chunk, answer).items():
+                views[icao] = board.weather_view(entry)
         return views
 
     async def snapshot(
@@ -310,6 +321,9 @@ class BoardService:
         ]
         unknown = sum(1 for entry in entries if "marker" not in entry)
         return {
+            # NOAA's newest clock in this answer. The page ages a kept copy by it, never by
+            # its own clock; with None a kept copy has no age and is never served as fresh.
+            "upstream_epoch": board.newest_upstream(weather),
             "banner": board.banner(weather, self._source.recorded_at),
             "last_update": board.last_update(
                 weather,
@@ -363,7 +377,55 @@ class BoardService:
                 "globe_max_lift": board.GLOBE_MAX_LIFT,
                 "globe_altitude_ceiling_m": board.GLOBE_ALTITUDE_CEILING_M,
                 "trimmed_tip": board.TRIMMED_TIP,
+                "view_cache": {"views": board.VIEW_CACHE_VIEWS, "ttl_s": board.VIEW_CACHE_TTL_S},
+                "metar_stale_after_s": METAR_STALE_AFTER_S,
             },
+            # The opt-in bulk load's price for this region. Nothing is spent until it is asked.
+            "bulk": board.bulk_cost(len(region_airports)),
+        }
+
+    async def bulk(self, region: str, offset: int = 0, limit: int = board.BULK_CHUNK) -> Payload:
+        """One chunk of the opt-in bulk load: every airport of the region, in code order.
+
+        The page asks chunk after chunk and stops when `next` is None. A refusal (the local
+        budget, or NOAA's rate limit) ends the load: the refused airports are left out, the
+        answered ones kept, and `refused` says why, so a partial load is never read as whole.
+        """
+        listed = sorted(self._region(region), key=lambda airport: str(airport["ident"]))
+        total = len(listed)
+        offset = max(0, min(offset, total))
+        chunk = listed[offset : offset + max(1, min(limit, board.BULK_CHUNK))]
+        records = {airport["ident"]: airport for airport in chunk}
+        airports: list[Payload] = []
+        weather: list[Payload] = []
+        refused: str | None = None
+        requests = 0
+        for idents, answer in await self._overview_answers(list(records)):
+            requests += int((answer.get("counts") or {}).get("requests") or 0)
+            for icao, entry in self._entries(idents, answer).items():
+                error = None if entry.get("ok") else entry.get("error")
+                if isinstance(error, dict) and error.get("code") in REFUSAL_CODES:
+                    refused = refused or str(error.get("message") or error["code"])
+                    continue
+                view = board.weather_view(entry)
+                self._views[icao] = view
+                weather.append(view)
+                row = board.board_airport(
+                    records[icao], self._summary(icao, view), board.marker(view)
+                )
+                airports.append(board.bulk_airport(row, view))
+        end = offset + len(chunk)
+        return {
+            "region": region,
+            "offset": offset,
+            "total": total,
+            "asked": len(chunk),
+            "got": len(airports),
+            "next": end if refused is None and end < total else None,
+            "refused": refused,
+            "requests": requests,
+            "upstream_epoch": board.newest_upstream(weather),
+            "airports": airports,
         }
 
     def airport_list(

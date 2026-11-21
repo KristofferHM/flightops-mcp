@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 from .aircraft import CAPS, DEFAULT_CAP, RADII_NM, Selection
-from .board import MAX_SNAPSHOT_EPOCH
+from .board import BULK_CHUNK, MAX_SNAPSHOT_EPOCH
 from .gate import COOKIE_NAME, LOCAL_HOSTS, SESSION_TTL_S, Gate, host_name
 from .inbound import DRAWN_MAX
 from .service import (
@@ -198,6 +198,7 @@ def create_app(
         return await service.triage(icao)
 
     _traffic_routes(app, service)
+    _bulk_routes(app, service)
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app
 
@@ -235,6 +236,18 @@ def _selection(
 
 # Module level, because annotations here are strings resolved against this module.
 Chosen = Annotated[Selection, Depends(_selection)]
+
+
+def _bulk_routes(app: FastAPI, service: BoardService) -> None:
+    """The opt-in bulk load. A POST, because each chunk spends NOAA requests."""
+
+    @app.post("/api/bulk/{region}")
+    async def api_bulk(
+        region: str,
+        offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+        limit: Annotated[int, Query(ge=1, le=BULK_CHUNK)] = BULK_CHUNK,
+    ) -> dict[str, Any]:
+        return await service.bulk(region, offset, limit)
 
 
 def _traffic_routes(app: FastAPI, service: BoardService) -> None:

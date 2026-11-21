@@ -73,6 +73,28 @@ CATEGORY_SYMBOL: Final = {"VFR": "●", "MVFR": "■", "IFR": "◆", "LIFR": "�
 # weather line and in its detail, not in the letter.
 CATEGORY_LETTER: Final = {"VFR": "V", "MVFR": "M", "IFR": "I", "LIFR": "L"}
 UNKNOWN_LETTER: Final = "U"
+# The page keeps this many recent board answers, by region and view, so panning back paints
+# at once. Each is the payload as received, never re-stamped.
+VIEW_CACHE_VIEWS: Final = 8
+# How old, by the payload's own `upstream_epoch`, a kept view may be and still be painted as
+# the view. The board polls every 30 s and NOAA issues most METARs hourly or half-hourly, so
+# five minutes is at most one missed issue; a hit is refreshed at once anyway. Older is
+# shown only when nothing else is, and then labelled STALE.
+VIEW_CACHE_TTL_S: Final = 300
+# The opt-in bulk load: the page asks for a region's airports this many at a time, so it can
+# stop between chunks and say how far it got. 500 is ten NOAA requests of 50.
+BULK_CHUNK: Final = 500
+NOAA_IDS_PER_REQUEST: Final = 50
+# Its stated price per airport, JSON as sent and gzipped. The live world view of 2026-11-20 was
+# 255,366 B and 28,472 B gzipped for 600 airports (docs/DASHBOARD.md), 426 and 47 B each with
+# its cluster block; a bulk row has no clusters and one more field. The synthetic board
+# measures 309 and 35 B. `tests/test_view_cache.py` holds the price over the synthetic one.
+BULK_BYTES_PER_AIRPORT: Final = 380
+BULK_GZIP_BYTES_PER_AIRPORT: Final = 50
+# Wall time per NOAA request at the board's concurrency of 4: the fastest measured world poll,
+# 66 requests in 10.5 s, rounded up. Others took 29 and 44 s (docs/DASHBOARD.md) when NOAA
+# stalled a request past the 15 s timeout, so the page says "~" and reports what it took.
+BULK_SECONDS_PER_REQUEST: Final = 0.25
 WEATHER_FILTER_ORDER: Final = ("V", "M", "I", "L", "U")
 WEATHER_FILTER_LABELS: Final = {
     "V": "VFR",
@@ -411,6 +433,51 @@ def viewport_short(in_view: int, asked: int) -> str:
     if asked < in_view:
         return f"Weather showing {asked:,} of {in_view:,}"
     return f"Weather showing all {asked:,} in view"
+
+
+def newest_upstream(weather: Sequence[Payload]) -> int | None:
+    """NOAA's newest clock among the views, or None: the age a kept copy of them is judged by."""
+    epochs = [epoch for view in weather if (epoch := _valid_epoch(view.get("upstream_time")))]
+    return max(epochs, default=None)
+
+
+def _size_text(size: int) -> str:
+    if size >= 1_000_000:
+        return f"{size / 1_000_000:.1f} MB"
+    return f"{max(1, round(size / 1000))} KB"
+
+
+def bulk_cost(airports: int) -> Payload:
+    """What loading every airport of a region costs, stated before anything is spent."""
+    size = airports * BULK_BYTES_PER_AIRPORT
+    compressed = airports * BULK_GZIP_BYTES_PER_AIRPORT
+    requests = math.ceil(airports / NOAA_IDS_PER_REQUEST)
+    seconds = max(1, math.ceil(requests * BULK_SECONDS_PER_REQUEST))
+    return {
+        "airports": airports,
+        "bytes": size,
+        "compressed_bytes": compressed,
+        "requests": requests,
+        "seconds": seconds,
+        "chunk": BULK_CHUNK,
+        "label": f"Load all {airports:,} airports",
+        "cost": (
+            f"~{_size_text(size)} ({_size_text(compressed)} compressed) · "
+            f"~{requests} weather request{'' if requests == 1 else 's'} · ~{seconds} s"
+        ),
+    }
+
+
+def bulk_airport(entry: Payload, weather: Payload) -> Payload:
+    """A bulk row: the map's own row plus the age it had and the clock that measured it.
+
+    The page ages it on from there. A bulk load is a cache: a METAR 40 minutes old when it
+    arrived is 50 minutes old ten minutes later, and past the limit it is drawn Unknown.
+    """
+    return {
+        **entry,
+        "observed": {"age_s": weather["age_s"], "upstream_epoch": weather["upstream_time"]},
+    }
 
 
 def _valid_epoch(epoch: object) -> int | None:

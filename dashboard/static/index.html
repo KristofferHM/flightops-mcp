@@ -56,6 +56,11 @@
             <button id="flights-only" class="quiet" type="button" aria-pressed="false">Flights only</button>
           </span>
         </div>
+        <div id="bulk" class="chips bulk" role="group" aria-label="Load every airport of the region" hidden>
+          <span class="chip-row"><button id="bulk-load" class="quiet" type="button" aria-pressed="false" aria-describedby="bulk-cost">Load all airports</button></span>
+          <p id="bulk-cost" class="note"></p>
+          <p id="bulk-note" class="note" role="status"></p>
+        </div>
         <div id="weather-filter" class="chips" role="group" aria-label="Show airports by weather" hidden>
           <span id="weather-chips" class="chip-row"></span>
           <p id="weather-note" class="note" role="status"></p>
@@ -298,6 +303,7 @@
   <script src="/static/vendor/d3-array.min.js"></script>
   <script src="/static/vendor/d3-geo.min.js"></script>
   <script src="/static/vendor/topojson-client.min.js"></script>
+  <script src="/static/viewcache.js"></script>
   <script src="/static/board.js"></script>
 </body>
 </html>
