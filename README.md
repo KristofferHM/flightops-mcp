@@ -7,6 +7,10 @@ audited, rate-limited access to airport operations data, takes one action only w
 approval, and says "unknown" when its evidence is thin. It is a non-commercial demo on free public data,
 run on one laptop: no airline or airport operates on it, and its one write goes to a mock.
 
+[![The airport board, 44 seconds: operator chips, Göteborg Landvetter chosen, the aircraft approaching it, one of them inspected with its observed transit, then the globe centred on the airport](docs/demo/flightops-demo.gif)](docs/DEMO-VIDEO.md)
+
+*The board replaying a recording of 2026-11-20; nothing in the take is edited ([how it is made](docs/DEMO-VIDEO.md)).*
+
 | It can | It cannot |
 |---|---|
 | Answer with weather, traffic, movements and a triage, each carrying its upstream and that upstream's own clock (`upstream_time_epoch`, [schemas](docs/PROTOCOL.md#output-schemas)) | Say who is on board. No source here names a passenger: `flight_passenger_impact` returns counts only, and the logs are canary-tested for PII (`tests/test_redaction.py`) |
