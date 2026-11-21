@@ -66,6 +66,21 @@ GLOBE_ALTITUDE_CEILING_M: Final = 12_000.0
 GLOBE_MAX_LIFT: Final = 0.035
 CATEGORY_ORDER: Final = ("VFR", "MVFR", "IFR", "LIFR")
 CATEGORY_SYMBOL: Final = {"VFR": "●", "MVFR": "■", "IFR": "◆", "LIFR": "▲"}
+# Every airport row carries its category as one letter, so the page can filter by weather
+# without the full weather object a trimmed row does not have. One letter is ten bytes a
+# row with its key; the category name would be up to thirteen. `U` is every unknown: no
+# observation, an old report and a failed fetch. Why it is unknown stays in the row's own
+# weather line and in its detail, not in the letter.
+CATEGORY_LETTER: Final = {"VFR": "V", "MVFR": "M", "IFR": "I", "LIFR": "L"}
+UNKNOWN_LETTER: Final = "U"
+WEATHER_FILTER_ORDER: Final = ("V", "M", "I", "L", "U")
+WEATHER_FILTER_LABELS: Final = {
+    "V": "VFR",
+    "M": "MVFR",
+    "I": "IFR",
+    "L": "LIFR",
+    "U": "Unknown",
+}
 
 Payload = dict[str, Any]
 
@@ -299,6 +314,26 @@ def clusters(airports: Sequence[Payload], cell_deg: float) -> list[Payload]:
     return out
 
 
+def category_letter(marker_view: Payload) -> str:
+    """`V`, `M`, `I` or `L` for a reported category, `U` for anything else."""
+    if marker_view.get("kind") != "weather":
+        return UNKNOWN_LETTER
+    return CATEGORY_LETTER.get(str(marker_view["category"]), UNKNOWN_LETTER)
+
+
+def weather_filter(entries: Sequence[Payload]) -> Payload:
+    """The weather chips' counts, taken from the rows' own `cat`, so the two cannot disagree.
+
+    Like the operator chips, the counts describe what was received, not what is drawn:
+    no chip, toggle or layer switch moves them. Every letter is present, zero or not, so
+    the page can say `0 of 600` for a chip with nothing in it.
+    """
+    counts = dict.fromkeys(WEATHER_FILTER_ORDER, 0)
+    for entry in entries:
+        counts[entry["cat"]] += 1
+    return {"all": len(entries), "counts": counts, "labels": dict(WEATHER_FILTER_LABELS)}
+
+
 def board_airport(record: Payload, weather: Payload, marker_view: Payload) -> Payload:
     """One airport as the map receives it. Without a report: code, name and place only.
 
@@ -312,6 +347,7 @@ def board_airport(record: Payload, weather: Payload, marker_view: Payload) -> Pa
         "name": record["name"],
         "latitude": record["latitude"],
         "longitude": record["longitude"],
+        "cat": category_letter(marker_view),
     }
     if marker_view["kind"] != "weather":
         return {**entry, "weather": weather} if weather.get("neighbour") else entry
@@ -331,6 +367,17 @@ def shown_note(unknown: int) -> str:
     return f"{unknown:,} without a report, drawn as dashed rings"
 
 
+# The `_short` forms below are what stays on screen. The whole sentence goes behind the
+# section's `?` (docs/DASHBOARD.md, "Quiet panels"): a number or a verdict stays visible,
+# a reason moves. Each short form is the opening of its sentence, so moving the rest can
+# drop an explanation from view but never a value.
+def shown_short(unknown: int) -> str:
+    """The toggle's line when it is on, without the drawing rule."""
+    if unknown == 0:
+        return shown_note(0)
+    return f"{unknown:,} without a report"
+
+
 # The tooltip of an airport the map received trimmed: it has no line of its own here.
 TRIMMED_TIP: Final = "Unknown: no report heard. Select it for its own line."
 
@@ -340,6 +387,11 @@ def hidden_note(unknown: int) -> str:
     if unknown == 0:
         return "none hidden: every airport asked has a report"
     return f"{unknown:,} hidden — no report heard"
+
+
+def hidden_short(unknown: int) -> str:
+    """The toggle's line when it is off, without the reason."""
+    return "none hidden" if unknown == 0 else f"{unknown:,} hidden"
 
 
 def viewport_note(region_total: int, in_view: int, asked: int, looked_up: int, calls: int) -> str:
@@ -352,6 +404,13 @@ def viewport_note(region_total: int, in_view: int, asked: int, looked_up: int, c
         scope += f" ({region_total:,} in the region)"
     calls_text = "call" if calls == 1 else "calls"
     return f"Weather {scope} · {looked_up:,} lookups in {calls} {calls_text}"
+
+
+def viewport_short(in_view: int, asked: int) -> str:
+    """How many airports have weather on the map. Which ones, and the cost, move."""
+    if asked < in_view:
+        return f"Weather showing {asked:,} of {in_view:,}"
+    return f"Weather showing all {asked:,} in view"
 
 
 def _valid_epoch(epoch: object) -> int | None:

@@ -249,6 +249,7 @@ async def test_a_later_snapshot_withdraws_a_line_that_no_longer_holds() -> None:
     snapshot = await service.snapshot("europe")
 
     esgt = next(a for a in snapshot["airports"] if a["icao"] == "ESGT")
-    # No line, so nothing but the airport itself.
-    assert set(esgt) == {"icao", "name", "latitude", "longitude"}
+    # No line, so nothing but the airport itself and its unknown letter.
+    assert set(esgt) == {"icao", "name", "latitude", "longitude", "cat"}
+    assert esgt["cat"] == "U"
     assert service.airport_list("europe", "ESGT")["items"][0]["weather"]["neighbour"] is None

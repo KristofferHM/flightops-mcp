@@ -668,6 +668,8 @@ async def test_a_world_poll_asks_about_600_airports_and_draws_under_120_markers(
         "unknown": 400,
         "text": "400 hidden — no report heard",
         "shown_text": "400 without a report, drawn as dashed rings",
+        "short": "400 hidden",
+        "shown_short": "400 without a report",
     }
     # Default zoom is 1: the 10-degree cells, unknowns off.
     drawn = [c for c in snapshot["clusters"]["10"] if c["reported"]]
@@ -686,7 +688,7 @@ async def test_an_airport_without_a_report_is_trimmed_to_where_it_is() -> None:
     trimmed = [a for a in snapshot["airports"] if "marker" not in a]
     full = [a for a in snapshot["airports"] if "marker" in a]
     assert len(trimmed) == 400 and len(full) == 200
-    assert all(set(a) == {"icao", "name", "latitude", "longitude"} for a in trimmed)
+    assert all(set(a) == {"icao", "name", "latitude", "longitude", "cat"} for a in trimmed)
     assert all(a["marker"]["category"] == "VFR" for a in full)
 
 

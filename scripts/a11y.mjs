@@ -4,8 +4,10 @@
 //   cd scripts && npm ci --ignore-scripts && npx playwright install chromium && cd ..
 //   node scripts/a11y.mjs
 //
-// Fails on any serious or critical axe violation, on sideways overflow at 390 px, on a page
-// error, on a state that did not render, and on any request that leaves this machine.
+// Fails on any serious or critical axe violation, on sideways overflow at 390 px, on panels that
+// overlap or a map squeezed to nothing, on a `?` explanation that is not a focusable button
+// with a described, non-empty tooltip, on a page error, on a state that did not render, and on
+// any request that leaves this machine.
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -23,6 +25,8 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LOCAL_HOST = "127.0.0.1";
 const VIEWPORTS = [
   { width: 1440, height: 900 },
+  // The demo poster's size, where the map once collapsed under the badge and the legend.
+  { width: 1280, height: 720 },
   { width: 390, height: 844 },
 ];
 const OVERFLOW_WIDTH = 390;
@@ -30,6 +34,12 @@ const BLOCKING = new Set(["serious", "critical"]);
 const STARTUP_MS = 60_000;
 // A fractional pixel is rounding, not overflow.
 const OVERFLOW_TOLERANCE_PX = 0.5;
+// The panels that tile the board. No two may overlap, at any size, in any state.
+const PANELS = [".topline", ".bay", ".chart-tools", ".stage", ".legend", ".detail", ".governance"];
+// The right column's three parts.
+const SIDEBAR = ["#aircraft-tools", "#aircraft-panel", "#detail"];
+// Below this the map is not a map.
+const MIN_MAP_PX = 200;
 
 const failures = [];
 let checks = 0;
@@ -116,11 +126,163 @@ async function checkOverflow(page, where) {
   }
 }
 
+// Boxes, not pixels: two panels overlap when their rectangles intersect by more than rounding.
+async function checkLayout(page, where) {
+  const found = await page.evaluate(({ panels, sidebar, tolerance }) => {
+    const box = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element || element.closest("[hidden]")) return null;
+      const r = element.getBoundingClientRect();
+      return r.width && r.height ? { selector, x: r.x, y: r.y, right: r.right, bottom: r.bottom } : null;
+    };
+    const meet = (a, b) => Math.min(a.right, b.right) - Math.max(a.x, b.x) > tolerance
+      && Math.min(a.bottom, b.bottom) - Math.max(a.y, b.y) > tolerance;
+    const overlaps = [];
+    for (const group of [panels, sidebar]) {
+      const boxes = group.map(box).filter(Boolean);
+      boxes.forEach((a, i) => boxes.slice(i + 1).forEach((b) => {
+        if (meet(a, b)) overlaps.push(`${a.selector} and ${b.selector}`);
+      }));
+    }
+    // The badge belongs to the map: never over the controls or the legend.
+    const badge = box("#last-update");
+    for (const other of [".chart-tools", ".legend"].map(box).filter(Boolean)) {
+      if (badge && meet(badge, other)) overlaps.push(`#last-update and ${other.selector}`);
+    }
+    const map = box(".canvas-wrap");
+    return { overlaps, map: map ? Math.round(map.bottom - map.y) : null };
+  }, { panels: PANELS, sidebar: SIDEBAR, tolerance: OVERFLOW_TOLERANCE_PX });
+  checks += 1;
+  if (found.overlaps.length) fail(where, `layout: overlapping boxes: ${found.overlaps.join("; ")}`);
+  if (found.map !== null && found.map < MIN_MAP_PX) fail(where, `layout: the map is ${found.map} px tall`);
+}
+
+// Every `?` on screen: a real button in the tab order, described by a tooltip with words in it.
+async function checkHints(page, where) {
+  const found = await page.evaluate(() => [...document.querySelectorAll(".hint-button")]
+    .filter((button) => !button.closest("[hidden]") && button.getClientRects().length)
+    .map((button) => {
+      const target = document.getElementById(button.getAttribute("aria-describedby") || "");
+      return {
+        id: button.id,
+        button: button.tagName === "BUTTON",
+        tabbable: button.tabIndex >= 0 && !button.disabled,
+        described: Boolean(target && target.textContent.trim()),
+        role: target ? target.getAttribute("role") : null,
+      };
+    }));
+  checks += 1;
+  for (const hint of found) {
+    if (!hint.button || !hint.tabbable) fail(where, `hint: #${hint.id} is not a focusable button`);
+    if (!hint.described) fail(where, `hint: #${hint.id} describes nothing`);
+    if (hint.role !== "tooltip") fail(where, `hint: #${hint.id}'s description is not a tooltip`);
+  }
+  return found.map((hint) => hint.id);
+}
+
 async function inspect(page, viewport, state) {
   const where = `${viewport.width}x${viewport.height} ${state}`;
   await scan(page, where);
   if (viewport.width === OVERFLOW_WIDTH) await checkOverflow(page, where);
+  await checkLayout(page, where);
+  await checkHints(page, where);
   console.log(`checked ${where}`);
+}
+
+// What a reader sees that is data: the banner, every count on a chip, every visible line, and
+// the size of each panel. Sizes, not positions: a click may scroll, a push changes a size.
+// Opening and closing an explanation must move none of it.
+async function screenState(page) {
+  return page.evaluate(() => {
+    const rect = (selector) => {
+      const r = document.querySelector(selector).getBoundingClientRect();
+      return [r.width, r.height].map(Math.round).join(",");
+    };
+    return JSON.stringify({
+      banner: document.getElementById("banner").textContent,
+      chips: [...document.querySelectorAll(".chip-row button")].map((b) => b.textContent),
+      lines: ["unknown-note", "traffic-note", "class-note", "a-selection", "a-claims", "d-traffic", "i-summary"]
+        .map((id) => document.getElementById(id).textContent),
+      boxes: [".chart-tools", ".stage", ".legend", ".detail", "#aircraft-panel", "#detail"].map(rect),
+      scroll: [document.documentElement.scrollHeight, document.querySelector(".detail").scrollHeight],
+    });
+  });
+}
+
+// Each `?` opens on hover and on focus, closes on blur, on Escape and on a click elsewhere,
+// toggles on a tap, and changes nothing else on the page while it is open.
+async function exerciseHints(page, viewport, ids, touch) {
+  const where = `${viewport.width}x${viewport.height} hints`;
+  const isOpen = (id) => page.evaluate((hint) => {
+    const tip = document.getElementById(hint).parentElement.querySelector(".hint-text");
+    if (!tip.hasAttribute("data-open")) return false;
+    const r = tip.getBoundingClientRect();
+    return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
+  }, id);
+  const expect = async (id, wanted, how) => {
+    checks += 1;
+    if ((await isOpen(id)) !== wanted) {
+      fail(where, `#${id} ${wanted ? "did not open inside the viewport" : "did not close"} on ${how}`);
+    }
+  };
+  // With an airport and an aircraft chosen, these sections all have something to explain.
+  const expected = ["unknown-hint", "traffic-hint", "class-hint", "legend-hint", "claims-hint", "inbound-hint"];
+  const absent = expected.filter((id) => !ids.includes(id));
+  checks += 1;
+  if (absent.length) fail(where, `no \`?\` on screen for: ${absent.join(", ")}`);
+  console.log(`exercising ${ids.length} explanations at ${viewport.width}x${viewport.height}: ${ids.join(", ")}`);
+  for (const id of ids) {
+    const button = page.locator(`#${id}`);
+    await button.scrollIntoViewIfNeeded();
+    await page.mouse.move(0, 0);
+    const before = await screenState(page);
+    await button.focus();
+    await expect(id, true, "focus");
+    checks += 1;
+    if ((await screenState(page)) !== before) fail(where, `#${id} changed the page around it when it opened`);
+    await page.keyboard.press("Escape");
+    await expect(id, false, "Escape");
+    await page.keyboard.press("Tab");
+    await expect(id, false, "blur");
+    await button.hover();
+    await expect(id, true, "hover");
+    await page.mouse.move(0, 0);
+    await expect(id, false, "the pointer leaving");
+    await button.click();
+    await expect(id, true, "a click");
+    // Somewhere that is not a control, so the click changes nothing but the focus.
+    await page.locator("#a-title").click();
+    await expect(id, false, "a click elsewhere");
+    if (touch) {
+      await button.tap();
+      await expect(id, true, "a tap");
+      await button.tap();
+      await expect(id, false, "a second tap");
+    }
+    checks += 1;
+    if ((await screenState(page)) !== before) fail(where, `#${id} left the page changed`);
+  }
+}
+
+// Sentences that moved behind a `?`: still in the page, word for word.
+const MOVED = {
+  "claims-why": ["A transponder broadcasts position, not intent", "asking OpenSky costs 30 credits", "nothing drawn past the last"],
+  "unknown-why": ["dashed rings"],
+  "traffic-why": ["an empty patch of sky means no receiver heard anything there"],
+  "class-why": ["no aircraft type is available"],
+  "legend-why": ["Unknown: no report heard, not good news", "zoom in to split it", "lookups in"],
+  "inbound-why": ["Approaching means airborne, within 60 nm"],
+};
+
+async function checkMoved(page, where) {
+  for (const [id, sentences] of Object.entries(MOVED)) {
+    // Whitespace is the page source's line wrapping, not the sentence.
+    const text = (await page.locator(`#${id}`).textContent()).replace(/\s+/g, " ");
+    for (const sentence of sentences) {
+      checks += 1;
+      if (!text.includes(sentence)) fail(where, `moved text missing from #${id}: "${sentence}"`);
+    }
+  }
 }
 
 async function open(page, base, passcode, viewport) {
@@ -138,7 +300,9 @@ async function expectBadge(page, text) {
 }
 
 async function walk(browser, viewport, servers, passcode) {
-  const context = await browser.newContext({ viewport });
+  // The phone has a touchscreen, so a tap is tried there: hover does not exist on it.
+  const touch = viewport.width === OVERFLOW_WIDTH;
+  const context = await browser.newContext({ viewport, hasTouch: touch });
   const size = `${viewport.width}x${viewport.height}`;
   await context.route("**/*", (route) => {
     const url = new URL(route.request().url());
@@ -182,13 +346,31 @@ async function walk(browser, viewport, servers, passcode) {
     reached.add(await page.evaluate(() => document.activeElement && document.activeElement.id));
     await page.keyboard.press("Tab");
   }
-  const controls = ["unknown-on", "a-sort", "a-cap", "a-radius", "a-airline", "a-band", "a-phase", "a-q", "a-focus"];
+  const controls = ["unknown-on", "unknown-hint", "traffic-hint", "class-hint", "layer-airports", "layer-aircraft", "flights-only", "weather-chip-all", "a-sort", "a-cap", "a-radius", "a-airline", "a-band", "a-phase", "a-q", "a-focus"];
   const missed = controls.filter((id) => !reached.has(id));
   checks += 1;
   if (missed.length) fail(`${size} keyboard`, `not reached by Tab: ${missed.join(", ")}`);
 
+  // The layer switches and the weather chips: each pressed state is scanned, then let go.
+  await page.locator("#weather-chips button").nth(1).click();
+  await page.locator("#weather-chips button[aria-pressed='true']").nth(0).waitFor();
+  await page.locator("#weather-note", { hasText: "of" }).waitFor();
+  await inspect(page, viewport, "weather filter chosen");
+  await page.locator("#weather-chip-all").click();
+  await page.getByRole("button", { name: "Flights only" }).click();
+  await page.locator('#flights-only[aria-pressed="true"]').waitFor();
+  await page.locator('#layer-airports[aria-pressed="false"]').waitFor();
+  await inspect(page, viewport, "flights only");
+  await page.getByRole("button", { name: "Aircraft", exact: true }).click();
+  await page.locator("#layer-note", { hasText: "Nothing drawn: both layers are off" }).waitFor();
+  await inspect(page, viewport, "both layers off");
+  await page.getByRole("button", { name: "Airports", exact: true }).click();
+  await page.getByRole("button", { name: "Aircraft", exact: true }).click();
+  await page.locator('#layer-aircraft[aria-pressed="true"]').waitFor();
+  await page.locator("#layer-note").waitFor({ state: "hidden" });
+
   await page.getByLabel("Show airports without a report").check();
-  await page.locator("#unknown-note", { hasText: "dashed rings" }).waitFor();
+  await page.locator("#unknown-why", { hasText: "dashed rings" }).waitFor({ state: "attached" });
   await inspect(page, viewport, "airports without a report shown");
 
   // Focusing an aircraft from the keyboard: the list, not the canvas.
@@ -197,6 +379,8 @@ async function walk(browser, viewport, servers, passcode) {
   await page.getByRole("button", { name: "Follow" }).click();
   await page.locator('#a-follow[aria-pressed="true"]').waitFor();
   await inspect(page, viewport, "aircraft focused and followed");
+  await checkMoved(page, `${size} moved text`);
+  await exerciseHints(page, viewport, await checkHints(page, `${size} hints`), touch);
   await page.keyboard.press("Escape");
   await page.locator("#a-follow-note", { hasText: "Follow released" }).waitFor();
 

@@ -57,6 +57,7 @@ COVERAGE_NOTE: Final = (
     "an empty patch of sky means no receiver heard anything there, not that no aircraft "
     "are flying."
 )
+COVERAGE_SHORT: Final = "Airport data is worldwide; live traffic is not."
 
 
 class UnknownBoardItem(KeyError):
@@ -141,6 +142,7 @@ def traffic_default(credentials: str | None) -> Payload:
             "on": True,
             "available": True,
             "reason": "OpenSky credentials are configured, so traffic starts on.",
+            "reason_short": "OpenSky credentials are configured",
         }
     if credentials == "anonymous":
         return {
@@ -148,12 +150,14 @@ def traffic_default(credentials: str | None) -> Payload:
             "available": True,
             "reason": "No OpenSky credentials: traffic starts off. Turning it on spends "
             "from the anonymous allowance, at 10 s resolution.",
+            "reason_short": "No OpenSky credentials: traffic starts off",
         }
     return {
         "on": False,
         "available": False,
         "reason": "No OpenSky credentials are configured, so there is no traffic to show. "
         "Set FLIGHTOPS_OPENSKY_CLIENT_ID and FLIGHTOPS_OPENSKY_CLIENT_SECRET.",
+        "reason_short": "No OpenSky credentials are configured",
     }
 
 
@@ -163,16 +167,20 @@ def _tracks_answer(
     """The observed-track answer. `refused` is shown in the panel as it is."""
     observed = sum(1 for track in tracks if track["state"] == "observed")
     none = len(tracks) - observed
-    text = f"{observed} observed track{'' if observed == 1 else 's'} drawn, {spent} credits spent"
+    short = f"{observed} observed track{'' if observed == 1 else 's'} drawn, {spent} credits spent"
     if none:
-        text += f"; OpenSky held no track for {none}, which keep their {inbound.PROJECTED} line"
+        short += f"; OpenSky held no track for {none}"
+    # The count without a track stays on screen; what happens to their lines moves.
+    text = short + (f", which keep their {inbound.PROJECTED} line" if none else "")
+    tail = f". {refused}" if refused else "."
     return {
         "icao": icao,
         "requested": requested,
         "tracks": tracks,
         "credits_spent": spent,
         "refused": refused,
-        "text": refused if refused and not tracks else text + (f". {refused}" if refused else "."),
+        "text": refused if refused and not tracks else text + tail,
+        "short": refused if refused and not tracks else short + tail,
     }
 
 
@@ -319,6 +327,7 @@ class BoardService:
             "region": region,
             "regions": self.regions(),
             "coverage": COVERAGE_NOTE,
+            "coverage_short": COVERAGE_SHORT,
             "airports": entries,
             "viewport": {
                 "latitude": round(shown.latitude, 3),
@@ -333,12 +342,18 @@ class BoardService:
                 "text": board.viewport_note(
                     len(region_airports), in_view, len(listed), looked_up, calls
                 ),
+                "short": board.viewport_short(in_view, len(listed)),
             },
             "hidden": {
                 "unknown": unknown,
                 "text": board.hidden_note(unknown),
                 "shown_text": board.shown_note(unknown),
+                "short": board.hidden_short(unknown),
+                "shown_short": board.shown_short(unknown),
             },
+            # The weather chips. Render-only in the page, like the unknown toggle: the
+            # server is never told which chip is chosen, so this never depends on it.
+            "weather_filter": board.weather_filter(entries),
             "clusters": {
                 f"{cell:g}": board.clusters(entries, cell) for _, cell in board.CLUSTER_LEVELS
             },

@@ -156,6 +156,10 @@ pytest_add_cli_args_test_selection = [
     # mutant: 151 of the 204 new survivors of run 44688906150 die once they do.
     "tests/test_aircraft_layer.py",
     "tests/test_board_arithmetic.py",
+    # The weather letter and the chip counts (board.category_letter, board.weather_filter).
+    "tests/test_airport_layers.py",
+    # The short forms that stay on screen (board.hidden_short, shown_short, viewport_short).
+    "tests/test_quiet_panels.py",
     # A static scan of the source text for clients without the passthrough guard. mutmut's
     # instrumented copy contains every mutant side by side, including those that drop the
     # guard, so the scan fails before any mutant runs. It still runs in the normal suite.

@@ -16,6 +16,11 @@
   const AIRCRAFT_KEY = "airport-board.aircraft";
   // Per tab session, not per browser like the toggles above, and dropped on a region change.
   const CLASS_KEY = "airport-board.operator-class";
+  // Also per tab session: the weather chip (dropped on a region change, like the class) and
+  // the two layer switches with what `Flights only` will restore.
+  const WEATHER_KEY = "airport-board.weather-filter";
+  const LAYERS_KEY = "airport-board.layers";
+  const LAYER_DEFAULTS = { airports: true, aircraft: true, before: null };
   const MAX_ZOOM = 12;
   const HIT_RADIUS_PX = 14;
   // Past this many aircraft at a wide zoom, arrowheads merge into a solid shape.
@@ -42,6 +47,11 @@
   const INBOUND_RING_PX = 8;
   const INBOUND_OFF = "Turn traffic on to see what is approaching. It reads the traffic layer "
     + "the board already holds, so it costs nothing.";
+  const INBOUND_OFF_SHORT = "Turn traffic on to see what is approaching.";
+  const NO_ANSWER_SHORT = "The board server did not answer.";
+  // An open explanation sits this far from its `?`, and never closer than this to an edge.
+  const HINT_GAP_PX = 4;
+  const HINT_MARGIN_PX = 8;
 
   // The colours and faces live in board.css. The canvas reads the same tokens.
   const styles = getComputedStyle(document.documentElement);
@@ -49,11 +59,13 @@
 
   // Only the four flight categories have a colour. Anything else is drawn as unknown.
   const CATEGORY = {
-    VFR: { colour: token("--vfr"), shape: "circle", radius: 4.2, order: 0 },
-    MVFR: { colour: token("--mvfr"), shape: "square", radius: 4.6, order: 1 },
-    IFR: { colour: token("--ifr"), shape: "diamond", radius: 5.4, order: 2 },
-    LIFR: { colour: token("--lifr"), shape: "triangle", radius: 6, order: 3 },
+    VFR: { colour: token("--vfr"), shape: "circle", radius: 4.2, order: 0, symbol: "●" },
+    MVFR: { colour: token("--mvfr"), shape: "square", radius: 4.6, order: 1, symbol: "■" },
+    IFR: { colour: token("--ifr"), shape: "diamond", radius: 5.4, order: 2, symbol: "◆" },
+    LIFR: { colour: token("--lifr"), shape: "triangle", radius: 6, order: 3, symbol: "▲" },
   };
+  // A row's one-letter `cat` (board.CATEGORY_LETTER), back to the category it stands for.
+  const LETTER_CATEGORY = { V: "VFR", M: "MVFR", I: "IFR", L: "LIFR" };
   const UNKNOWN_RADIUS = 5.6;
   const UNKNOWN_ORDER = 4;
   const INK = {
@@ -92,8 +104,16 @@
     choice: rememberedChoice(), aircraftQuery: "", selection: null,
     // Who is flying: the region's counts as the server gave them, and the chip chosen.
     // A render filter only: it is never sent, so the server's answer cannot depend on it.
-    classes: null, operatorClass: sessionChoice(),
-    focus: null, focusData: null, follow: false, followHeard: null, followNote: "",
+    classes: null, operatorClass: sessionChoice(CLASS_KEY),
+    // Airports by weather: the counts as the server gave them, and the chip chosen ("" for all).
+    // Render-only, like the class: never sent, so no payload field can depend on it.
+    weather: null, weatherFilter: sessionChoice(WEATHER_KEY),
+    // What is drawn at all. `before` is set only while `Flights only` is pressed: the switches
+    // as they were, so pressing it again restores them rather than a guessed default.
+    layers: sessionLayers(),
+    focus: null, focusData: null, follow: false, followHeard: null, followNote: "", followWhy: "",
+    // The sentences behind the traffic `?`: the coverage note and the newest traffic reason.
+    coverage: "", trafficWhy: "",
     track: null, trails: new Map(),
     // What approaches the selected airport: the server's set, the one lit, and tracks paid for.
     inbound: null, inboundHover: null, inboundTracks: new Map(),
@@ -114,15 +134,27 @@
     const value = remembered(UNKNOWN_KEY, "");
     return value === "1" ? true : value === "0" ? false : null;
   }
-  function sessionChoice() {
-    try { return sessionStorage.getItem(CLASS_KEY) || ""; } catch { return ""; }
+  function sessionChoice(key) {
+    try { return sessionStorage.getItem(key) || ""; } catch { return ""; }
   }
-  function rememberClass(value) {
+  function rememberSession(key, value) {
     try {
-      if (value) sessionStorage.setItem(CLASS_KEY, value);
-      else sessionStorage.removeItem(CLASS_KEY);
+      if (value) sessionStorage.setItem(key, value);
+      else sessionStorage.removeItem(key);
     } catch { /* the choice lasts this page */ }
   }
+  function rememberClass(value) { rememberSession(CLASS_KEY, value); }
+  function rememberWeather(value) { rememberSession(WEATHER_KEY, value); }
+  function sessionLayers() {
+    try {
+      const saved = JSON.parse(sessionChoice(LAYERS_KEY) || "{}");
+      const on = (value) => value !== false;
+      const before = saved && saved.before && typeof saved.before === "object"
+        ? { airports: on(saved.before.airports), aircraft: on(saved.before.aircraft) } : null;
+      return { airports: on(saved.airports), aircraft: on(saved.aircraft), before };
+    } catch { return { ...LAYER_DEFAULTS }; }
+  }
+  function rememberLayers() { rememberSession(LAYERS_KEY, JSON.stringify(state.layers)); }
   function rememberedChoice() {
     try {
       const saved = JSON.parse(remembered(AIRCRAFT_KEY, "{}"));
@@ -200,15 +232,21 @@
       state.airports = board.airports;
       state.clusters = board.clusters || {};
       state.hidden = board.hidden;
+      state.weather = board.weather_filter || null;
       state.display = board.display;
-      $("view-note").textContent = board.viewport ? board.viewport.text : "";
+      $("view-note").textContent = board.viewport ? board.viewport.short || board.viewport.text : "";
+      $("view-why").textContent = board.viewport ? board.viewport.text : "";
+      refreshHint($("legend-why"));
       renderBanner(board.banner.mode, board.banner.label);
       renderLastUpdate(board.last_update);
       renderGovernance(board.governance);
       renderRegions(board.regions, board.region);
-      $("coverage").textContent = board.coverage;
+      $("coverage").textContent = board.coverage_short || board.coverage;
+      state.coverage = board.coverage;
+      explain("traffic-why", state.coverage, state.trafficWhy);
       renderTrafficControl(board.traffic);
       renderUnknownToggle();
+      renderWeather();
       refreshList();
       invalidate();
     } catch {
@@ -230,6 +268,7 @@
       refreshBoard();
     } catch {
       $("d-traffic").textContent = "Unknown: the board server did not answer";
+      explain("d-traffic-why", "");
     }
   }
 
@@ -272,7 +311,6 @@
 
   async function refreshTraffic() {
     if (!$("traffic-on").checked || state.trafficStopped) return;
-    const note = $("traffic-note");
     const region = state.region;
     const superseded = () => !$("traffic-on").checked || region !== state.region;
     try {
@@ -286,18 +324,20 @@
         // A guard said no. Stop asking; the badge and this note say why.
         state.trafficStopped = true;
         clearTimeout(timers.traffic);
-        note.textContent = layer.refused;
+        setTrafficNote(layer.refused, "");
         refreshBoard();
         return;
       }
       applyLayer(layer);
       state.trafficSnapshot = layer.snapshot_epoch;
       state.trafficUpstream = layer.upstream_epoch;
-      note.textContent = layer.hint ? `${layer.summary}. ${layer.hint}` : layer.summary;
-      if (layer.truncated) note.textContent += ", most recent only";
+      // The count and its qualifiers stay; the upstream's hint is a reason, so it moves.
+      let text = layer.summary;
+      if (layer.truncated) text += ", most recent only";
       if (layer.freshness && layer.freshness.most_recent_only) {
-        note.textContent += ` (anonymous: ${layer.freshness.time_resolution_s} s positions)`;
+        text += ` (anonymous: ${layer.freshness.time_resolution_s} s positions)`;
       }
+      setTrafficNote(text, layer.hint ? `${layer.summary}. ${layer.hint}` : "");
       refreshBoard();
     } catch {
       if (superseded()) return;
@@ -306,7 +346,7 @@
       renderClasses();
       state.trafficSnapshot = 0;
       state.trafficUpstream = 0;
-      note.textContent = "Unknown: the board server did not answer";
+      setTrafficNote("Unknown: the board server did not answer", "");
       refreshBoard();
     }
     invalidate();
@@ -323,7 +363,7 @@
       if (layer.selection) applyLayer(layer);
     } catch {
       if (request !== state.selectionRequest) return;
-      $("a-selection").textContent = "The board server did not answer.";
+      $("a-selection").textContent = NO_ANSWER_SHORT;
     }
     invalidate();
   }
@@ -357,6 +397,109 @@
     refreshTraffic();
     startPolling();
   });
+
+  // --- explanations behind a `?` ---------------------------------------------------
+  // A reason, a cost or a caveat lives in its section's tooltip; the number and the verdict
+  // stay on screen. The tooltip's text is always in the page, clipped rather than removed,
+  // so aria-describedby reaches it and a screen reader can read it. Open, it is fixed to the
+  // viewport: it covers the panel and never pushes it.
+  const hints = [...document.querySelectorAll(".hint")];
+
+  // A `?` is shown only with something behind it: an empty one would answer nothing.
+  function refreshHint(tip) {
+    const hint = tip.closest(".hint");
+    const said = [...tip.childNodes].some((node) => (node.nodeType === Node.ELEMENT_NODE
+      ? !node.hidden && node.textContent.trim() : node.textContent.trim()));
+    hint.hidden = !said;
+    if (!said) closeHint(hint);
+    else if (hint.dataset.open) placeHint(hint);
+  }
+
+  // One line per sentence. The spaces between them keep the description a sentence apart
+  // when a screen reader reads it as one string.
+  function explain(id, ...sentences) {
+    const tip = $(id);
+    const said = sentences.filter(Boolean);
+    if (tip.textContent !== said.join(" ")) {
+      tip.replaceChildren(...said.flatMap((text, index) => {
+        const line = document.createElement("span");
+        line.textContent = text;
+        return index ? [" ", line] : [line];
+      }));
+    }
+    refreshHint(tip);
+  }
+
+  // Below the `?`, or above it when there is no room, and inside the viewport either way.
+  function placeHint(hint) {
+    const tip = hint.querySelector(".hint-text");
+    const anchor = hint.querySelector(".hint-button").getBoundingClientRect();
+    const box = tip.getBoundingClientRect();
+    const left = Math.max(HINT_MARGIN_PX, Math.min(anchor.left, innerWidth - box.width - HINT_MARGIN_PX));
+    const below = anchor.bottom + HINT_GAP_PX;
+    const top = below + box.height <= innerHeight - HINT_MARGIN_PX
+      ? below : Math.max(HINT_MARGIN_PX, anchor.top - HINT_GAP_PX - box.height);
+    tip.style.left = `${Math.round(left)}px`;
+    tip.style.top = `${Math.round(top)}px`;
+  }
+
+  function openHint(hint, pinned) {
+    hints.forEach((other) => { if (other !== hint) closeHint(other); });
+    hint.dataset.open = pinned ? "pinned" : "open";
+    hint.querySelector(".hint-text").dataset.open = "";
+    placeHint(hint);
+  }
+
+  function closeHint(hint) {
+    if (!hint.dataset.open) return;
+    delete hint.dataset.open;
+    const tip = hint.querySelector(".hint-text");
+    delete tip.dataset.open;
+    tip.style.left = "";
+    tip.style.top = "";
+  }
+
+  for (const hint of hints) {
+    const button = hint.querySelector(".hint-button");
+    button.addEventListener("mouseenter", () => { if (!hint.dataset.open) openHint(hint, false); });
+    // The tooltip is inside `.hint`, so the pointer can move onto it and read it.
+    hint.addEventListener("mouseleave", () => {
+      if (hint.dataset.open === "open" && document.activeElement !== button) closeHint(hint);
+    });
+    button.addEventListener("focus", () => { if (!hint.dataset.open) openHint(hint, false); });
+    // A click on the pinned tooltip's own text moves the focus nowhere: it stays open.
+    button.addEventListener("blur", (event) => {
+      if (hint.dataset.open === "pinned" && !event.relatedTarget) return;
+      closeHint(hint);
+    });
+    // On touch there is no hover: the tap's focus opens it, its click pins it, and the next
+    // tap closes it. With a mouse the click pins what the hover opened.
+    button.addEventListener("click", () => {
+      if (hint.dataset.open === "pinned") closeHint(hint);
+      else openHint(hint, true);
+    });
+  }
+  document.addEventListener("pointerdown", (event) => {
+    for (const hint of hints) if (hint.dataset.open && !hint.contains(event.target)) closeHint(hint);
+  });
+  // Captured, so Escape closes an open explanation and is not also taken as "release the follow".
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const open = hints.filter((hint) => hint.dataset.open);
+    if (!open.length) return;
+    open.forEach(closeHint);
+    event.preventDefault();
+  }, true);
+  const placeOpenHints = () => hints.forEach((hint) => { if (hint.dataset.open) placeHint(hint); });
+  document.addEventListener("scroll", placeOpenHints, true);
+  window.addEventListener("resize", placeOpenHints);
+
+  // The traffic line's `?` holds the coverage note and the newest traffic reason.
+  function setTrafficNote(text, why) {
+    $("traffic-note").textContent = text;
+    state.trafficWhy = why || "";
+    explain("traffic-why", state.coverage, state.trafficWhy);
+  }
 
   // --- panels ------------------------------------------------------------------
   function renderBanner(mode, label) {
@@ -395,7 +538,7 @@
     $("g-mode").textContent = MODE_NAMES[g.credentials] || "Unknown";
     $("g-hour").textContent = ofBudget(g.credits_hour, g.budget_hour);
     $("g-day").textContent = ofBudget(g.credits_24h, g.budget_24h);
-    $("g-day").title = g.ledger_survives_restart === false ? "Resets when the board restarts" : "";
+    explain("g-day-why", g.ledger_survives_restart === false ? "Resets when the board restarts." : "");
     $("g-cache").textContent = known(g.cache_hit_rate)
       ? `${Math.round(g.cache_hit_rate * 100)}%` : "No requests yet";
     $("g-left").textContent = known(g.upstream_remaining) ? g.upstream_remaining : "Unknown";
@@ -426,12 +569,9 @@
     state.trafficIntervalMs = Math.max(TRAFFIC_POLL_MS, traffic.interval_s * 1000);
     if (state.trafficChosen) return;
     state.trafficChosen = true;
-    if (!traffic.on) {
-      $("traffic-note").textContent = traffic.reason;
-      return;
-    }
+    setTrafficNote(traffic.reason_short || traffic.reason, traffic.reason);
+    if (!traffic.on) return;
     box.checked = true;
-    $("traffic-note").textContent = traffic.reason;
     refreshTraffic();
   }
 
@@ -442,15 +582,35 @@
     return state.display ? state.zoom >= state.display.unknown_shown_from_zoom : false;
   }
 
+  // Whether airports without a report are drawn. The Unknown chip draws them whatever the
+  // toggle says, any other chip draws none of them, and with no chip the toggle decides.
+  function unknownDrawn() {
+    const chosen = weatherChoice();
+    return chosen ? chosen === "U" : unknownShown();
+  }
+
   // Runs every frame, because the default follows the zoom; it writes only on a change.
+  // The view note keeps counting airports, because it describes the data. This line
+  // describes the drawing, so with the layer off it says the layer is off.
   function renderUnknownToggle() {
     const shown = unknownShown();
     const box = $("unknown-on");
     if (box.checked !== shown) box.checked = shown;
     if (!state.hidden) return;
-    const text = shown ? state.hidden.shown_text : state.hidden.text;
+    const { hidden } = state;
+    const drawn = unknownDrawn();
+    let text = drawn ? hidden.shown_short || hidden.shown_text : hidden.short || hidden.text;
+    let why = drawn ? hidden.shown_text : hidden.text;
+    if (!state.layers.airports) {
+      const received = state.weather ? state.weather.all : state.airports.length;
+      text = `Airport layer off: none of ${received.toLocaleString("en")} airports drawn`;
+      why = "";
+    }
     const note = $("unknown-note");
     if (note.textContent !== text) note.textContent = text;
+    // A sentence that says no more than the line is not repeated behind a `?`.
+    const behind = why === text ? "" : why;
+    if ($("unknown-why").textContent !== behind) explain("unknown-why", behind);
   }
 
   function markClass(marker) {
@@ -507,7 +667,7 @@
       const term = document.createElement("dt");
       term.textContent = row.label;
       const value = document.createElement("dd");
-      value.textContent = row.text;
+      value.textContent = row.short || row.text;
       if (row.state) value.dataset.state = row.state;
       if (row.mono) value.className = "mono";
       return [term, value];
@@ -521,8 +681,8 @@
     $("d-name").textContent = detail.name;
     $("d-mark").className = markClass(detail.marker);
     $("d-weather").textContent = detail.weather.summary;
-    $("d-traffic").textContent = detail.traffic.hint
-      ? `${detail.traffic.summary}. ${detail.traffic.hint}` : detail.traffic.summary;
+    $("d-traffic").textContent = detail.traffic.summary;
+    explain("d-traffic-why", detail.traffic.hint ? `${detail.traffic.summary}. ${detail.traffic.hint}` : "");
     if (!state.triaged) {
       $("d-arrivals").textContent = "Run triage to request";
       $("d-departures").textContent = "Run triage to request";
@@ -539,8 +699,8 @@
     state.triaged = false;
     // Approach lines belong to one airport. They are redrawn when its selection answers.
     state.inboundTracks.clear();
-    $("i-tracks-note").textContent = "";
-    $("i-board-note").textContent = "";
+    inboundNote("i-tracks", "", "");
+    inboundNote("i-board", "", "");
     renderInbound(null);
     $("triage-result").hidden = true;
     const airport = state.airports.find((item) => item.icao === icao);
@@ -627,18 +787,24 @@
       if (count || value === state.operatorClass) chips.push(chip(classes.labels[value], count, value));
     }
     $("class-chips").replaceChildren(...chips);
-    const notes = [classes.classification_text];
+    const notes = [`${classes.classification_short || classes.classification_text}.`];
+    const whys = [classes.classification_text];
     const chosen = state.operatorClass;
     if (chosen) {
       const drawn = state.airspace.filter(inClass).length;
       const inRegion = classes.counts[chosen];
       const label = classes.labels[chosen];
-      notes.push(drawn < inRegion
-        ? `${label}: ${inRegion.toLocaleString("en")} in the region, ${drawn.toLocaleString("en")} `
-          + "among the aircraft drawn — the cap and the filters on the right decide which."
-        : `${label}: showing ${drawn.toLocaleString("en")}.`);
+      if (drawn < inRegion) {
+        const counted = `${label}: ${inRegion.toLocaleString("en")} in the region, `
+          + `${drawn.toLocaleString("en")} among the aircraft drawn`;
+        notes.push(`${counted}.`);
+        whys.push(`${counted} — the cap and the filters on the right decide which.`);
+      } else {
+        notes.push(`${label}: showing ${drawn.toLocaleString("en")}.`);
+      }
     }
     $("class-note").textContent = notes.join(" ");
+    explain("class-why", ...whys);
   }
 
   function chooseClass(value) {
@@ -650,16 +816,135 @@
     invalidate();
   }
 
+  // Rebuilds a chip row, keeping the keyboard on the chip it was on: a poll or a press
+  // must not throw the focus back to the top of the page.
+  function replaceChips(row, chips) {
+    const focused = row.contains(document.activeElement) ? document.activeElement.id : "";
+    row.replaceChildren(...chips);
+    if (focused && $(focused)) $(focused).focus();
+  }
+
+  // --- airports by weather: the weather chips -------------------------------------
+  // The chosen letter (`cat`), or "" for all. Only while the chips are on screen: a filter
+  // the reader cannot see must not hide anything.
+  const weatherChoice = () => (state.weather ? state.weatherFilter : "");
+
+  function weatherChip(label, count, value) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "quiet";
+    button.id = `weather-chip-${value || "all"}`;
+    button.dataset.weather = value;
+    button.setAttribute("aria-pressed", String(state.weatherFilter === value));
+    button.textContent = `${label} ${count.toLocaleString("en")}`;
+    button.addEventListener("click", () => chooseWeather(value));
+    return button;
+  }
+
+  // Every number here is the server's (board.weather_filter), counted from the rows' own
+  // `cat`. They describe what was received for the view: no chip, toggle or layer moves them.
+  function renderWeather() {
+    const box = $("weather-filter");
+    const weather = state.weather;
+    box.hidden = !weather;
+    if (!weather) return;
+    if (state.weatherFilter && !(state.weatherFilter in weather.counts)) state.weatherFilter = "";
+    const chips = [weatherChip("All", weather.all, "")];
+    for (const [value, count] of Object.entries(weather.counts)) {
+      // A category with none in view gets no chip, unless it is the one chosen.
+      if (count || value === state.weatherFilter) chips.push(weatherChip(weather.labels[value], count, value));
+    }
+    replaceChips($("weather-chips"), chips);
+    const chosen = state.weatherFilter;
+    let text = "";
+    let why = "";
+    if (chosen) {
+      const all = weather.all.toLocaleString("en");
+      const counted = `${weather.labels[chosen]}: ${weather.counts[chosen].toLocaleString("en")} of ${all} airports`;
+      text = counted;
+      why = `${counted}, on the markers and the groups.`;
+      if (!state.layers.airports) {
+        // A verdict, not a reason: it is why the map shows none of them, so it stays on screen.
+        text += ". The airport layer is off, so none are drawn.";
+        why += " The airport layer is off, so none are drawn.";
+      }
+    }
+    const note = $("weather-note");
+    if (note.textContent !== text) note.textContent = text;
+    explain("weather-why", why);
+  }
+
+  function chooseWeather(value) {
+    state.weatherFilter = value;
+    rememberWeather(value);
+    renderWeather();
+    renderUnknownToggle();
+    invalidate();
+  }
+
+  // --- layers: what is drawn at all -----------------------------------------------
+  // Render-only, like the chips. A hidden layer is not drawn, so it leaves no hit target:
+  // the pickables are rebuilt each frame from what was drawn.
+  function renderLayers() {
+    const { airports, aircraft, before } = state.layers;
+    $("layer-airports").setAttribute("aria-pressed", String(airports));
+    $("layer-aircraft").setAttribute("aria-pressed", String(aircraft));
+    $("flights-only").setAttribute("aria-pressed", String(Boolean(before)));
+  }
+
+  function applyLayers(layers) {
+    state.layers = layers;
+    rememberLayers();
+    renderLayers();
+    renderUnknownToggle();
+    renderWeather();
+    $("tip").hidden = true;
+    invalidate();
+  }
+
+  // A switch pressed by hand ends the preset: the switches are the reader's again.
+  const switchLayer = (layers, name) => ({ ...layers, [name]: !layers[name], before: null });
+
+  // `Flights only`: airports off, aircraft on. Pressed again it puts back the switches as
+  // they were when it was pressed, not a default.
+  function flightsOnly(layers) {
+    if (layers.before) return { ...layers.before, before: null };
+    return {
+      airports: false, aircraft: true,
+      before: { airports: layers.airports, aircraft: layers.aircraft },
+    };
+  }
+
+  // The map never goes blank without a sentence saying why.
+  function layerNote() {
+    const { airports, aircraft } = state.layers;
+    if (!airports && !aircraft) return "Nothing drawn: both layers are off";
+    const chosen = weatherChoice();
+    if (airports && chosen && !state.weather.counts[chosen]) {
+      return `No airports match: 0 of ${state.weather.all.toLocaleString("en")}`;
+    }
+    return "";
+  }
+
+  function renderLayerNote() {
+    const note = $("layer-note");
+    const text = layerNote();
+    if (note.textContent !== text) note.textContent = text;
+    if (note.hidden !== !text) note.hidden = !text;
+  }
+
   // --- aircraft: the selection, the focus, the follower ------------------------
   function renderSelection(selection) {
     if (!selection) {
       $("a-selection").textContent = "No traffic layer is held yet.";
       $("a-dropped").textContent = "";
+      explain("selection-why", "");
       return;
     }
     $("a-selection").textContent = selection.fallback
-      ? `${selection.text}. ${selection.fallback}` : selection.text;
-    $("a-dropped").textContent = selection.dropped || "";
+      ? `${selection.text}. ${selection.fallback_short || selection.fallback}` : selection.text;
+    $("a-dropped").textContent = selection.dropped_short || selection.dropped || "";
+    explain("selection-why", selection.fallback, selection.dropped);
     const airline = $("a-airline");
     const chosen = state.choice.airline;
     const options = [new Option("any", "")];
@@ -730,6 +1015,7 @@
     state.track = null;
     state.follow = false;
     state.followNote = "";
+    state.followWhy = "";
     state.followHeard = null;
     renderAircraftPanel();
     refreshSelection();
@@ -761,9 +1047,10 @@
     invalidate();
   }
 
-  function stopFollow(note) {
+  function stopFollow(note, why) {
     state.follow = false;
     state.followNote = note || "";
+    state.followWhy = why || "";
     renderAircraftPanel();
   }
 
@@ -790,7 +1077,8 @@
   function escape() {
     if (state.follow) {
       const text = "Follow released. Press Escape again to clear the selection.";
-      stopFollow(text);
+      stopFollow("Follow released.", text);
+      // The status line is announced, so it keeps the instruction a screen reader needs.
       say(text);
       return;
     }
@@ -806,11 +1094,16 @@
     $("a-title").textContent = aircraft ? ((aircraft.callsign || "").trim() || aircraft.icao24) : state.focus;
     fillFacts($("a-facts"), focus ? focus.rows : []);
     const pending = [
-      { label: "Transit", text: "asking OpenSky for the observed path (4 credits)" },
+      { label: "Transit", text: "asking OpenSky for the observed path (4 credits)", short: "asking OpenSky" },
       { label: "Estimated arrival", text: "not requested" },
       { label: "Destination", text: "No source." },
     ];
-    fillFacts($("a-claims"), state.track ? state.track.lines : pending);
+    const claims = state.track ? state.track.lines : pending;
+    fillFacts($("a-claims"), claims);
+    // One `?` for the three lines: each claim's whole sentence, with what kind of claim it is.
+    explain("claims-why", ...claims
+      .filter((row) => row.short && row.short !== row.text)
+      .map((row) => `${row.label}: ${row.text}`));
     const follow = $("a-follow");
     follow.setAttribute("aria-pressed", String(state.follow));
     follow.textContent = state.follow ? "Following: release" : "Follow";
@@ -818,6 +1111,7 @@
     $("a-estimate").hidden = Boolean(state.track && state.track.estimate_requested);
     const reason = focus && focus.state !== "reported" && !state.followNote ? focus.reason : "";
     $("a-follow-note").textContent = state.followNote || reason || "";
+    explain("follow-why", state.followNote ? state.followWhy : "");
     const gaps = state.track ? state.track.unknowns : [];
     $("a-gaps").hidden = gaps.length === 0;
     fillList($("a-unknowns"), gaps);
@@ -984,7 +1278,7 @@
   // One marker per cell: the most common category's shape, sized by count, the count beside
   // it, and a small badge in the worst category when that is worse (board.clusters).
   function drawClusters(cells) {
-    const show = unknownShown();
+    const show = unknownDrawn();
     const scale = isCompact() ? 0.85 : 1;
     for (const cell of cells) {
       const count = cell.reported + (show ? cell.unknown : 0);
@@ -1018,11 +1312,41 @@
     return null;
   }
 
+  // With a chip chosen, the rows that match it grouped on the server's own grid, the same
+  // as board.clusters over those rows alone: each group counts and is placed among its
+  // matching airports only, and a cell with none is not drawn at all. One category per
+  // group, so its shape and its worst are that category.
+  function filteredCells(cellDeg, letter) {
+    const cells = new Map();
+    for (const airport of state.airports) {
+      if (airport.cat !== letter) continue;
+      const key = `${Math.floor((airport.latitude + 90.0) / cellDeg)},`
+        + `${Math.floor((airport.longitude + 180.0) / cellDeg)}`;
+      const cell = cells.get(key) || { lat: 0, lon: 0, n: 0 };
+      cell.lat += airport.latitude;
+      cell.lon += airport.longitude;
+      cell.n += 1;
+      cells.set(key, cell);
+    }
+    const category = LETTER_CATEGORY[letter] || null;
+    return [...cells.values()].map(({ lat, lon, n }) => {
+      const text = category ? `${CATEGORY[category].symbol} ${n} ${category}` : "no report heard";
+      return {
+        latitude: lat / n, longitude: lon / n,
+        reported: category ? n : 0, unknown: category ? 0 : n,
+        majority: category, worst: category,
+        text, text_with_unknown: category ? text : `○ ${n} without a report`,
+      };
+    });
+  }
+
   // Clusters sit under the aircraft, so a large group marker never hides one; single
   // airports sit over them, as before.
   function clustered() {
     const cell = clusterCell();
-    return cell !== null && state.clusters[String(cell)] ? state.clusters[String(cell)] : null;
+    if (cell === null || !state.clusters[String(cell)]) return null;
+    const chosen = weatherChoice();
+    return chosen ? filteredCells(cell, chosen) : state.clusters[String(cell)];
   }
 
   function drawAirports() {
@@ -1032,9 +1356,11 @@
       return;
     }
     const show = unknownShown();
+    const chosen = weatherChoice();
+    const drawn = (airport) => (chosen ? airport.cat === chosen : Boolean(airport.marker) || show);
     state.labels = [];
     state.airports
-      .filter((airport) => airport.marker || show || airport.icao === state.selected)
+      .filter((airport) => drawn(airport) || airport.icao === state.selected)
       .sort((a, b) => drawOrder(a) - drawOrder(b))
       .forEach(drawAirport);
     placeLabels();
@@ -1440,24 +1766,37 @@
     legend.textContent = inbound ? inboundLegend() : "";
     const tracks = $("i-tracks");
     if (!inbound) {
-      $("i-summary").textContent = $("traffic-on").checked ? "No traffic layer is held yet." : INBOUND_OFF;
+      const off = !$("traffic-on").checked;
+      $("i-summary").textContent = off ? INBOUND_OFF_SHORT : "No traffic layer is held yet.";
+      $("i-off-why").textContent = off ? INBOUND_OFF : "";
       $("i-dropped").textContent = "";
       $("i-hidden").textContent = "";
       $("i-rule").textContent = "";
       $("i-list").replaceChildren();
       tracks.hidden = true;
+      refreshHint($("inbound-why"));
       invalidate();
       return;
     }
     $("i-summary").textContent = inbound.text;
+    $("i-off-why").textContent = "";
     $("i-dropped").textContent = inbound.dropped || "";
     $("i-hidden").textContent = inboundHiddenText(inbound);
     $("i-rule").textContent = inbound.rule;
-    if (inbound.board_text) $("i-board-note").textContent = inbound.board_text;
+    if (inbound.board_text) inboundNote("i-board", inbound.board_text, "");
+    refreshHint($("inbound-why"));
     $("i-list").replaceChildren(...inboundShown().map(inboundItem));
     tracks.textContent = inbound.price.text;
     tracks.hidden = inbound.price.count === 0;
     invalidate();
+  }
+
+  // A note under the inbound buttons: its short form on screen, and the whole sentence, when
+  // it says more, behind the section's `?`.
+  function inboundNote(name, text, why) {
+    $(`${name}-note`).textContent = text;
+    $(`${name}-why`).textContent = why && why !== text ? why : "";
+    refreshHint($("inbound-why"));
   }
 
   $("i-tracks").addEventListener("click", async () => {
@@ -1466,9 +1805,8 @@
     const region = state.region;
     if (!inbound || !icao) return;
     const button = $("i-tracks");
-    const note = $("i-tracks-note");
     button.disabled = true;
-    note.textContent = `Asking OpenSky for ${inbound.price.count} tracks (${inbound.price.total} credits).`;
+    inboundNote("i-tracks", `Asking OpenSky for ${inbound.price.count} tracks (${inbound.price.total} credits).`, "");
     try {
       const answer = await api(
         `/api/traffic/${encodeURIComponent(region)}/inbound/${encodeURIComponent(icao)}/tracks?count=${inbound.price.count}`,
@@ -1479,11 +1817,12 @@
         if (track.state === "observed") state.inboundTracks.set(track.icao24, track.waypoints);
       }
       // A refusal is printed as it came, never replaced by the projection without a word.
-      note.textContent = answer.text;
+      inboundNote("i-tracks", answer.short || answer.text, answer.text);
       refreshBoard();
     } catch {
       if (icao !== state.selected) return;
-      note.textContent = "The board server did not answer. No track was drawn; the lines stay projected.";
+      inboundNote("i-tracks", NO_ANSWER_SHORT,
+        "The board server did not answer. No track was drawn; the lines stay projected.");
     } finally {
       button.disabled = false;
       invalidate();
@@ -1494,17 +1833,17 @@
     const icao = state.selected;
     if (!icao) return;
     const button = $("i-board");
-    const note = $("i-board-note");
     button.disabled = true;
     try {
       const answer = await api(`/api/airport/${encodeURIComponent(icao)}/arrivals`, { method: "POST" });
       if (icao !== state.selected) return;
-      note.textContent = answer.text;
+      inboundNote("i-board", answer.short || answer.text, answer.text);
       refreshSelection();
       refreshBoard();
     } catch {
       if (icao !== state.selected) return;
-      note.textContent = "The board server did not answer. The arrival board was not read.";
+      inboundNote("i-board", NO_ANSWER_SHORT,
+        "The board server did not answer. The arrival board was not read.");
     } finally {
       button.disabled = false;
     }
@@ -1537,10 +1876,14 @@
       if (state.zoom === 1) drawBearingRing();
     }
     const layer = $("traffic-on").checked;
-    const cells = clustered();
+    // A layer switched off is not drawn, so none of its marks can be pointed at either.
+    const { airports, aircraft } = state.layers;
+    const cells = airports ? clustered() : null;
     if (cells) drawClusters(cells);
-    if (state.focus) drawTransit(path);
-    if (layer) {
+    if (aircraft && state.focus) drawTransit(path);
+    if (!aircraft) {
+      // The traffic layer is hidden. It is still fetched, so turning it back on costs nothing.
+    } else if (layer) {
       // The class filter is applied here, at drawing, for the map and the globe alike.
       const drawn = state.airspace.filter(inClass);
       const dense = drawn.length > DENSE_AIRCRAFT && state.zoom < DETAIL_ZOOM;
@@ -1555,10 +1898,11 @@
     } else if (state.detail) {
       state.detail.traffic.aircraft.forEach((a) => drawAircraft(a, false, false, false));
     }
-    drawAirports();
-    if (state.focus) { drawTrail(state.focus); drawFocused(); }
+    if (airports) drawAirports();
+    if (aircraft && state.focus) { drawTrail(state.focus); drawFocused(); }
     drawSelection();
     renderUnknownToggle();
+    renderLayerNote();
   }
 
   function pixelRatio() {
@@ -1679,6 +2023,9 @@
     remember(UNKNOWN_KEY, state.showUnknown ? "1" : "0");
     invalidate();
   });
+  $("layer-airports").addEventListener("click", () => applyLayers(switchLayer(state.layers, "airports")));
+  $("layer-aircraft").addEventListener("click", () => applyLayers(switchLayer(state.layers, "aircraft")));
+  $("flights-only").addEventListener("click", () => applyLayers(flightsOnly(state.layers)));
   $("traffic-on").addEventListener("change", () => {
     state.trafficChosen = true;
     state.trafficStopped = false;
@@ -1692,7 +2039,7 @@
     state.trafficUpstream = null;
     state.classes = null;
     renderClasses();
-    $("traffic-note").textContent = "";
+    setTrafficNote("", "");
     renderSelection(null);
     renderInbound(null);
     state.inboundTracks.clear();
@@ -1716,6 +2063,11 @@
     rememberClass("");
     state.classes = null;
     renderClasses();
+    // Nor does the weather chip: its counts were the old region's airports.
+    state.weatherFilter = "";
+    rememberWeather("");
+    state.weather = null;
+    renderWeather();
     renderInbound(null);
     state.inboundTracks.clear();
     refreshBoard();
@@ -1768,6 +2120,7 @@
   });
 
   // --- start -------------------------------------------------------------------
+  renderLayers();
   new ResizeObserver(resize).observe(canvas.parentElement);
   fetch("/static/vendor/land-110m.json")
     .then((response) => response.json())
@@ -1775,6 +2128,6 @@
       state.land = topojson.feature(world, world.objects.land);
       invalidate();
     })
-    .catch(() => { $("traffic-note").textContent = "The coastline file did not load."; });
+    .catch(() => setTrafficNote("The coastline file did not load.", ""));
   startPolling();
 })();

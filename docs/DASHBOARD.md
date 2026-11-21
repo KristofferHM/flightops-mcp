@@ -66,6 +66,37 @@ Ties go to the lower ICAO code. Only an airport NOAA answered with nothing gets 
 whose own report is old. The 25 nm cap is fixed: 5 % of the airports without a report have a reporting airport within
 25 nm, 18 % within 50 and 48 % within 100, and at 100 nm it is not that airport's weather.
 
+### Quiet panels
+
+A number or a verdict stays on screen; a reason, an explanation or a cost moves behind the section's `?`. A
+field's value, its unit and the words "unknown" and "no source" never move: they are the answer.
+
+```
+Destination        No source                 [?]  No source. A transponder broadcasts position, not intent; …
+Estimated arrival  not requested             [?]  not requested — asking OpenSky costs 30 credits
+Show airports without a report  89 hidden    [?]  89 hidden — no report heard
+```
+
+The server words both forms. The sentence stays in the field it always had (`text`, `reason`, `coverage`,
+`classification_text`, `dropped`, `fallback`), unchanged, and a `short` sibling (`short`, `shown_short`,
+`reason_short`, `coverage_short`, `classification_short`, `dropped_short`, `fallback_short`) holds what the page
+prints. A short form is its sentence with words taken out, never one added or changed; `tests/test_quiet_panels.py`
+walks the payloads and checks that for every pair, so moving a reason can never drop a number.
+
+Each `?` is a `<button>` with `aria-describedby` pointing at a `role="tooltip"` holding the whole sentence. It opens on
+hover and on focus, closes on blur, Escape and a click elsewhere, and a tap toggles it on a touchscreen. The text is
+in the page while closed, clipped rather than `display: none`, so a screen reader reaches it; open, it is fixed to the
+viewport, so it covers the panel and pushes nothing. A section has one `?`: the three aircraft claims share one
+tooltip with three sentences. A `?` with nothing behind it is not shown. Escape closes an open explanation before it
+releases a follow.
+
+Some long lines stayed, because they are values or verdicts, not reasons: a neighbour's report (`No report at ESGT —
+ESGG (18 nm away) reports VFR, 12 min old`), `OpenSky lists this flight but estimated no arrival airport for it`, a
+refusal (`Auto-refresh stopped: …`, `Not enough credits for 3 tracks (12 needed, 4 remaining).`), the last listed
+flight under an estimated arrival, the prices on buttons that spend credits, the triage's `Why not higher` and `Why not
+lower` (the answer the button was pressed for), and the status line under the map, which is announced and so keeps
+`Press Escape again to clear the selection.` The Documentation tab is prose by design and is unchanged.
+
 ## Traffic
 
 With OpenSky credentials configured the traffic layer starts on, for the selected region. Without them it starts
@@ -136,6 +167,48 @@ Measured on the live board, 2026-11-19, World at the page's first view:
 time, and NOAA's stalls ("Weather requests, measured") are still there. Raising the concurrency would meet it more
 often, at the cost of the "not one burst" rule, so it was not changed here. Twenty-degree cells drew 11 to 19 groups
 at zoom 1, too coarse to read a continent; 5° drew up to 151.
+
+### Layers and the weather chips
+
+Over Europe and North America the airport layer is dense enough that a single aircraft cannot be picked out. Three
+controls under the unknown toggle declutter the map; none of them changes what is fetched.
+
+- **`Airports` and `Aircraft`**, two switches. Airports off takes the whole layer: single markers, groups, their
+  counts, their codes and their hit targets, because the page rebuilds what can be pointed at from what it drew each
+  frame. The selected airport keeps its brackets and name plate, which belong to the selection, not the layer.
+  Aircraft off hides every traffic mark, the approach lines, the focus, its trail and its transit; the layer is still
+  fetched, so turning it back on costs nothing. Both off is allowed and is said over the map: `Nothing drawn: both
+  layers are off`. With airports off, the view note still counts airports (it describes the data) and the line
+  beside the unknown toggle says `Airport layer off: none of 600 airports drawn`.
+- **`Flights only`**, one button: airports off, aircraft on. Pressed again it restores the two switches as they were
+  when it was pressed. A switch pressed by hand in between ends the preset, and the switches stay the reader's.
+- **Weather chips**, `All 600 · VFR 331 · MVFR 56 · IFR 7 · LIFR 7 · Unknown 199`, in the style of the operator
+  chips: a chip only for a category present, unless it is the one chosen. The counts are `weather_filter`, counted
+  on the server from each row's `cat`, so the chips and the rows cannot disagree. They describe what was received
+  for the view; no chip, toggle or switch moves them. A chip applies to single markers and to groups. With a chip
+  chosen, the page regroups only the matching rows on the same grid (`board.clusters` over those rows, mirrored in
+  `filteredCells`): a cell left with none is not drawn, and a cell with matches counts and is placed among its
+  matching airports only. The Unknown chip draws the airports without a report whatever the toggle says; any other
+  chip draws none of them. A chip with nothing in view says so over the map: `No airports match: 0 of 600`.
+
+Every airport row carries one letter, `cat`: `V`, `M`, `I`, `L`, or `U` for every unknown (no observation, an old
+report and a failed fetch). Why it is unknown is not in the letter; it stays in the airport's own line in the list
+and its detail. The chips and the switches are render-only, like the unknown toggle and the operator chips: the page
+never sends them, no route takes them, and two polls of one view are identical
+(`test_filtering_by_weather_and_switching_layers_change_no_payload_field`). The switches and the chip are kept in
+`sessionStorage` for the tab's session; the chip is dropped on a region change, because it counted the old region.
+
+Measured on the live board, 2026-11-20, World at the page's first view (`lat=0&lon=10&radius=180`, 600 airports):
+
+| | |
+|---|---|
+| Answer | 255,366 bytes; 6,142 more than without `cat` and `weather_filter`. Gzipped, as served: 28,472, **332 more** |
+| Why not 600 bytes | the letter is one byte, but `,"cat":"V"` is ten a row: 6,000 for 600 rows, plus the chip block |
+| IFR groups at zoom 1 | 5 drawn, from 44 groups unfiltered |
+| A group at the edge of a filtered cell | moves to its matching airports: in cells that also held other categories, an IFR group moved a median 303 km (most 372 km) at 10° cells, 80 km (221 km) at 5°, 59 km (128 km) at 2.5° |
+
+Placed at the whole cell's mean instead, the one IFR airport of a 33-airport cell would have been drawn 372 km from
+where it is.
 
 ## Aircraft
 
@@ -348,6 +421,7 @@ The mode appears in `upstream_status`, in the `opensky_mode` startup log line an
 - A missing altitude is never drawn or sorted as 0. A transit is never drawn past its last waypoint.
 - `transit`, `estimated arrival` and `destination` are three lines, because they are three kinds of claim.
 - The count of what is hidden or left out is always on screen: airports without a report, and aircraft past the cap.
+- A map with nothing drawn says why: both layers off, or a weather chip with no airport in view.
 
 These decisions are made in `dashboard/board.py` and `dashboard/aircraft.py`, so they are tested in Python. Two
 run in the page each frame, because the view changes between polls: the far-side cull and the zoom at which the
@@ -462,6 +536,23 @@ Since the aircraft layer the walk also turns on `Show airports without a report`
 Focus list (the keyboard's way to an aircraft, since the canvas is not focusable), follows it and releases it with
 Escape, and checks that Tab reaches every new control. On 2026-11-20, in Playwright's Chromium 159 with
 axe-core 4.14.1: 41 checks, 0 serious or critical violations, no overflow at 390 px.
+
+Since the layer switches it also chooses a weather chip, presses `Flights only`, turns both layers off (and waits for
+`Nothing drawn: both layers are off`), scans each, and checks that Tab reaches the two switches, the preset and the
+`All` chip after the unknown toggle. On 2026-11-20, in Playwright's Chromium 159 with axe-core 4.14.1: 53 checks,
+0 serious or critical violations, no overflow at 390 px.
+
+Since the quiet panels the walk also runs at 1280 x 720, the demo poster's size. There the map had collapsed to
+0 px: the controls above it took 398 px and the legend the rest, so the last-update badge was drawn over the legend.
+The map now has a floor (`min(220px, 35vh)`) and the controls scroll in their own box past 40 % of the height. Every
+state checks that no two of the top bar, the list, the controls, the map, the legend, the right column and the
+governance strip intersect, nor the right column's three parts, that the badge touches neither the controls nor the
+legend, and that the map is at least 200 px tall. Every `?` on screen must be a focusable button described by a
+non-empty tooltip; with an aircraft focused, six of them are opened by focus, hover, click and (at 390 px) tap, and
+closed by Escape, blur, the pointer leaving, a click elsewhere and a second tap, and the banner, every chip count,
+every visible line and every panel's size must be the same open as closed. The moved sentences are checked word for
+word in their tooltips. On 2026-11-20, in Playwright's Chromium 159 with axe-core 4.14.1: 383 checks over three
+sizes, 0 serious or critical violations, no overflow at 390 px.
 
 ## Exposure
 
