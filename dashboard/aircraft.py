@@ -67,6 +67,8 @@ BAND_TEXT: Final = {"low": "below 3 km", "mid": "3–9 km", "high": "above 9 km"
 # is drawn at the faintest, and the board no longer shows where it is.
 FOCUS_STALE_S: Final = board.FADE_AFTER_S
 NO_AIRPORT_SORT: Final = "No airport is selected, so the aircraft are sorted by last heard."
+# What stays on screen: the selection line already says "sorted by last heard".
+NO_AIRPORT_SORT_SHORT: Final = "No airport is selected."
 # Of the airline choices offered, the most common in the snapshot.
 AIRLINE_CHOICES: Final = 60
 # A transit is labelled with its first and last times and about this many between.
@@ -237,7 +239,9 @@ def select(aircraft: Sequence[Payload], choice: Selection, now: int | None) -> P
             choice, len(placed), in_radius, len(filtered), len(shown), sort=sort
         ),
         "dropped": dropped_text(len(shown), len(filtered)),
+        "dropped_short": dropped_short(len(shown), len(filtered)),
         "fallback": NO_AIRPORT_SORT if fallback else None,
+        "fallback_short": NO_AIRPORT_SORT_SHORT if fallback else None,
         "airlines": choices,
         "aircraft": shown,
         "focus": focus,
@@ -269,6 +273,13 @@ def dropped_text(shown: int, filtered: int) -> str | None:
     if shown >= filtered:
         return None
     return f"showing {shown:,} of {filtered:,} — raise the cap or narrow the filter"
+
+
+def dropped_short(shown: int, filtered: int) -> str | None:
+    """The cap's count without the advice."""
+    if shown >= filtered:
+        return None
+    return f"showing {shown:,} of {filtered:,}"
 
 
 # --- focus, follow and the inspector ---------------------------------------------------
@@ -432,6 +443,34 @@ def arrival_text(arrival: Payload) -> str:
     return text
 
 
+def arrival_short(arrival: Payload) -> str:
+    """The estimated-arrival value without its basis or its price. The label says "Estimated"."""
+    state = arrival.get("state")
+    if state == "estimated":
+        return str(arrival.get("airport"))
+    if state == "not_requested":
+        return "not requested"
+    # A failure's code and OpenSky's "no estimate" are the answer, not a reason: they stay whole.
+    if state in ("unavailable", "not_estimated"):
+        return arrival_text(arrival)
+    previous = arrival.get("previous_flight")
+    # The last listed flight is a value, so it stays; why there is no record yet moves.
+    return "no record for this flight yet" + (
+        f". Last listed: {_flight_text(previous)}" if previous else ""
+    )
+
+
+def destination_short(text: str) -> str:
+    """`No source`: the verdict is the first sentence; the transponder's reason moves."""
+    first, _, _ = text.partition(".")
+    return first or text
+
+
+def _claim(label: str, text: str, short: str) -> Payload:
+    """An inspector claim: `short` on screen, `text` behind the section's `?`."""
+    return {**_row_text(label, text), "short": short}
+
+
 def track_view(payload: Payload) -> Payload:
     """`aircraft_track` as the inspector and the map show it."""
     if not payload.get("ok"):
@@ -442,9 +481,9 @@ def track_view(payload: Payload) -> Payload:
             "waypoints": [],
             "labels": [],
             "lines": [
-                _row_text("Transit", f"unavailable ({code})"),
-                _row_text("Estimated arrival", "not known: the track could not be read"),
-                _row_text("Destination", "No source."),
+                _claim("Transit", f"unavailable ({code})", f"unavailable ({code})"),
+                _claim("Estimated arrival", "not known: the track could not be read", "not known"),
+                _claim("Destination", "No source.", "No source"),
             ],
             "unknowns": [str(error.get("message", "The track could not be read."))],
             "credits_spent": 0,
@@ -466,21 +505,21 @@ def track_view(payload: Payload) -> Payload:
         first, last = transit.get("first_waypoint_epoch"), transit.get("last_waypoint_epoch")
         span = (last - first) if isinstance(first, int) and isinstance(last, int) else None
         length = f" ({board.age_text(span)})" if span is not None else ""
-        transit_line = (
-            f"observed: {len(waypoints)} waypoints, {_utc(first)}–{_utc(last)}{length}, "
-            "from OpenSky /tracks; nothing drawn past the last"
-        )
+        transit_short = f"observed: {len(waypoints)} waypoints, {_utc(first)}–{_utc(last)}{length}"
+        transit_line = f"{transit_short}, from OpenSky /tracks; nothing drawn past the last"
     else:
+        transit_short = "none"
         transit_line = "none: OpenSky holds no track for this aircraft now"
     destination = (payload.get("destination") or {}).get("text", "No source.")
+    arrival = payload.get("estimated_arrival") or {}
     return {
         "state": "observed" if waypoints else "none",
         "waypoints": waypoints,
         "labels": transit_labels(len(waypoints)),
         "lines": [
-            _row_text("Transit", transit_line),
-            _row_text("Estimated arrival", arrival_text(payload.get("estimated_arrival") or {})),
-            _row_text("Destination", destination),
+            _claim("Transit", transit_line, transit_short),
+            _claim("Estimated arrival", arrival_text(arrival), arrival_short(arrival)),
+            _claim("Destination", destination, destination_short(destination)),
         ],
         "estimate_requested": (payload.get("estimated_arrival") or {}).get("state")
         != "not_requested",

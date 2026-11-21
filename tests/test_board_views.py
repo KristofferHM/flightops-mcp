@@ -39,6 +39,7 @@ def classes(airlines: int) -> dict[str, Any]:
         },
         "classification": "callsign only",
         "classification_text": operator.GRADE_TEXT,
+        "classification_short": "Classed by callsign only",
     }
 
 

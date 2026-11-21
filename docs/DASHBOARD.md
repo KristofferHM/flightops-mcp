@@ -66,6 +66,37 @@ Ties go to the lower ICAO code. Only an airport NOAA answered with nothing gets 
 whose own report is old. The 25 nm cap is fixed: 5 % of the airports without a report have a reporting airport within
 25 nm, 18 % within 50 and 48 % within 100, and at 100 nm it is not that airport's weather.
 
+### Quiet panels
+
+A number or a verdict stays on screen; a reason, an explanation or a cost moves behind the section's `?`. A
+field's value, its unit and the words "unknown" and "no source" never move: they are the answer.
+
+```
+Destination        No source                 [?]  No source. A transponder broadcasts position, not intent; …
+Estimated arrival  not requested             [?]  not requested — asking OpenSky costs 30 credits
+Show airports without a report  89 hidden    [?]  89 hidden — no report heard
+```
+
+The server words both forms. The sentence stays in the field it always had (`text`, `reason`, `coverage`,
+`classification_text`, `dropped`, `fallback`), unchanged, and a `short` sibling (`short`, `shown_short`,
+`reason_short`, `coverage_short`, `classification_short`, `dropped_short`, `fallback_short`) holds what the page
+prints. A short form is its sentence with words taken out, never one added or changed; `tests/test_quiet_panels.py`
+walks the payloads and checks that for every pair, so moving a reason can never drop a number.
+
+Each `?` is a `<button>` with `aria-describedby` pointing at a `role="tooltip"` holding the whole sentence. It opens on
+hover and on focus, closes on blur, Escape and a click elsewhere, and a tap toggles it on a touchscreen. The text is
+in the page while closed, clipped rather than `display: none`, so a screen reader reaches it; open, it is fixed to the
+viewport, so it covers the panel and pushes nothing. A section has one `?`: the three aircraft claims share one
+tooltip with three sentences. A `?` with nothing behind it is not shown. Escape closes an open explanation before it
+releases a follow.
+
+Some long lines stayed, because they are values or verdicts, not reasons: a neighbour's report (`No report at ESGT —
+ESGG (18 nm away) reports VFR, 12 min old`), `OpenSky lists this flight but estimated no arrival airport for it`, a
+refusal (`Auto-refresh stopped: …`, `Not enough credits for 3 tracks (12 needed, 4 remaining).`), the last listed
+flight under an estimated arrival, the prices on buttons that spend credits, the triage's `Why not higher` and `Why not
+lower` (the answer the button was pressed for), and the status line under the map, which is announced and so keeps
+`Press Escape again to clear the selection.` The Documentation tab is prose by design and is unchanged.
+
 ## Traffic
 
 With OpenSky credentials configured the traffic layer starts on, for the selected region. Without them it starts
@@ -510,6 +541,18 @@ Since the layer switches it also chooses a weather chip, presses `Flights only`,
 `Nothing drawn: both layers are off`), scans each, and checks that Tab reaches the two switches, the preset and the
 `All` chip after the unknown toggle. On 2026-11-20, in Playwright's Chromium 159 with axe-core 4.14.1: 53 checks,
 0 serious or critical violations, no overflow at 390 px.
+
+Since the quiet panels the walk also runs at 1280 x 720, the demo poster's size. There the map had collapsed to
+0 px: the controls above it took 398 px and the legend the rest, so the last-update badge was drawn over the legend.
+The map now has a floor (`min(220px, 35vh)`) and the controls scroll in their own box past 40 % of the height. Every
+state checks that no two of the top bar, the list, the controls, the map, the legend, the right column and the
+governance strip intersect, nor the right column's three parts, that the badge touches neither the controls nor the
+legend, and that the map is at least 200 px tall. Every `?` on screen must be a focusable button described by a
+non-empty tooltip; with an aircraft focused, six of them are opened by focus, hover, click and (at 390 px) tap, and
+closed by Escape, blur, the pointer leaving, a click elsewhere and a second tap, and the banner, every chip count,
+every visible line and every panel's size must be the same open as closed. The moved sentences are checked word for
+word in their tooltips. On 2026-11-20, in Playwright's Chromium 159 with axe-core 4.14.1: 383 checks over three
+sizes, 0 serious or critical violations, no overflow at 390 px.
 
 ## Exposure
 

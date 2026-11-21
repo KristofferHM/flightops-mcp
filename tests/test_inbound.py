@@ -608,7 +608,8 @@ def test_a_refused_purchase_is_printed_not_swallowed() -> None:
     handler = re.search(r'\$\("i-tracks"\)\.addEventListener\("click".*?\n  \}\);', SCRIPT, re.S)
 
     assert handler is not None
-    assert "note.textContent = answer.text;" in handler.group()
+    # The short form is the refusal itself when nothing was bought (service._tracks_answer).
+    assert 'inboundNote("i-tracks", answer.short || answer.text, answer.text);' in handler.group()
     assert '{ method: "POST" }' in handler.group()
     assert "?count=${inbound.price.count}" in handler.group()
 

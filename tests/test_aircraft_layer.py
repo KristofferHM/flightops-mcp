@@ -668,6 +668,8 @@ async def test_a_world_poll_asks_about_600_airports_and_draws_under_120_markers(
         "unknown": 400,
         "text": "400 hidden — no report heard",
         "shown_text": "400 without a report, drawn as dashed rings",
+        "short": "400 hidden",
+        "shown_short": "400 without a report",
     }
     # Default zoom is 1: the 10-degree cells, unknowns off.
     drawn = [c for c in snapshot["clusters"]["10"] if c["reported"]]
