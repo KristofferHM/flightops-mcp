@@ -4,7 +4,8 @@ One take of the board, recorded unattended by a script and replayed from a commi
 is burned in: no title, no watermark, no edited frame. The page is the artefact.
 
 **Status:** re-shot on 2026-11-21 with the quiet panels (`?` tooltips) and the layer switches; the GIF,
-the poster and the README embed are committed. The MP4 is not yet attached to a release.
+the poster and the README embed are committed, and the MP4 is attached to the `v1.14.0` release at
+`releases/download/v1.14.0/flightops-demo.mp4`.
 
 ## Rebuild it
 
@@ -38,7 +39,7 @@ recording does not hold, the take fails with `not in the recording: <path>`: run
 | `docs/demo/board-recording.jsonl` | the recording a take replays | yes |
 | `docs/demo/flightops-demo.gif` | 12 fps timeline, 900 px wide, 128-colour palette, at most 5 MB | yes |
 | `docs/demo/poster.png` | one frame: the approaching list beside the globe | yes |
-| `docs/demo/flightops-demo.mp4` | h264, yuv420p, 30 fps, 1280×720, faststart | never: attached to the release |
+| `docs/demo/flightops-demo.mp4` | h264, yuv420p, 30 fps, 1280×720, faststart | never in git: attached to the release |
 | `docs/demo/raw/` | the WebM take and its timeline | never |
 
 The command prints each file's size and duration, ffmpeg's dropped and duplicated frames, and the GIF's
