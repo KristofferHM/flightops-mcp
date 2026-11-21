@@ -47,6 +47,7 @@
         <span class="check-with-note">
           <label class="check"><input id="unknown-on" type="checkbox" aria-describedby="unknown-note"> Show airports without a report</label>
           <span id="unknown-note" class="note" role="status"></span>
+          <span class="hint" hidden><button id="unknown-hint" class="hint-button" type="button" aria-label="About airports without a report" aria-describedby="unknown-why">?</button><span id="unknown-why" class="hint-text" role="tooltip"></span></span>
         </span>
         <div id="layers" class="chips layers" role="group" aria-label="Layers drawn on the map">
           <span class="chip-row">
@@ -58,12 +59,14 @@
         <div id="weather-filter" class="chips" role="group" aria-label="Show airports by weather" hidden>
           <span id="weather-chips" class="chip-row"></span>
           <p id="weather-note" class="note" role="status"></p>
+          <span class="hint" hidden><button id="weather-hint" class="hint-button" type="button" aria-label="About the weather filter" aria-describedby="weather-why">?</button><span id="weather-why" class="hint-text" role="tooltip"></span></span>
         </div>
-        <p id="coverage" class="note coverage"></p>
-        <span id="traffic-note" class="note" role="status"></span>
+        <p class="note coverage"><span id="coverage"></span> <span id="traffic-note" role="status"></span>
+          <span class="hint" hidden><button id="traffic-hint" class="hint-button" type="button" aria-label="About traffic and its coverage" aria-describedby="traffic-why">?</button><span id="traffic-why" class="hint-text" role="tooltip"></span></span></p>
         <div id="classes" class="chips" role="group" aria-label="Show aircraft by who is flying" hidden>
           <span id="class-chips" class="chip-row"></span>
           <p id="class-note" class="note" role="status"></p>
+          <span class="hint" hidden><button id="class-hint" class="hint-button" type="button" aria-label="About how aircraft are classed" aria-describedby="class-why">?</button><span id="class-why" class="hint-text" role="tooltip"></span></span>
         </div>
       </div>
       <div class="stage">
@@ -83,18 +86,16 @@
         <span class="key"><i class="mark ifr"></i>IFR</span>
         <span class="key"><i class="mark lifr"></i>LIFR</span>
         <span class="key"><i class="mark unknown"></i>Unknown</span>
-        <span class="legend-note">Markers show weather only, not airport status.</span>
-        <p class="legend-foot">
-          VFR ceiling over 3000 ft and visibility over 5 mi · MVFR 1000–3000 ft or 3–5 mi ·
+        <span class="legend-note">Markers show weather only, not airport status.
+          <span class="hint"><button id="legend-hint" class="hint-button" type="button" aria-label="About the markers and lines" aria-describedby="legend-why">?</button><span id="legend-why" class="hint-text" role="tooltip"><span>VFR ceiling over 3000 ft and visibility over 5 mi · MVFR 1000–3000 ft or 3–5 mi ·
           IFR 500–1000 ft or 1–3 mi · LIFR below 500 ft or under 1 mi · Unknown: no report
-          heard, not good news. <a id="to-glossary" href="#glossary">Glossary</a>
-        </p>
-        <p class="legend-foot">
-          Aircraft: arrow along the track, larger when higher, hollow without an altitude, square on
+          heard, not good news.</span>
+          <span>Aircraft: arrow along the track, larger when higher, hollow without an altitude, square on
           the ground; on the globe, lifted by altitude on a stem. A numbered marker is a group of
-          airports in its most common category, with a badge for a worse one: zoom in to split it.
-        </p>
-        <p id="inbound-legend" class="legend-foot" hidden></p>
+          airports in its most common category, with a badge for a worse one: zoom in to split it.</span>
+          <span id="inbound-legend" hidden></span>
+          <span id="view-why"></span></span></span>
+          <a id="to-glossary" href="#glossary">Glossary</a></span>
         <p id="view-note" class="legend-foot"></p>
       </div>
     </section>
@@ -132,7 +133,8 @@
           <label>Callsign <input id="a-q" type="search" maxlength="16" autocomplete="off" placeholder="SAS, 4ca1fa"></label>
           <label>Focus <select id="a-focus"><option value="">none</option></select></label>
         </div>
-        <p id="a-selection" class="note" role="status">Turn traffic on to choose aircraft.</p>
+        <p class="note selection-line"><span id="a-selection" role="status">Turn traffic on to choose aircraft.</span>
+          <span class="hint" hidden><button id="selection-hint" class="hint-button" type="button" aria-label="About the aircraft drawn" aria-describedby="selection-why">?</button><span id="selection-why" class="hint-text" role="tooltip"></span></span></p>
         <p id="a-dropped" class="note warn"></p>
       </details>
       <section id="aircraft-panel" class="aircraft-panel" aria-labelledby="a-title" hidden>
@@ -142,9 +144,11 @@
           <button id="a-estimate" type="button">Estimate arrival — 30 credits</button>
           <button id="a-clear" class="quiet" type="button">Clear selection</button>
         </div>
-        <p id="a-follow-note" class="note" role="status"></p>
+        <p class="note follow-line"><span id="a-follow-note" role="status"></span>
+          <span class="hint" hidden><button id="follow-hint" class="hint-button" type="button" aria-label="About following" aria-describedby="follow-why">?</button><span id="follow-why" class="hint-text" role="tooltip"></span></span></p>
         <dl id="a-facts" class="facts compact"></dl>
-        <h3>Transit, estimate and destination</h3>
+        <div class="section-head"><h3>Transit, estimate and destination</h3>
+          <span class="hint" hidden><button id="claims-hint" class="hint-button" type="button" aria-label="About transit, estimate and destination" aria-describedby="claims-why">?</button><span id="claims-why" class="hint-text" role="tooltip"></span></span></div>
         <dl id="a-claims" class="facts compact claims"></dl>
         <details id="a-gaps" hidden>
           <summary>What this cannot show</summary>
@@ -157,17 +161,21 @@
         <p id="d-name" class="sub"></p>
         <dl class="facts">
           <dt>Weather</dt><dd><i id="d-mark" class="mark"></i><span id="d-weather"></span></dd>
-          <dt>Aircraft heard</dt><dd id="d-traffic"></dd>
+          <dt>Aircraft heard</dt><dd><span id="d-traffic"></span>
+            <span class="hint" hidden><button id="d-traffic-hint" class="hint-button" type="button" aria-label="About the aircraft heard" aria-describedby="d-traffic-why">?</button><span id="d-traffic-why" class="hint-text" role="tooltip"></span></span></dd>
           <dt>Arrivals</dt><dd id="d-arrivals"></dd>
           <dt>Departures</dt><dd id="d-departures"></dd>
         </dl>
         <p id="d-raw" class="raw"></p>
         <section id="inbound" class="inbound" aria-labelledby="i-title">
-          <h3 id="i-title">Approaching</h3>
+          <div class="section-head"><h3 id="i-title">Approaching</h3>
+            <span class="hint" hidden><button id="inbound-hint" class="hint-button" type="button" aria-label="About what counts as approaching" aria-describedby="inbound-why">?</button><span id="inbound-why" class="hint-text" role="tooltip"><span id="i-rule"></span>
+              <span id="i-off-why"></span>
+              <span id="i-board-why"></span>
+              <span id="i-tracks-why"></span></span></span></div>
           <p id="i-summary" class="note" role="status"></p>
           <p id="i-dropped" class="note warn"></p>
           <p id="i-hidden" class="note warn"></p>
-          <p id="i-rule" class="sub"></p>
           <ol id="i-list" class="inbound-list"></ol>
           <div class="aircraft-actions">
             <button id="i-board" type="button">Check the arrival board — 4 credits</button>
@@ -279,7 +287,8 @@
   <footer class="governance" aria-label="Usage and limits">
     <div><span>OpenSky access</span><b id="g-mode">Unknown</b></div>
     <div><span>Credits this hour</span><b id="g-hour">Unknown</b></div>
-    <div><span>Board credits, 24 h</span><b id="g-day">Unknown</b></div>
+    <div><span>Board credits, 24 h</span><b id="g-day">Unknown</b>
+      <span class="hint" hidden><button id="g-day-hint" class="hint-button" type="button" aria-label="About the 24-hour count" aria-describedby="g-day-why">?</button><span id="g-day-why" class="hint-text" role="tooltip"></span></span></div>
     <div><span>Cache hit rate</span><b id="g-cache">Unknown</b></div>
     <div><span>OpenSky credits left</span><b id="g-left">Unknown</b></div>
   </footer>

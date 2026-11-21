@@ -43,6 +43,7 @@ NO_LAYER: Final = (
     "Turn traffic on to see what is approaching. It reads the traffic layer the board "
     "already holds, so it costs nothing."
 )
+NO_LAYER_SHORT: Final = "Turn traffic on to see what is approaching."
 BOARD_NOT_ASKED: Final = "Arrival board not checked."
 
 
@@ -224,16 +225,19 @@ def board_view(payload: Payload) -> Payload:
         unknowns = list(payload.get("unknowns") or [])
         reason = error.get("message") or (unknowns[0] if unknowns else "no arrival list returned")
         text = f"Arrival board unavailable: {reason}"
-        return {"state": "unavailable", "callsigns": None, "text": text}
+        # The reason is the answer here, so nothing moves.
+        return {"state": "unavailable", "callsigns": None, "text": text, "short": text}
     window = (payload.get("window") or {}).get("minutes")
     span = f" in the last {window} min" if window else ""
+    short = f"{len(found)} on OpenSky's arrival list{span}."
     return {
         "state": "read",
         "callsigns": found,
         "text": (
-            f"{len(found)} on OpenSky's arrival list{span}. OpenSky lists a flight once it has "
-            "landed, so an aircraft still flying is usually not on it."
+            f"{short} OpenSky lists a flight once it has landed, so an aircraft still flying "
+            "is usually not on it."
         ),
+        "short": short,
     }
 
 

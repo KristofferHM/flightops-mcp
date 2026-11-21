@@ -367,6 +367,17 @@ def shown_note(unknown: int) -> str:
     return f"{unknown:,} without a report, drawn as dashed rings"
 
 
+# The `_short` forms below are what stays on screen. The whole sentence goes behind the
+# section's `?` (docs/DASHBOARD.md, "Quiet panels"): a number or a verdict stays visible,
+# a reason moves. Each short form is the opening of its sentence, so moving the rest can
+# drop an explanation from view but never a value.
+def shown_short(unknown: int) -> str:
+    """The toggle's line when it is on, without the drawing rule."""
+    if unknown == 0:
+        return shown_note(0)
+    return f"{unknown:,} without a report"
+
+
 # The tooltip of an airport the map received trimmed: it has no line of its own here.
 TRIMMED_TIP: Final = "Unknown: no report heard. Select it for its own line."
 
@@ -376,6 +387,11 @@ def hidden_note(unknown: int) -> str:
     if unknown == 0:
         return "none hidden: every airport asked has a report"
     return f"{unknown:,} hidden — no report heard"
+
+
+def hidden_short(unknown: int) -> str:
+    """The toggle's line when it is off, without the reason."""
+    return "none hidden" if unknown == 0 else f"{unknown:,} hidden"
 
 
 def viewport_note(region_total: int, in_view: int, asked: int, looked_up: int, calls: int) -> str:
@@ -388,6 +404,13 @@ def viewport_note(region_total: int, in_view: int, asked: int, looked_up: int, c
         scope += f" ({region_total:,} in the region)"
     calls_text = "call" if calls == 1 else "calls"
     return f"Weather {scope} · {looked_up:,} lookups in {calls} {calls_text}"
+
+
+def viewport_short(in_view: int, asked: int) -> str:
+    """How many airports have weather on the map. Which ones, and the cost, move."""
+    if asked < in_view:
+        return f"Weather showing {asked:,} of {in_view:,}"
+    return f"Weather showing all {asked:,} in view"
 
 
 def _valid_epoch(epoch: object) -> int | None:

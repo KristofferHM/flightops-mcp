@@ -49,6 +49,8 @@ GLOSSARY: Final[Mapping[str, str]] = {
 }
 
 GRADE: Final = "callsign only"
+# On screen beside the chips; the whole of GRADE_TEXT is behind their `?`.
+GRADE_SHORT: Final = "Classed by callsign only"
 GRADE_TEXT: Final = (
     "Classed by callsign only: no aircraft type is available, so a business jet flying under "
     "an airline-shaped callsign reads as an airline, a helicopter under its registration reads "
@@ -149,4 +151,5 @@ def counts(aircraft: Iterable[Mapping[str, Any]]) -> Payload:
         "labels": dict(CHIP_LABELS),
         "classification": GRADE,
         "classification_text": GRADE_TEXT,
+        "classification_short": GRADE_SHORT,
     }
