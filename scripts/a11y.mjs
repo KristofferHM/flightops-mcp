@@ -299,6 +299,248 @@ async function expectBadge(page, text) {
   await page.locator("#last-update", { hasText: text }).waitFor();
 }
 
+// --- the airport's four exits ------------------------------------------------------------
+// Each is pressed for real. Each must end in the one clear, which names the exit on the status
+// line, and leave nothing of the airport: no panel, no current strip, no approaching list, no
+// approach lines (their legend is shown only while they are drawn), and a traffic selection
+// asked for again without the airport.
+async function exerciseAirportExits(page, size) {
+  const where = `${size} airport exits`;
+  const regionWide = () => page.waitForRequest(
+    (request) => /\/api\/traffic\/[^/]+\/selection\?/.test(request.url()) && !request.url().includes("airport="),
+    { timeout: 10_000 },
+  ).then(() => true, () => false);
+  const exit = async (how, icao, action) => {
+    const reread = regionWide();
+    await action();
+    checks += 1;
+    try {
+      await page.locator("#map-status", { hasText: `Airport cleared (${how}): ${icao}.` }).waitFor({ timeout: 10_000 });
+    } catch {
+      fail(where, `${how} did not clear ${icao}; the status line says "${await page.locator("#map-status").textContent()}"`);
+      return;
+    }
+    const left = await page.evaluate(() => ({
+      panel: !document.getElementById("detail").hidden,
+      empty: !document.getElementById("detail-empty").hidden,
+      current: document.querySelectorAll("#strips [aria-current]").length,
+      inbound: document.getElementById("i-list").children.length,
+      lines: !document.getElementById("inbound-legend").hidden,
+      triage: !document.getElementById("triage-result").hidden,
+    }));
+    const kept = [
+      left.panel && "the panel", !left.empty && "no empty-state text", left.current && "a current strip",
+      left.inbound && "the approaching list", left.lines && "the approach lines", left.triage && "the triage",
+    ].filter(Boolean);
+    checks += 1;
+    if (kept.length) fail(where, `${how} left ${kept.join(", ")}`);
+    checks += 1;
+    if (!(await reread)) fail(where, `${how}: the traffic selection was not asked for again without the airport`);
+  };
+  const strip = page.locator("#strips button").first();
+  const icao = await strip.getAttribute("data-icao");
+  const choose = async () => {
+    await strip.click();
+    await page.locator("#detail:not([hidden]) #d-title", { hasText: icao }).waitFor();
+  };
+  const chosen = await page.locator("#d-title").textContent();
+
+  // Escape: the aircraft first, then the airport. One press undoes one thing.
+  await page.keyboard.press("Escape");
+  await page.locator("#map-status", { hasText: "Selection cleared (Escape)" }).waitFor();
+  checks += 1;
+  if (await page.locator("#detail").isHidden()) fail(where, "one Escape let go of the aircraft and the airport together");
+  await exit("Escape", chosen, () => page.keyboard.press("Escape"));
+
+  // The selected strip pressed again: a toggle.
+  await choose();
+  await exit("selected again", icao, () => strip.click());
+
+  // The panel's Close, for a phone with no Escape key. The keyboard lands on the strip.
+  await choose();
+  await exit("the Close button", icao, () => page.locator("#d-close").click());
+  checks += 1;
+  if ((await page.evaluate(() => document.activeElement.dataset.icao)) !== icao) {
+    fail(where, "after Close the keyboard focus did not return to the airport's strip");
+  }
+
+  // A click on empty map: the bottom of the map is the far south, where this region has nothing.
+  await choose();
+  const map = page.locator("#map");
+  await map.scrollIntoViewIfNeeded();
+  // The pointer leaves first, so the hover tip is not left over the spot.
+  await page.mouse.move(0, 0);
+  const box = await map.boundingBox();
+  // The first point along the bottom row that nothing else covers: at 390 px the badge and
+  // the hover tip can sit over part of it.
+  const spot = await page.evaluate(({ x, y, width }) => {
+    for (const share of [0.5, 0.3, 0.7, 0.15, 0.85]) {
+      const at = { x: x + width * share, y };
+      if (document.elementFromPoint(at.x, at.y)?.id === "map") return at;
+    }
+    return null;
+  }, { x: box.x, y: box.y + box.height - 6, width: box.width });
+  checks += 1;
+  if (!spot) { fail(where, "every empty-map spot is covered by another element"); return; }
+  await exit("empty map", icao, () => page.mouse.click(spot.x, spot.y));
+}
+
+// An answer that lands after its airport was let go, or after another was chosen, must not
+// paint. Each is held back by the route, and the exit or the switch happens while it waits.
+const LATE_MS = 1500;
+async function checkLateAnswers(page, size) {
+  const where = `${size} late answers`;
+  const late = (match, answer) => page.route(match, async (route) => {
+    await new Promise((done) => setTimeout(done, LATE_MS));
+    if (answer) await route.fulfill(answer);
+    else await route.continue().catch(() => {});
+  });
+  const settle = () => page.waitForTimeout(LATE_MS + 1000);
+  const broken = { status: 500, contentType: "application/json", body: "{}" };
+  await page.getByLabel("Search airports").fill("");
+  await page.waitForFunction(() => !document.getElementById("page-note").textContent.includes("matching"));
+  const strips = page.locator("#strips button");
+  const [a, b] = [await strips.nth(0).getAttribute("data-icao"), await strips.nth(1).getAttribute("data-icao")];
+  const choose = async (icao) => {
+    await page.locator(`#strips [data-icao="${icao}"]`).click();
+    await page.locator("#detail:not([hidden]) #d-title", { hasText: icao }).waitFor();
+  };
+  const detail = (icao) => (url) => url.pathname === `/api/airport/${icao}`;
+  const [detailA, detailB] = [detail(a), detail(b)];
+
+  // A failed detail for A lands while B is on screen.
+  await late(detailA, broken);
+  await page.locator(`#strips [data-icao="${a}"]`).click();
+  await choose(b);
+  await settle();
+  await page.unroute(detailA);
+  checks += 1;
+  if ((await page.locator("#d-traffic").textContent()).includes("did not answer")) {
+    fail(where, `a failed detail for ${a} was painted into ${b}'s panel`);
+  }
+
+  // A failed triage for B lands after A was chosen.
+  const triage = (url) => url.pathname === `/api/airport/${b}/triage`;
+  await late(triage, broken);
+  await page.locator("#triage").click();
+  await choose(a);
+  await settle();
+  await page.unroute(triage);
+  checks += 1;
+  if (await page.locator("#triage-result").isVisible()) fail(where, `a failed triage for ${b} was painted into ${a}'s panel`);
+
+  // B's detail lands after B was let go.
+  await late(detailB);
+  await page.locator(`#strips [data-icao="${b}"]`).click();
+  await page.keyboard.press("Escape");
+  await settle();
+  await page.unroute(detailB);
+  checks += 1;
+  if (await page.locator("#detail").isVisible()) fail(where, `${b}'s detail repainted the panel after the clear`);
+
+  // A traffic refresh asked for A lands after A was let go: its airport-centred selection is
+  // not painted; the region-wide one is read instead.
+  await choose(a);
+  const traffic = (url) => url.pathname === "/api/traffic/europe";
+  await late(traffic);
+  const landed = page.waitForResponse((response) => traffic(new URL(response.url())), { timeout: 10_000 });
+  await page.locator("#traffic-on").uncheck();
+  await page.locator("#traffic-on").check();
+  await page.keyboard.press("Escape");
+  await landed.catch(() => {});
+  await page.waitForTimeout(1000);
+  await page.unroute(traffic);
+  const after = await page.evaluate(() => ({
+    selection: document.getElementById("a-selection").textContent,
+    inbound: document.getElementById("i-list").children.length,
+    lines: !document.getElementById("inbound-legend").hidden,
+  }));
+  checks += 1;
+  if (!after.selection.includes("No airport is selected.") || after.inbound || after.lines) {
+    fail(where, `a traffic answer asked for ${a} repainted its selection after the clear: "${after.selection}"`);
+  }
+}
+
+// --- the traffic timeline ------------------------------------------------------------------
+// The finding behind "flights do not update while an airport is selected": nothing was
+// broken; the layer refreshes every `interval_s` (4 minutes at the default ceiling) and the
+// page did not say so. Encoded here on a fake clock: after an airport is chosen, the page
+// states the interval, its countdown is the armed timer's, exactly one refresh goes out when
+// it reaches zero, it still asks for the airport, and the layer it brings is shown as new.
+async function checkTrafficTimeline(browser, servers, passcode) {
+  const where = "traffic timeline";
+  const viewport = { width: 1280, height: 720 };
+  const context = await browser.newContext({ viewport });
+  await context.route("**/*", (route) => {
+    const url = new URL(route.request().url());
+    if (url.hostname === LOCAL_HOST) return route.continue();
+    fail(where, `a request left this machine: ${url.origin}`);
+    return route.abort();
+  });
+  const page = await context.newPage();
+  page.on("pageerror", (error) => fail(where, `page error: ${error.message}`));
+  await page.clock.install();
+  const asked = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/traffic/europe") asked.push(url.searchParams.get("airport"));
+  });
+  const countdown = async () => {
+    const text = await page.locator("#traffic-clock").textContent();
+    const found = /next refresh in (\d+):(\d\d)/.exec(text);
+    return found ? Number(found[1]) * 60 + Number(found[2]) : null;
+  };
+  const refreshes = async (count) => {
+    for (let wait = 0; wait < 50 && asked.length < count; wait += 1) await page.waitForTimeout(100);
+    return asked.length;
+  };
+  try {
+    await open(page, servers.data.base, passcode, viewport);
+    await page.locator("#traffic-clock", { hasText: "next refresh in" }).waitFor({ timeout: 10_000 });
+    const interval = await page.evaluate(
+      () => fetch("/api/board?region=europe").then((r) => r.json()).then((board) => board.traffic.interval_s),
+    );
+    const strip = page.locator("#strips button").first();
+    const icao = await strip.getAttribute("data-icao");
+    await strip.click();
+    await page.locator("#d-title", { hasText: icao }).waitFor();
+    const minutes = `about every ${interval / 60} minutes`;
+    checks += 1;
+    if (!(await page.locator("#traffic-cost").textContent()).includes(minutes)) {
+      fail(where, `the toggle does not say the layer refreshes ${minutes}`);
+    }
+    // Twice: the first wait is the 120 s floor, armed before the server named its interval;
+    // every wait after it is the server's, jittered by up to 15%.
+    for (const [round, longest] of [[1, 120], [2, interval]]) {
+      const left = await countdown();
+      const before = asked.length;
+      checks += 1;
+      if (left === null) { fail(where, `round ${round}: no countdown on the traffic line`); return; }
+      if (left > longest * 1.15 + 5) fail(where, `round ${round}: next refresh in ${left} s, over ${longest} s + jitter`);
+      await page.clock.runFor(Math.max(0, left - 3) * 1000);
+      // A short real wait: the installed clock also flows naturally, so a long one would
+      // itself carry the countdown past zero.
+      await page.waitForTimeout(300);
+      checks += 1;
+      if (asked.length !== before) fail(where, `round ${round}: a refresh went out before the countdown ended`);
+      await page.clock.runFor(8_000);
+      checks += 1;
+      if ((await refreshes(before + 1)) !== before + 1) {
+        fail(where, `round ${round}: ${asked.length - before} refreshes when the countdown ended, not 1`);
+      }
+      checks += 1;
+      if (asked.at(-1) !== icao) fail(where, `round ${round}: the refresh did not ask for ${icao}`);
+      await page.locator("#traffic-clock", { hasText: /^heard \d+ s ago · next refresh in/ }).waitFor({ timeout: 5_000 })
+        .catch(() => fail(where, `round ${round}: the new layer is not shown as just heard`));
+    }
+    console.log(`checked ${where}: ${asked.length} refreshes, interval ${interval} s`);
+  } catch (error) {
+    fail(where, error.message.split("\n")[0]);
+  } finally {
+    await context.close();
+  }
+}
+
 async function walk(browser, viewport, servers, passcode) {
   // The phone has a touchscreen, so a tap is tried there: hover does not exist on it.
   const touch = viewport.width === OVERFLOW_WIDTH;
@@ -398,6 +640,10 @@ async function walk(browser, viewport, servers, passcode) {
   await inspect(page, viewport, "documentation");
   await page.getByRole("tab", { name: "Board" }).click();
 
+  await exerciseAirportExits(page, size);
+  await inspect(page, viewport, "airport cleared");
+  await checkLateAnswers(page, size);
+
   await context.clearCookies();
   await open(page, servers.empty.base, passcode, viewport);
   await expectBadge(page, "no data yet");
@@ -428,6 +674,7 @@ async function main() {
     browser = await chromium.launch(channel ? { channel } : {});
     console.log(`axe-core ${AXE_VERSION}, Chromium ${browser.version()}`);
     for (const viewport of VIEWPORTS) await walk(browser, viewport, servers, passcode);
+    await checkTrafficTimeline(browser, servers, passcode);
   } finally {
     // A browser that never started must not leave the three servers running.
     if (browser) await browser.close();

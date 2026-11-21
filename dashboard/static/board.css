@@ -396,6 +396,12 @@ a { color: var(--amber); }
 
 /* Selected airport */
 .detail #d-title { font: 600 34px/1.05 var(--font-mono); color: var(--type); }
+/* The code and its way out on one line. 44 px: a thumb has no Escape key. */
+.detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+#d-close { min-height: 44px; min-width: 44px; flex: none; }
+/* The layer's age and the next ask tick every second, so they are kept out of the live note. */
+#traffic-clock { font-variant-numeric: tabular-nums; }
+#traffic-clock:not(:empty)::before { content: "· "; }
 .detail #detail-empty h2 { font-size: 15px; color: var(--type); }
 .detail #detail-empty p { margin-top: 4px; color: var(--muted); }
 #d-name { margin-top: 3px; font-size: 14.5px; }

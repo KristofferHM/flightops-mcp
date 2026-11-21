@@ -256,6 +256,35 @@ trail, the transit and the follow go together, and the status line under the map
 A selection survives a poll: the page sends it with each refresh. It does not survive a region change. A poll sent
 before the selection changed answers for the old aircraft; the page drops that answer rather than repaint it.
 
+**Letting go of an airport.** The airport has the same exits, through one clear (`clearAirport`), and the status line
+says `Airport cleared (<exit>): <ICAO>.` Escape and a click on empty map let go of the innermost selection first: a
+focused aircraft, then the airport.
+
+| Exit | What happens |
+|---|---|
+| Click or tap empty map | Clears the aircraft if one is focused, otherwise the airport |
+| Escape | Releases a follow, then the aircraft, then the airport: one press undoes one thing |
+| Select the selected airport again (strip or map) | Clears: the strip marked current is a toggle |
+| `Close` in the airport panel | Clears; 44 px, for a phone with no Escape key. The keyboard returns to the strip |
+
+A clear empties the panel, takes `aria-current` off the strip, and drops the approaching list, the approach lines
+and any tracks bought for them; the traffic selection is read again without the airport, free, from the held layer.
+A detail, triage, arrival-board, tracks or traffic answer that lands after a clear or a change of airport is
+dropped, failures included. A traffic refresh asked under choices that have since changed does not paint its
+selection; the page reads the current choices from the layer that refresh left on the server.
+
+**How often traffic moves.** At the default ceiling (60 credits an hour, 4 per refresh) the layer refreshes every
+240 s, jittered by up to 15%; the very first wait is the 120 s floor, armed before the server names its interval.
+A layer left alone therefore looks frozen for minutes, which is what a reader reported on 2026-11-21. Measured over
+five minutes in Edge against `scripts/a11y_server.py`, with an airport selected: one traffic chain throughout, a
+refresh at 118–126 s carrying a newer snapshot epoch that the next `/api/board` echoed back, and the next one armed
+223–275 s later. Nothing was stalled. The page now says so: beside the toggle, `Traffic refreshes about every 4
+minutes`, and on the traffic line, outside the live note, `heard 25 s ago · next refresh in 3:42`, ticking each
+second. The age is OpenSky's own (`upstream_epoch − snapshot_epoch`) counted on from arrival, and the countdown is
+the armed timer's. Both use the page's monotonic clock: a countdown is a claim about elapsed time, not about data
+freshness, so a monotonic source cannot make it wrong. `Date` and `setInterval` stay banned from the page, and
+`performance.now` is allowed only in `schedule` and the traffic clock (pinned by `tests/test_dashboard.py`).
+
 ### Approaching the selected airport
 
 The traffic layer has no destination, so what approaches an airport is **geometry**, read from the held layer for

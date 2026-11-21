@@ -61,7 +61,7 @@
           <p id="weather-note" class="note" role="status"></p>
           <span class="hint" hidden><button id="weather-hint" class="hint-button" type="button" aria-label="About the weather filter" aria-describedby="weather-why">?</button><span id="weather-why" class="hint-text" role="tooltip"></span></span>
         </div>
-        <p class="note coverage"><span id="coverage"></span> <span id="traffic-note" role="status"></span>
+        <p class="note coverage"><span id="coverage"></span> <span id="traffic-note" role="status"></span> <span id="traffic-clock"></span>
           <span class="hint" hidden><button id="traffic-hint" class="hint-button" type="button" aria-label="About traffic and its coverage" aria-describedby="traffic-why">?</button><span id="traffic-why" class="hint-text" role="tooltip"></span></span></p>
         <div id="classes" class="chips" role="group" aria-label="Show aircraft by who is flying" hidden>
           <span id="class-chips" class="chip-row"></span>
@@ -157,7 +157,8 @@
       </section>
       <div id="detail-empty"><h2>No airport selected</h2><p>Choose an airport from the list or the map.</p></div>
       <div id="detail" hidden>
-        <h2 id="d-title"></h2>
+        <div class="detail-head"><h2 id="d-title"></h2>
+          <button id="d-close" class="quiet" type="button" aria-label="Close airport">Close</button></div>
         <p id="d-name" class="sub"></p>
         <dl class="facts">
           <dt>Weather</dt><dd><i id="d-mark" class="mark"></i><span id="d-weather"></span></dd>
